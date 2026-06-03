@@ -14,9 +14,92 @@
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <stdexcept>
+#include <cstdio>
 
 using json = nlohmann::json;
+
+namespace {
+constexpr std::streamoff kMaxJsonFileBytes = 10 * 1024 * 1024;
+constexpr size_t kMaxTitles = 256;
+constexpr size_t kMaxLayersPerTitle = 256;
+constexpr size_t kMaxKeyframesPerProperty = 2048;
+constexpr size_t kMaxLiveTextRows = 256;
+constexpr size_t kMaxLiveTextColumns = 32;
+constexpr size_t kMaxNameLength = 256;
+constexpr size_t kMaxTextLength = 8192;
+constexpr double kMaxDuration = 3600.0;
+constexpr double kMaxPropertyValue = 100000.0;
+constexpr int kMaxCanvasDimension = 16384;
+
+static double finite_or(double value, double fallback)
+{
+    return std::isfinite(value) ? value : fallback;
+}
+
+static std::string bounded_string(const json &j, const char *key,
+                                  const std::string &fallback,
+                                  size_t max_len)
+{
+    if (!j.is_object() || !j.contains(key) || !j[key].is_string())
+        return fallback;
+    std::string value = j[key].get<std::string>();
+    if (value.size() > max_len)
+        value.resize(max_len);
+    return value;
+}
+
+static bool read_json_file(const std::string &path, json &out, std::string *error)
+{
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) {
+        if (error) *error = "Could not open the file.";
+        return false;
+    }
+
+    f.seekg(0, std::ios::end);
+    const std::streamoff size = f.tellg();
+    if (size < 0 || size > kMaxJsonFileBytes) {
+        if (error) *error = "File is too large for a title template.";
+        return false;
+    }
+    f.seekg(0, std::ios::beg);
+
+    try {
+        f >> out;
+    } catch (const std::exception &e) {
+        if (error) *error = e.what();
+        return false;
+    }
+    return true;
+}
+
+static void ensure_unique_title_id(const std::shared_ptr<Title> &title,
+                                   std::unordered_set<std::string> &seen)
+{
+    if (!title)
+        return;
+    if (title->id.empty() || seen.find(title->id) != seen.end())
+        title->id = TitleDataStore::make_uuid();
+    seen.insert(title->id);
+
+    std::unordered_set<std::string> layer_ids;
+    for (auto &layer : title->layers) {
+        if (!layer)
+            continue;
+        if (layer->id.empty() || layer_ids.find(layer->id) != layer_ids.end())
+            layer->id = TitleDataStore::make_uuid();
+        layer_ids.insert(layer->id);
+    }
+    for (auto &layer : title->layers) {
+        if (!layer || layer->parent_id.empty())
+            continue;
+        if (layer_ids.find(layer->parent_id) == layer_ids.end())
+            layer->parent_id.clear();
+    }
+}
+} // namespace
 
 static void set_color_channels(Layer &l, bool text, uint32_t argb)
 {
@@ -60,6 +143,7 @@ std::string TitleDataStore::make_uuid()
  * ══════════════════════════════════════════════════════════════════ */
 double AnimatedProperty::evaluate(double t) const
 {
+    if (!std::isfinite(t)) return static_value;
     if (keyframes.empty()) return static_value;
     if (keyframes.size() == 1) return keyframes.front().value;
     if (t <= keyframes.front().time) return keyframes.front().value;
@@ -148,27 +232,28 @@ double AnimatedProperty::bezierY(double x, float cx1, float cy1,
 std::shared_ptr<Layer> Title::find_layer(const std::string &lid) const
 {
     for (auto &l : layers)
-        if (l->id == lid) return l;
+        if (l && l->id == lid) return l;
     return nullptr;
 }
 
 void Title::add_layer(std::shared_ptr<Layer> l)
 {
-    layers.push_back(l);
+    if (l)
+        layers.push_back(l);
 }
 
 void Title::remove_layer(const std::string &lid)
 {
     layers.erase(
         std::remove_if(layers.begin(), layers.end(),
-                       [&](auto &l){ return l->id == lid; }),
+                       [&](auto &l){ return !l || l->id == lid; }),
         layers.end());
 }
 
 void Title::move_layer(const std::string &lid, int delta)
 {
     auto it = std::find_if(layers.begin(), layers.end(),
-                           [&](auto &l){ return l->id == lid; });
+                           [&](auto &l){ return l && l->id == lid; });
     if (it == layers.end()) return;
     int idx = (int)(it - layers.begin());
     int dst = std::clamp(idx + delta, 0, (int)layers.size() - 1);
@@ -272,13 +357,15 @@ static json keyframe_to_json(const Keyframe &k)
 static Keyframe keyframe_from_json(const json &j)
 {
     Keyframe k;
-    k.time   = j.value("time",   0.0);
-    k.value  = j.value("value",  0.0);
-    k.easing = (EasingType)j.value("easing", 0);
-    k.cx1    = j.value("cx1", 0.333f);
-    k.cy1    = j.value("cy1", 0.0f);
-    k.cx2    = j.value("cx2", 0.667f);
-    k.cy2    = j.value("cy2", 1.0f);
+    if (!j.is_object())
+        return k;
+    k.time = std::clamp(finite_or(j.value("time", 0.0), 0.0), 0.0, kMaxDuration);
+    k.value = std::clamp(finite_or(j.value("value", 0.0), 0.0), -kMaxPropertyValue, kMaxPropertyValue);
+    k.easing = (EasingType)std::clamp(j.value("easing", 0), 0, (int)EasingType::Hold);
+    k.cx1 = std::clamp(finite_or(j.value("cx1", 0.333f), 0.333), 0.0, 1.0);
+    k.cy1 = std::clamp(finite_or(j.value("cy1", 0.0f), 0.0), 0.0, 1.0);
+    k.cx2 = std::clamp(finite_or(j.value("cx2", 0.667f), 0.667), 0.0, 1.0);
+    k.cy2 = std::clamp(finite_or(j.value("cy2", 1.0f), 1.0), 0.0, 1.0);
     return k;
 }
 
@@ -294,11 +381,19 @@ static json aprop_to_json(const AnimatedProperty &p)
 static AnimatedProperty aprop_from_json(const json &j, const std::string &name)
 {
     AnimatedProperty p;
-    p.name         = name;
-    p.static_value = j.value("static_value", 0.0);
-    if (j.contains("keyframes")) {
-        for (auto &kj : j["keyframes"])
-            p.keyframes.push_back(keyframe_from_json(kj));
+    p.name = name;
+    if (!j.is_object())
+        return p;
+
+    p.static_value = std::clamp(finite_or(j.value("static_value", 0.0), 0.0),
+                                -kMaxPropertyValue, kMaxPropertyValue);
+    if (j.contains("keyframes") && j["keyframes"].is_array()) {
+        const size_t count = std::min(j["keyframes"].size(), kMaxKeyframesPerProperty);
+        p.keyframes.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+            p.keyframes.push_back(keyframe_from_json(j["keyframes"][i]));
+        std::sort(p.keyframes.begin(), p.keyframes.end(),
+                  [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
     }
     return p;
 }
@@ -387,15 +482,18 @@ static json layer_to_json(const Layer &l)
 static std::shared_ptr<Layer> layer_from_json(const json &j)
 {
     auto l = std::make_shared<Layer>();
-    l->id       = j.value("id",       "");
-    l->name     = j.value("name",     "Layer");
-    l->type     = (LayerType)j.value("type", 0);
+    if (!j.is_object())
+        return l;
+
+    l->id       = bounded_string(j, "id", "", kMaxNameLength);
+    l->name     = bounded_string(j, "name", "Layer", kMaxNameLength);
+    l->type     = (LayerType)std::clamp(j.value("type", 0), 0, (int)LayerType::Clock);
     l->visible  = j.value("visible",  true);
     l->locked   = j.value("locked",   false);
     l->properties_expanded = j.value("properties_expanded", false);
-    l->parent_id = j.value("parent_id", std::string());
-    l->in_time  = j.value("in_time",  0.0);
-    l->out_time = j.value("out_time", 5.0);
+    l->parent_id = bounded_string(j, "parent_id", "", kMaxNameLength);
+    l->in_time  = std::clamp(finite_or(j.value("in_time",  0.0), 0.0), 0.0, kMaxDuration);
+    l->out_time = std::clamp(finite_or(j.value("out_time", 5.0), 5.0), l->in_time, kMaxDuration);
 
     if (j.contains("pos_x"))    l->pos_x    = aprop_from_json(j["pos_x"],    "pos_x");
     if (j.contains("pos_y"))    l->pos_y    = aprop_from_json(j["pos_y"],    "pos_y");
@@ -403,49 +501,56 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     if (j.contains("scale_y"))  l->scale_y  = aprop_from_json(j["scale_y"],  "scale_y");
     if (j.contains("rotation")) l->rotation = aprop_from_json(j["rotation"], "rotation");
     if (j.contains("opacity"))  l->opacity  = aprop_from_json(j["opacity"],  "opacity");
+    l->scale_x.static_value = std::clamp(l->scale_x.static_value, 0.01, 100.0);
+    l->scale_y.static_value = std::clamp(l->scale_y.static_value, 0.01, 100.0);
+    l->opacity.static_value = std::clamp(l->opacity.static_value, 0.0, 1.0);
 
-    l->text_content  = j.value("text_content",  "Title");
-    l->clock_format  = j.value("clock_format",  "H:i:s");
+    l->text_content  = bounded_string(j, "text_content", "Title", kMaxTextLength);
+    l->clock_format  = bounded_string(j, "clock_format", "H:i:s", kMaxNameLength);
     l->expose_text   = j.value("expose_text",   false);
-    l->font_family   = j.value("font_family",   "Helvetica Neue");
-    l->font_size     = j.value("font_size",     72);
+    l->font_family   = bounded_string(j, "font_family", "Helvetica Neue", kMaxNameLength);
+    l->font_size     = std::clamp(j.value("font_size", 72), 1, 512);
     l->font_bold     = j.value("font_bold",     false);
     l->font_italic   = j.value("font_italic",   false);
-    l->text_style    = j.value("text_style",    0);
-    l->text_overflow_mode = j.value("text_overflow_mode", 0);
-    l->text_fit_min_scale = j.value("text_fit_min_scale", 0.5f);
+    l->text_style    = std::clamp(j.value("text_style", 0), 0, 4);
+    l->text_overflow_mode = std::clamp(j.value("text_overflow_mode", 0), 0, 2);
+    l->text_fit_min_scale = std::clamp(finite_or(j.value("text_fit_min_scale", 0.5f), 0.5), 0.05, 1.0);
     l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
     l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
-    l->stroke_width  = j.value("stroke_width",  0.0f);
+    l->stroke_width  = std::clamp(finite_or(j.value("stroke_width",  0.0f), 0.0), 0.0, 512.0);
     l->outline_enabled = j.value("outline_enabled", l->stroke_width > 0.0f);
-    l->outline_opacity = j.value("outline_opacity", 1.0f);
-    l->outline_join_style = j.value("outline_join_style", 1);
+    l->outline_opacity = std::clamp(finite_or(j.value("outline_opacity", 1.0f), 1.0), 0.0, 1.0);
+    l->outline_join_style = std::clamp(j.value("outline_join_style", 1), 0, 2);
     l->outline_on_front = j.value("outline_on_front", true);
     l->outline_antialias = j.value("outline_antialias", true);
-    l->align_h       = j.value("align_h",       1);
-    l->align_v       = j.value("align_v",       1);
+    l->align_h       = std::clamp(j.value("align_h", 1), 0, 2);
+    l->align_v       = std::clamp(j.value("align_v", 1), 0, 2);
 
     l->fill_color    = j.value("fill_color",    (uint32_t)0xFF222222);
-    l->rect_width    = j.value("rect_width",    1920.0f);
-    l->rect_height   = j.value("rect_height",   100.0f);
-    l->corner_radius = j.value("corner_radius", 0.0f);
+    l->rect_width    = std::clamp(finite_or(j.value("rect_width", 1920.0f), 1920.0), 1.0, (double)kMaxCanvasDimension);
+    l->rect_height   = std::clamp(finite_or(j.value("rect_height", 100.0f), 100.0), 1.0, (double)kMaxCanvasDimension);
+    l->corner_radius = std::clamp(finite_or(j.value("corner_radius", 0.0f), 0.0), 0.0, (double)kMaxCanvasDimension);
     l->box_width.static_value = l->rect_width;
     l->box_height.static_value = l->rect_height;
     if (j.contains("box_width"))  l->box_width  = aprop_from_json(j["box_width"],  "box_width");
     if (j.contains("box_height")) l->box_height = aprop_from_json(j["box_height"], "box_height");
-    l->origin_x      = j.value("origin_x",      0.5f);
-    l->origin_y      = j.value("origin_y",      0.5f);
+    l->box_width.static_value = std::clamp(l->box_width.static_value, 1.0, (double)kMaxCanvasDimension);
+    l->box_height.static_value = std::clamp(l->box_height.static_value, 1.0, (double)kMaxCanvasDimension);
+    l->origin_x      = std::clamp(finite_or(j.value("origin_x", 0.5f), 0.5), 0.0, 1.0);
+    l->origin_y      = std::clamp(finite_or(j.value("origin_y", 0.5f), 0.5), 0.0, 1.0);
     l->origin_x_prop.static_value = l->origin_x;
     l->origin_y_prop.static_value = l->origin_y;
     if (j.contains("origin_x_prop")) l->origin_x_prop = aprop_from_json(j["origin_x_prop"], "origin_x");
     if (j.contains("origin_y_prop")) l->origin_y_prop = aprop_from_json(j["origin_y_prop"], "origin_y");
+    l->origin_x_prop.static_value = std::clamp(l->origin_x_prop.static_value, 0.0, 1.0);
+    l->origin_y_prop.static_value = std::clamp(l->origin_y_prop.static_value, 0.0, 1.0);
     l->shadow_enabled = j.value("shadow_enabled", false);
     l->shadow_color = j.value("shadow_color", (uint32_t)0x99000000);
-    l->shadow_opacity = j.value("shadow_opacity", 0.6f);
-    l->shadow_distance = j.value("shadow_distance", 8.0f);
-    l->shadow_angle = j.value("shadow_angle", 135.0f);
-    l->shadow_blur = j.value("shadow_blur", 4.0f);
-    l->shadow_spread = j.value("shadow_spread", 0.0f);
+    l->shadow_opacity = std::clamp(finite_or(j.value("shadow_opacity", 0.6f), 0.6), 0.0, 1.0);
+    l->shadow_distance = std::clamp(finite_or(j.value("shadow_distance", 8.0f), 8.0), 0.0, 4096.0);
+    l->shadow_angle = finite_or(j.value("shadow_angle", 135.0f), 135.0);
+    l->shadow_blur = std::clamp(finite_or(j.value("shadow_blur", 4.0f), 4.0), 0.0, 512.0);
+    l->shadow_spread = std::clamp(finite_or(j.value("shadow_spread", 0.0f), 0.0), 0.0, 512.0);
     l->shadow_enabled_prop.static_value = l->shadow_enabled ? 1.0 : 0.0;
     l->shadow_opacity_prop.static_value = l->shadow_opacity;
     l->shadow_distance_prop.static_value = l->shadow_distance;
@@ -476,7 +581,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     if (j.contains("fill_color_r")) l->fill_color_r = aprop_from_json(j["fill_color_r"], "fill_color_r");
     if (j.contains("fill_color_g")) l->fill_color_g = aprop_from_json(j["fill_color_g"], "fill_color_g");
     if (j.contains("fill_color_b")) l->fill_color_b = aprop_from_json(j["fill_color_b"], "fill_color_b");
-    l->image_path    = j.value("image_path",    "");
+    l->image_path    = bounded_string(j, "image_path", "", 4096);
     l->lock_aspect_ratio = j.value("lock_aspect_ratio", true);
     return l;
 }
@@ -509,25 +614,43 @@ static json title_to_json(const Title &t)
 static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_ids)
 {
     auto t = std::make_shared<Title>();
-    t->id       = jt.value("id",       TitleDataStore::make_uuid());
-    t->name     = jt.value("name",     "Untitled");
-    t->duration = jt.value("duration", 5.0);
-    t->loop_start = std::clamp(jt.value("loop_start", std::min(1.0, t->duration)), 0.0, t->duration);
-    t->loop_end = std::clamp(jt.value("loop_end", std::max(t->loop_start, t->duration - 1.0)), t->loop_start, t->duration);
+    if (!jt.is_object())
+        return t;
+
+    t->id       = bounded_string(jt, "id", TitleDataStore::make_uuid(), kMaxNameLength);
+    t->name     = bounded_string(jt, "name", "Untitled", kMaxNameLength);
+    t->duration = std::clamp(finite_or(jt.value("duration", 5.0), 5.0), 0.1, kMaxDuration);
+    t->loop_start = std::clamp(finite_or(jt.value("loop_start", std::min(1.0, t->duration)), 0.0), 0.0, t->duration);
+    t->loop_end = std::clamp(finite_or(jt.value("loop_end", std::max(t->loop_start, t->duration - 1.0)), t->duration), t->loop_start, t->duration);
     t->playback_mode = std::clamp(jt.value("playback_mode", 0), 0, 2);
     t->loop_type = std::clamp(jt.value("loop_type", 0), 0, 1);
-    t->pause_time = std::clamp(jt.value("pause_time", 0.0), 0.0, t->duration);
+    t->pause_time = std::clamp(finite_or(jt.value("pause_time", 0.0), 0.0), 0.0, t->duration);
     t->bg_color = jt.value("bg_color", (uint32_t)0x00000000);
-    t->width    = jt.value("width",    1920);
-    t->height   = jt.value("height",   1080);
-    if (jt.contains("layers"))
-        for (auto &lj : jt["layers"])
-            t->layers.push_back(layer_from_json(lj));
-    if (jt.contains("live_text_rows")) {
-        for (const auto &jr : jt["live_text_rows"]) {
+    t->width    = std::clamp(jt.value("width", 1920), 1, kMaxCanvasDimension);
+    t->height   = std::clamp(jt.value("height", 1080), 1, kMaxCanvasDimension);
+    if (jt.contains("layers") && jt["layers"].is_array()) {
+        const size_t count = std::min(jt["layers"].size(), kMaxLayersPerTitle);
+        t->layers.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+            t->layers.push_back(layer_from_json(jt["layers"][i]));
+    }
+    if (jt.contains("live_text_rows") && jt["live_text_rows"].is_array()) {
+        const size_t row_count = std::min(jt["live_text_rows"].size(), kMaxLiveTextRows);
+        for (size_t r = 0; r < row_count; ++r) {
+            const auto &jr = jt["live_text_rows"][r];
+            if (!jr.is_array())
+                continue;
             std::vector<std::string> row;
-            for (const auto &cell : jr)
-                row.push_back(cell.get<std::string>());
+            const size_t col_count = std::min(jr.size(), kMaxLiveTextColumns);
+            row.reserve(col_count);
+            for (size_t c = 0; c < col_count; ++c) {
+                if (!jr[c].is_string())
+                    continue;
+                std::string cell = jr[c].get<std::string>();
+                if (cell.size() > kMaxTextLength)
+                    cell.resize(kMaxTextLength);
+                row.push_back(std::move(cell));
+            }
             t->live_text_rows.push_back(std::move(row));
         }
     }
@@ -559,11 +682,29 @@ void TitleDataStore::save() const
     for (auto &t : titles_)
         root.push_back(title_to_json(*t));
 
-    std::ofstream f(data_path());
-    if (f.is_open())
+    const std::string path = data_path();
+    const std::string tmp_path = path + ".tmp";
+    {
+        std::ofstream f(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!f.is_open()) {
+            blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to open titles.json for saving");
+            return;
+        }
         f << root.dump(2);
-    else
-        blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to save titles.json");
+        if (!f.good()) {
+            blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed while writing titles.json");
+            std::remove(tmp_path.c_str());
+            return;
+        }
+    }
+
+    if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+        std::remove(path.c_str());
+        if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+            blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to replace titles.json");
+            std::remove(tmp_path.c_str());
+        }
+    }
 }
 
 bool TitleDataStore::export_title(const std::string &id, const std::string &path, std::string *error) const
@@ -594,15 +735,10 @@ bool TitleDataStore::export_title(const std::string &id, const std::string &path
 
 std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std::string *error)
 {
-    std::ifstream f(path);
-    if (!f.is_open()) {
-        if (error) *error = "Could not open the template file.";
-        return nullptr;
-    }
-
     try {
         json root;
-        f >> root;
+        if (!read_json_file(path, root, error))
+            return nullptr;
         json jt;
         if (root.is_object() && root.contains("title"))
             jt = root["title"];
@@ -614,8 +750,10 @@ std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std
             throw std::runtime_error("Unsupported template file format.");
 
         auto imported = title_from_json(jt, true);
-        if (!imported)
+        if (!imported || imported->layers.empty())
             throw std::runtime_error("Template data was empty.");
+        std::unordered_set<std::string> seen_ids;
+        ensure_unique_title_id(imported, seen_ids);
 
         std::string base_name = imported->name.empty() ? "Imported Title" : imported->name;
         std::string unique_name = base_name;
@@ -641,17 +779,32 @@ std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std
 
 void TitleDataStore::load()
 {
-    std::ifstream f(data_path());
-    if (!f.is_open()) {
-        blog(LOG_INFO, "[OBS Graphics Studio Pro] No saved titles found, starting fresh.");
+    const std::string path = data_path();
+    json root;
+    std::string error;
+    if (!read_json_file(path, root, &error)) {
+        if (error == "Could not open the file.")
+            blog(LOG_INFO, "[OBS Graphics Studio Pro] No saved titles found, starting fresh.");
+        else
+            blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to read titles.json: %s", error.c_str());
         return;
     }
 
     try {
-        json root;
-        f >> root;
-        for (auto &jt : root)
-            titles_.push_back(title_from_json(jt, false));
+        if (!root.is_array())
+            throw std::runtime_error("Saved titles root must be an array.");
+
+        std::vector<std::shared_ptr<Title>> loaded;
+        std::unordered_set<std::string> seen_ids;
+        const size_t count = std::min(root.size(), kMaxTitles);
+        loaded.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            auto title = title_from_json(root[i], false);
+            ensure_unique_title_id(title, seen_ids);
+            loaded.push_back(title);
+        }
+        titles_ = std::move(loaded);
+        touch_runtime_change();
         blog(LOG_INFO, "[OBS Graphics Studio Pro] Loaded %zu title(s).", titles_.size());
     } catch (std::exception &e) {
         blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to parse titles.json: %s", e.what());
