@@ -372,6 +372,7 @@ private:
     QSpinBox        *spn_size_     = nullptr;
     QCheckBox       *chk_bold_     = nullptr;
     QCheckBox       *chk_italic_   = nullptr;
+    QComboBox       *cmb_text_style_ = nullptr;
     QCheckBox       *chk_expose_text_ = nullptr;
     QComboBox       *cmb_text_align_ = nullptr;
     QPushButton     *btn_text_color_ = nullptr;

@@ -21,6 +21,7 @@
 #include <pango/pangocairo.h>
 #include <QImage>
 #include <QString>
+#include <QLocale>
 #include <QPointF>
 #include <QPainter>
 #include <QPainterPath>
@@ -223,6 +224,47 @@ static QPointF shadow_offset(const Layer &layer, double t)
  *  Cairo rendering
  * ══════════════════════════════════════════════════════════════════ */
 
+
+static QLocale locale_for_text_transform(const QString &text)
+{
+    QLocale locale;
+    for (const QChar ch : text) {
+        uint u = ch.unicode();
+        if (u >= 0x0370 && u <= 0x03FF)
+            return QLocale(QLocale::Greek, QLocale::Greece);
+        if (QStringLiteral("ıİşŞğĞçÇ").contains(ch))
+            return QLocale(QLocale::Turkish, QLocale::Turkey);
+        if (ch == QChar(0x00DF))
+            return QLocale(QLocale::German, QLocale::Germany);
+    }
+    return locale;
+}
+
+static QString display_text_for_style(const Layer &layer)
+{
+    QString text = QString::fromStdString(layer.text_content);
+    if (layer.text_style == 1)
+        return locale_for_text_transform(text).toUpper(text);
+    return text;
+}
+
+static void apply_text_style_to_font(QFont &font, const Layer &layer)
+{
+    if (layer.text_style == 2)
+        font.setCapitalization(QFont::SmallCaps);
+    if (layer.text_style == 3 || layer.text_style == 4)
+        font.setPixelSize(std::max(1, (int)std::round(font.pixelSize() * 0.65)));
+}
+
+static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
+{
+    if (layer.text_style == 3)
+        return rect.adjusted(0.0, 0.0, 0.0, -rect.height() * 0.28);
+    if (layer.text_style == 4)
+        return rect.adjusted(0.0, rect.height() * 0.28, 0.0, 0.0);
+    return rect;
+}
+
 static QPainterPath aligned_text_path(const QFont &font, const QRectF &rect,
                                       Qt::Alignment alignment, const QString &text)
 {
@@ -288,9 +330,11 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     font.setBold(layer.font_bold);
     font.setItalic(layer.font_italic);
     font.setKerning(true);
+    apply_text_style_to_font(font, layer);
     painter.setFont(font);
 
-    QRectF text_rect(pad, pad, box_w, box_h);
+    QRectF text_rect = text_rect_for_style(QRectF(pad, pad, box_w, box_h), layer);
+    QString text = display_text_for_style(layer);
     Qt::Alignment align = Qt::AlignVCenter | Qt::AlignHCenter;
     if (layer.align_h == 0) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignLeft;
     if (layer.align_h == 2) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignRight;
@@ -308,11 +352,10 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
             double radius = blur * pass / passes;
             for (double dx : {-spread - radius, 0.0, spread + radius})
                 for (double dy : {-spread - radius, 0.0, spread + radius})
-                    painter.drawText(text_rect.translated(off + QPointF(dx, dy)), align, QString::fromStdString(layer.text_content));
+                    painter.drawText(text_rect.translated(off + QPointF(dx, dy)), align, text);
         }
     }
 
-    QString text = QString::fromStdString(layer.text_content);
     double outline_width = eval_outline_width(layer, t);
     QColor outline = color_from_argb(eval_outline_color(layer, t));
     QColor fill = color_from_argb(eval_text_color(layer, t));

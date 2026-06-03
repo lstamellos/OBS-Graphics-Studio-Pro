@@ -306,6 +306,7 @@ static json layer_to_json(const Layer &l)
     j["font_size"]     = l.font_size;
     j["font_bold"]     = l.font_bold;
     j["font_italic"]   = l.font_italic;
+    j["text_style"]    = l.text_style;
     j["text_color"]    = l.text_color;
     j["stroke_color"]  = l.stroke_color;
     j["stroke_width"]  = l.stroke_width;
@@ -378,6 +379,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     l->font_size     = j.value("font_size",     72);
     l->font_bold     = j.value("font_bold",     false);
     l->font_italic   = j.value("font_italic",   false);
+    l->text_style    = j.value("text_style",    0);
     l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
     l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
     l->stroke_width  = j.value("stroke_width",  0.0f);

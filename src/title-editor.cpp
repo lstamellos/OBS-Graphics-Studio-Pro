@@ -22,6 +22,7 @@
 #include <QAction>
 #include <QIcon>
 #include <QStringList>
+#include <QLocale>
 #include <QStyle>
 #include <QLabel>
 #include <QLineEdit>
@@ -139,6 +140,47 @@ static QIcon obs_icon(QWidget *widget, const QStringList &names, QStyle::Standar
     return widget ? widget->style()->standardIcon(fallback) : QIcon();
 }
 
+
+
+static QLocale locale_for_text_transform(const QString &text)
+{
+    QLocale locale;
+    for (const QChar ch : text) {
+        uint u = ch.unicode();
+        if (u >= 0x0370 && u <= 0x03FF)
+            return QLocale(QLocale::Greek, QLocale::Greece);
+        if (QStringLiteral("ıİşŞğĞçÇ").contains(ch))
+            return QLocale(QLocale::Turkish, QLocale::Turkey);
+        if (ch == QChar(0x00DF))
+            return QLocale(QLocale::German, QLocale::Germany);
+    }
+    return locale;
+}
+
+static QString display_text_for_style(const Layer &layer)
+{
+    QString text = QString::fromStdString(layer.text_content);
+    if (layer.text_style == 1)
+        return locale_for_text_transform(text).toUpper(text);
+    return text;
+}
+
+static void apply_text_style_to_font(QFont &font, const Layer &layer)
+{
+    if (layer.text_style == 2)
+        font.setCapitalization(QFont::SmallCaps);
+    if (layer.text_style == 3 || layer.text_style == 4)
+        font.setPixelSize(std::max(1, (int)std::round(font.pixelSize() * 0.65)));
+}
+
+static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
+{
+    if (layer.text_style == 3)
+        return rect.adjusted(0.0, 0.0, 0.0, -rect.height() * 0.28);
+    if (layer.text_style == 4)
+        return rect.adjusted(0.0, rect.height() * 0.28, 0.0, 0.0);
+    return rect;
+}
 
 static QPainterPath aligned_text_path(const QFont &font, const QRectF &rect,
                                       Qt::Alignment alignment, const QString &text)
@@ -1735,7 +1777,10 @@ void CanvasPreview::render_to_pixmap()
             f.setPixelSize(layer->font_size);
             f.setBold(layer->font_bold);
             f.setItalic(layer->font_italic);
+            apply_text_style_to_font(f, *layer);
             p.setFont(f);
+            QString text = display_text_for_style(*layer);
+            QRectF text_box = text_rect_for_style(box, *layer);
             if (eval_shadow_enabled(*layer, lt)) {
                 QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
                 sc.setAlphaF(std::clamp((double)sc.alphaF() * eval_shadow_opacity(*layer, lt), 0.0, 1.0));
@@ -1757,7 +1802,7 @@ void CanvasPreview::render_to_pixmap()
                     double radius = blur * pass / passes;
                     for (double dx : {-spread - radius, 0.0, spread + radius})
                         for (double dy : {-spread - radius, 0.0, spread + radius})
-                            p.drawText(box.translated(off + QPointF(dx, dy)), sha | sva, QString::fromStdString(layer->text_content));
+                            p.drawText(text_box.translated(off + QPointF(dx, dy)), sha | sva, text);
                 }
             }
             Qt::AlignmentFlag ha = Qt::AlignHCenter;
@@ -1766,17 +1811,16 @@ void CanvasPreview::render_to_pixmap()
             Qt::AlignmentFlag va = Qt::AlignVCenter;
             if (layer->align_v == 0) va = Qt::AlignTop;
             if (layer->align_v == 2) va = Qt::AlignBottom;
-            QString text = QString::fromStdString(layer->text_content);
             double outline_width = eval_outline_width(*layer, lt);
             QColor outline = color_from_argb(eval_outline_color(*layer, lt));
             if (outline_width > 0.0 && outline.alpha() > 0) {
-                QPainterPath text_path = aligned_text_path(f, box, ha | va, text);
+                QPainterPath text_path = aligned_text_path(f, text_box, ha | va, text);
                 p.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
                 p.setBrush(tc);
                 p.drawPath(text_path);
             } else {
                 p.setPen(tc);
-                p.drawText(box, ha | va, text);
+                p.drawText(text_box, ha | va, text);
             }
         }
 
@@ -3127,6 +3171,14 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     chk_bold_->setStyleSheet("color:#ccc;");
     chk_italic_->setStyleSheet("color:#ccc;");
     chk_expose_text_->setStyleSheet("color:#ccc;");
+    cmb_text_style_ = new QComboBox(inner);
+    cmb_text_style_->addItem("Normal", 0);
+    cmb_text_style_->addItem("All Caps", 1);
+    cmb_text_style_->addItem("Small Caps", 2);
+    cmb_text_style_->addItem("Superscript", 3);
+    cmb_text_style_->addItem("Subscript", 4);
+    cmb_text_style_->setToolTip("Visual text style. Source text is preserved for editing and export.");
+    cmb_text_style_->setStyleSheet(cmb_font_->styleSheet());
 
     txfl->addRow("Text:",   txt_content_);
     txfl->addRow("Font:",   cmb_font_);
@@ -3136,6 +3188,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     bi_row->addWidget(chk_italic_);
     bi_row->addStretch();
     txfl->addRow("Style:",  bi_row);
+    txfl->addRow("Text Style:", cmb_text_style_);
     cmb_text_align_ = new QComboBox(inner);
     cmb_text_align_->addItem("Align Left", 0);
     cmb_text_align_->addItem("Align Center", 1);
@@ -3300,6 +3353,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     connect(chk_italic_, &QCheckBox::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_italic = v; emit_change(); }
+            });
+    connect(cmb_text_style_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx) {
+                if (can_edit()) { layer_->text_style = cmb_text_style_->itemData(idx).toInt(); emit_change(); }
             });
     connect(chk_expose_text_, &QCheckBox::toggled,
             this, [this, can_edit, emit_change](bool v){
@@ -3671,6 +3728,7 @@ void PropertiesPanel::load_values()
         spn_size_->setValue(72);
         chk_bold_->setChecked(false);
         chk_italic_->setChecked(false);
+        if (cmb_text_style_) cmb_text_style_->setCurrentIndex(0);
         if (cmb_text_align_) cmb_text_align_->setCurrentIndex(1);
         if (cmb_anchor_) cmb_anchor_->setCurrentIndex(4);
         if (chk_shadow_enabled_) chk_shadow_enabled_->setChecked(false);
@@ -3775,6 +3833,8 @@ void PropertiesPanel::load_values()
     spn_size_->setValue(layer_->font_size);
     chk_bold_->setChecked(layer_->font_bold);
     chk_italic_->setChecked(layer_->font_italic);
+    int style_idx = cmb_text_style_->findData(layer_->text_style);
+    cmb_text_style_->setCurrentIndex(style_idx >= 0 ? style_idx : 0);
     chk_expose_text_->setChecked(layer_->expose_text);
     int ai = cmb_text_align_->findData(layer_->align_h);
     cmb_text_align_->setCurrentIndex(ai >= 0 ? ai : 1);
