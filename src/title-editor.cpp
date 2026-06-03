@@ -38,6 +38,7 @@
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QScrollArea>
+#include <QSizePolicy>
 #include <QFrame>
 #include <QSignalBlocker>
 #include <QKeyEvent>
@@ -799,7 +800,8 @@ void TitleEditor::build_ui()
     side_layout->setSpacing(4);
     props_ = new PropertiesPanel(side_panel);
     side_layout->addWidget(props_, 1);
-    side_panel->setFixedWidth(300);
+    side_panel->setMinimumWidth(260);
+    side_panel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     upper_split->addWidget(side_panel);
     upper_split->setStretchFactor(0, 0);
     upper_split->setStretchFactor(1, 3);
@@ -3339,6 +3341,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         auto *hl = new QHBoxLayout(row);
         hl->setContentsMargins(0, 0, 0, 0);
         hl->setSpacing(3);
+        field->setSizePolicy(QSizePolicy::Expanding, field->sizePolicy().verticalPolicy());
         hl->addWidget(field, 1);
         hl->addWidget(button);
         return row;
@@ -3446,9 +3449,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     lbl_text_fit_scale_ = new QLabel("Scale: 100%", inner);
     lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
 
-    txfl->addRow("Text:",   with_kf(txt_content_, mk_kf_button("Toggle text content keyframe")));
-    txfl->addRow("Font:",   with_kf(cmb_font_, mk_kf_button("Toggle font family keyframe")));
-    txfl->addRow("Size:",   with_kf(spn_size_, mk_kf_button("Toggle font size keyframe")));
+    txfl->addRow("Text:",   txt_content_);
+    txfl->addRow("Font:",   cmb_font_);
+    txfl->addRow("Size:",   spn_size_);
     auto *bi_row = new QHBoxLayout();
     bi_row->setContentsMargins(0, 0, 0, 0);
     bi_row->addWidget(chk_bold_);
@@ -3456,24 +3459,24 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     bi_row->addStretch();
     auto *bi_widget = new QWidget(inner);
     bi_widget->setLayout(bi_row);
-    txfl->addRow("Style:",  with_kf(bi_widget, mk_kf_button("Toggle bold/italic keyframe")));
-    txfl->addRow("Text Style:", with_kf(cmb_text_style_, mk_kf_button("Toggle text style keyframe")));
-    txfl->addRow("Overflow:", with_kf(cmb_text_overflow_, mk_kf_button("Toggle text overflow keyframe")));
-    txfl->addRow("Min Fit Scale:", with_kf(spn_text_fit_min_scale_, mk_kf_button("Toggle minimum fit scale keyframe")));
+    txfl->addRow("Style:",  bi_widget);
+    txfl->addRow("Text Style:", cmb_text_style_);
+    txfl->addRow("Overflow:", cmb_text_overflow_);
+    txfl->addRow("Min Fit Scale:", spn_text_fit_min_scale_);
     txfl->addRow("", lbl_text_fit_scale_);
     cmb_text_align_ = new QComboBox(inner);
     cmb_text_align_->addItem("Align Left", 0);
     cmb_text_align_->addItem("Align Center", 1);
     cmb_text_align_->addItem("Align Right", 2);
     cmb_text_align_->setStyleSheet(cmb_font_->styleSheet());
-    txfl->addRow("Alignment:", with_kf(cmb_text_align_, mk_kf_button("Toggle horizontal alignment keyframe")));
+    txfl->addRow("Alignment:", cmb_text_align_);
     cmb_text_valign_ = new QComboBox(inner);
     cmb_text_valign_->addItem("Align Top", 0);
     cmb_text_valign_->addItem("Align Middle", 1);
     cmb_text_valign_->addItem("Align Bottom", 2);
     cmb_text_valign_->setStyleSheet(cmb_font_->styleSheet());
-    txfl->addRow("Vertical Align:", with_kf(cmb_text_valign_, mk_kf_button("Toggle vertical alignment keyframe")));
-    txfl->addRow("Live edit:", with_kf(chk_expose_text_, mk_kf_button("Toggle live edit keyframe")));
+    txfl->addRow("Vertical Align:", cmb_text_valign_);
+    txfl->addRow("Live edit:", chk_expose_text_);
     btn_text_color_ = new QPushButton(inner);
     btn_kf_text_color_ = mk_kf_button("Toggle text color keyframe");
     txfl->addRow("Color:", with_kf(btn_text_color_, btn_kf_text_color_));
@@ -3516,7 +3519,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
     spn_outline_width_->setToolTip("Outline thickness in pixels. Shape outlines are centered on the perimeter.");
     btn_outline_color_ = new QPushButton(inner);
-    row_outline_color_ = with_kf(btn_outline_color_, mk_kf_button("Toggle outline color keyframe"));
+    row_outline_color_ = btn_outline_color_;
     spn_outline_opacity_ = mk_dspin(0.0, 1.0, 0.05);
     spn_outline_opacity_->setDecimals(2);
     cmb_outline_join_ = new QComboBox(inner);
@@ -3530,13 +3533,13 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_outline_position_->setStyleSheet(cmb_font_->styleSheet());
     chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
     chk_outline_antialias_->setStyleSheet("color:#ccc;");
-    outline_form->addRow("", with_kf(chk_outline_enabled_, mk_kf_button("Toggle outline enabled keyframe")));
-    outline_form->addRow("Color:", row_outline_color_);
-    outline_form->addRow("Thickness:", with_kf(spn_outline_width_, mk_kf_button("Toggle outline thickness keyframe")));
-    outline_form->addRow("Opacity:", with_kf(spn_outline_opacity_, mk_kf_button("Toggle outline opacity keyframe")));
-    outline_form->addRow("Join:", with_kf(cmb_outline_join_, mk_kf_button("Toggle outline join keyframe")));
-    outline_form->addRow("Position:", with_kf(cmb_outline_position_, mk_kf_button("Toggle outline position keyframe")));
-    outline_form->addRow("", with_kf(chk_outline_antialias_, mk_kf_button("Toggle outline antialias keyframe")));
+    outline_form->addRow("", chk_outline_enabled_);
+    outline_form->addRow("Color:", btn_outline_color_);
+    outline_form->addRow("Thickness:", spn_outline_width_);
+    outline_form->addRow("Opacity:", spn_outline_opacity_);
+    outline_form->addRow("Join:", cmb_outline_join_);
+    outline_form->addRow("Position:", cmb_outline_position_);
+    outline_form->addRow("", chk_outline_antialias_);
     vl->addWidget(outline_box_);
     make_collapsible(outline_box_);
 
@@ -3555,9 +3558,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_layer_h_->setToolTip("For image layers, this is the displayed height.");
     chk_lock_aspect_ = new QCheckBox("Lock aspect ratio", inner);
     chk_lock_aspect_->setStyleSheet("color:#ccc;");
-    image_form->addRow("Path:", with_kf(edit_image_path_, mk_kf_button("Toggle image path keyframe")));
+    image_form->addRow("Path:", edit_image_path_);
     image_form->addRow("", btn_pick_image_);
-    image_form->addRow("", with_kf(chk_lock_aspect_, mk_kf_button("Toggle lock aspect keyframe")));
+    image_form->addRow("", chk_lock_aspect_);
     vl->addWidget(image_box_);
     make_collapsible(image_box_);
 
