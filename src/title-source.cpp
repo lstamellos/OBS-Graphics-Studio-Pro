@@ -21,9 +21,12 @@
 #include <pango/pangocairo.h>
 #include <QImage>
 #include <QString>
+#include <QLocale>
 #include <QPointF>
 #include <QPainter>
+#include <QPainterPath>
 #include <QFont>
+#include <QFontMetrics>
 #include <QColor>
 
 #include <memory>
@@ -159,6 +162,46 @@ static uint32_t eval_fill_color(const Layer &layer, double t)
            (uint32_t)eval_channel(layer.fill_color_b, layer.fill_color & 0xFF, t);
 }
 
+static bool eval_outline_enabled(const Layer &layer, double)
+{
+    return layer.outline_enabled;
+}
+
+static uint32_t eval_outline_color(const Layer &layer, double)
+{
+    return layer.stroke_color;
+}
+
+static double eval_outline_width(const Layer &layer, double)
+{
+    return eval_outline_enabled(layer, 0.0) ? std::max(0.0f, layer.stroke_width) : 0.0;
+}
+
+static double eval_outline_opacity(const Layer &layer, double)
+{
+    return std::clamp((double)layer.outline_opacity, 0.0, 1.0);
+}
+
+static cairo_line_join_t outline_cairo_join_style(const Layer &layer)
+{
+    switch (layer.outline_join_style) {
+    case 0: return CAIRO_LINE_JOIN_MITER;
+    case 2: return CAIRO_LINE_JOIN_BEVEL;
+    case 1:
+    default: return CAIRO_LINE_JOIN_ROUND;
+    }
+}
+
+static Qt::PenJoinStyle outline_pen_join_style(const Layer &layer)
+{
+    switch (layer.outline_join_style) {
+    case 0: return Qt::MiterJoin;
+    case 2: return Qt::BevelJoin;
+    case 1:
+    default: return Qt::RoundJoin;
+    }
+}
+
 static bool eval_shadow_enabled(const Layer &layer, double t)
 {
     return layer.shadow_enabled_prop.is_animated()
@@ -210,6 +253,70 @@ static QPointF shadow_offset(const Layer &layer, double t)
 /* ══════════════════════════════════════════════════════════════════
  *  Cairo rendering
  * ══════════════════════════════════════════════════════════════════ */
+
+
+static QLocale locale_for_text_transform(const QString &text)
+{
+    QLocale locale;
+    for (const QChar ch : text) {
+        uint u = ch.unicode();
+        if (u >= 0x0370 && u <= 0x03FF)
+            return QLocale(QLocale::Greek, QLocale::Greece);
+        if (QStringLiteral("ıİşŞğĞçÇ").contains(ch))
+            return QLocale(QLocale::Turkish, QLocale::Turkey);
+        if (ch == QChar(0x00DF))
+            return QLocale(QLocale::German, QLocale::Germany);
+    }
+    return locale;
+}
+
+static QString display_text_for_style(const Layer &layer)
+{
+    QString text = QString::fromStdString(layer.text_content);
+    if (layer.text_style == 1)
+        return locale_for_text_transform(text).toUpper(text);
+    return text;
+}
+
+static void apply_text_style_to_font(QFont &font, const Layer &layer)
+{
+    if (layer.text_style == 2)
+        font.setCapitalization(QFont::SmallCaps);
+    if (layer.text_style == 3 || layer.text_style == 4)
+        font.setPixelSize(std::max(1, (int)std::round(font.pixelSize() * 0.65)));
+}
+
+static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
+{
+    if (layer.text_style == 3)
+        return rect.adjusted(0.0, 0.0, 0.0, -rect.height() * 0.28);
+    if (layer.text_style == 4)
+        return rect.adjusted(0.0, rect.height() * 0.28, 0.0, 0.0);
+    return rect;
+}
+
+static QPainterPath aligned_text_path(const QFont &font, const QRectF &rect,
+                                      Qt::Alignment alignment, const QString &text)
+{
+    QFontMetricsF metrics(font);
+    QRectF bounds = metrics.boundingRect(text);
+    double x = rect.left();
+    if (alignment & Qt::AlignHCenter)
+        x = rect.left() + (rect.width() - bounds.width()) / 2.0;
+    else if (alignment & Qt::AlignRight)
+        x = rect.right() - bounds.width();
+
+    double y = rect.top() - bounds.top();
+    if (alignment & Qt::AlignVCenter)
+        y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+    else if (alignment & Qt::AlignBottom)
+        y = rect.bottom() - bounds.height() - bounds.top();
+
+    QPainterPath path;
+    path.addText(QPointF(x, y), font, text);
+    return path;
+}
+
 static QColor color_from_argb(uint32_t argb)
 {
     return QColor((argb >> 16) & 0xFF,
@@ -253,9 +360,11 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     font.setBold(layer.font_bold);
     font.setItalic(layer.font_italic);
     font.setKerning(true);
+    apply_text_style_to_font(font, layer);
     painter.setFont(font);
 
-    QRectF text_rect(pad, pad, box_w, box_h);
+    QRectF text_rect = text_rect_for_style(QRectF(pad, pad, box_w, box_h), layer);
+    QString text = display_text_for_style(layer);
     Qt::Alignment align = Qt::AlignVCenter | Qt::AlignHCenter;
     if (layer.align_h == 0) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignLeft;
     if (layer.align_h == 2) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignRight;
@@ -273,14 +382,24 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
             double radius = blur * pass / passes;
             for (double dx : {-spread - radius, 0.0, spread + radius})
                 for (double dy : {-spread - radius, 0.0, spread + radius})
-                    painter.drawText(text_rect.translated(off + QPointF(dx, dy)), align, QString::fromStdString(layer.text_content));
+                    painter.drawText(text_rect.translated(off + QPointF(dx, dy)), align, text);
         }
     }
 
+    double outline_width = eval_outline_width(layer, t);
+    QColor outline = color_from_argb(eval_outline_color(layer, t));
+    outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(layer, t), 0.0, 1.0));
     QColor fill = color_from_argb(eval_text_color(layer, t));
     fill.setAlphaF(std::clamp((double)fill.alphaF(), 0.0, 1.0));
-    painter.setPen(fill);
-    painter.drawText(text_rect, align, QString::fromStdString(layer.text_content));
+    if (outline_width > 0.0 && outline.alpha() > 0) {
+        QPainterPath text_path = aligned_text_path(font, text_rect, align, text);
+        painter.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(layer)));
+        painter.setBrush(fill);
+        painter.drawPath(text_path);
+    } else {
+        painter.setPen(fill);
+        painter.drawText(text_rect, align, text);
+    }
     painter.end();
 
     cairo_surface_t *text_surface = cairo_image_surface_create_for_data(
@@ -366,7 +485,19 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
         cairo_rectangle(cr, 0, 0, w, h);
     }
     cairo_set_source_rgba(cr, fr, fg, fb, fa * alpha);
-    cairo_fill(cr);
+    double outline_width = eval_outline_width(layer, t);
+    uint32_t outline_color = eval_outline_color(layer, t);
+    if (outline_width > 0.0 && ((outline_color >> 24) & 0xFF) > 0) {
+        cairo_fill_preserve(cr);
+        double sr, sg, sb, sa;
+        unpack_color(outline_color, sr, sg, sb, sa);
+        cairo_set_line_width(cr, outline_width);
+        cairo_set_line_join(cr, outline_cairo_join_style(layer));
+        cairo_set_source_rgba(cr, sr, sg, sb, sa * alpha * eval_outline_opacity(layer, t));
+        cairo_stroke(cr);
+    } else {
+        cairo_fill(cr);
+    }
     cairo_restore(cr);
 }
 
@@ -454,6 +585,7 @@ static void render_title_frame(TitleSourceData *data,
             render_layer_text(cr, *layer, lt, (int)w, (int)h);
             break;
         case LayerType::SolidRect:
+        case LayerType::Shape:
             render_layer_rect(cr, *layer, lt);
             break;
         case LayerType::Image:
@@ -483,7 +615,7 @@ static void render_title_frame(TitleSourceData *data,
  * ══════════════════════════════════════════════════════════════════ */
 static const char *source_get_name(void *)
 {
-    return "OBS Titler Pro";
+    return "OBS Graphics Studio Pro";
 }
 
 static void *source_create(obs_data_t *settings, obs_source_t *source)
@@ -710,7 +842,7 @@ static void source_get_defaults(obs_data_t *settings)
 void title_source_register()
 {
     static obs_source_info si = {};
-    si.id             = "obs_titles_source";
+    si.id             = "obs_graphics_studio_pro_source";
     si.type           = OBS_SOURCE_TYPE_INPUT;
     si.output_flags   = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW;
     si.get_name       = source_get_name;
@@ -725,5 +857,5 @@ void title_source_register()
     si.get_defaults   = source_get_defaults;
 
     obs_register_source(&si);
-    blog(LOG_INFO, "[OBS Titler Pro] Source type registered.");
+    blog(LOG_INFO, "[OBS Graphics Studio Pro] Source type registered.");
 }
