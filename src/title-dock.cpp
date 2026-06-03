@@ -202,10 +202,8 @@ void TitleDock::build_ui()
     /* ── header toolbar ── */
     auto *toolbar = make_obs_dock_toolbar(template_section);
 
-    btn_add_ = make_obs_dock_tool_button(toolbar, "New", obs_icon(toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
-                                         "New blank title");
-    btn_tpl_ = make_obs_dock_tool_button(toolbar, "Templates", obs_icon(toolbar, {"view-list-add", "document-new"}, QStyle::SP_DirIcon),
-                                         "Create a title from a Graphics Studio-style template");
+    btn_add_ = make_obs_dock_tool_button(toolbar, "Add", obs_icon(toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
+                                         "Add a blank title or create one from a template");
     btn_import_ = make_obs_dock_tool_button(toolbar, "Import", obs_icon(toolbar, {"document-open", "go-down"}, QStyle::SP_DialogOpenButton),
                                             "Import a title template file");
     btn_dup_ = make_obs_dock_tool_button(toolbar, "Duplicate", obs_icon(toolbar, {"edit-copy"}, QStyle::SP_FileDialogDetailedView),
@@ -222,7 +220,6 @@ void TitleDock::build_ui()
                                            "Add selected title to current scene");
 
     toolbar->addWidget(btn_add_);
-    toolbar->addWidget(btn_tpl_);
     toolbar->addWidget(btn_import_);
     toolbar->addSeparator();
     toolbar->addWidget(btn_dup_);
@@ -302,14 +299,15 @@ void TitleDock::build_ui()
     setWidget(container_);
 
     /* ── connections ── */
-    auto *template_menu = new QMenu(btn_tpl_);
-    template_menu->addAction("Lower Third", this, &TitleDock::on_add_template_lower_third);
-    template_menu->addAction("Centered Title", this, &TitleDock::on_add_template_center_title);
-    template_menu->addAction("Ticker / Strap", this, &TitleDock::on_add_template_ticker);
-    btn_tpl_->setMenu(template_menu);
-    btn_tpl_->setPopupMode(QToolButton::MenuButtonPopup);
+    auto *add_menu = new QMenu(btn_add_);
+    add_menu->addAction("Add Blank Title", this, &TitleDock::on_add);
+    add_menu->addSeparator();
+    add_menu->addAction("Lower Third", this, &TitleDock::on_add_template_lower_third);
+    add_menu->addAction("Centered Title", this, &TitleDock::on_add_template_center_title);
+    add_menu->addAction("Ticker / Strap", this, &TitleDock::on_add_template_ticker);
+    btn_add_->setMenu(add_menu);
+    btn_add_->setPopupMode(QToolButton::InstantPopup);
 
-    connect(btn_add_,   &QToolButton::clicked, this, &TitleDock::on_add);
     connect(btn_dup_,   &QToolButton::clicked, this, &TitleDock::on_duplicate);
     connect(btn_rename_, &QToolButton::clicked, this, &TitleDock::on_rename);
     connect(btn_del_,   &QToolButton::clicked, this, &TitleDock::on_delete);
@@ -393,7 +391,7 @@ void TitleDock::on_selection_changed()
                     .arg(t->duration, 0, 'f', 1));
     } else {
         status_lbl_->setText(list_->count() == 0
-            ? "Click + or Templates to create a title"
+            ? "Use Add to create a blank title or template"
             : "No title selected");
     }
     populate_exposed_text();

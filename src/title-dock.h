@@ -66,7 +66,6 @@ private:
     QWidget      *container_  = nullptr;
     QListWidget  *list_       = nullptr;
     QToolButton *btn_add_    = nullptr;
-    QToolButton *btn_tpl_    = nullptr;
     QToolButton *btn_dup_    = nullptr;
     QToolButton *btn_rename_ = nullptr;
     QToolButton *btn_del_    = nullptr;

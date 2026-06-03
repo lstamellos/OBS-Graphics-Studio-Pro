@@ -66,6 +66,7 @@ struct TitleSourceData {
     uint64_t    seen_cue_revision = 0;
     CuePhase    cue_phase    = CuePhase::FreeRun;
     std::chrono::steady_clock::time_point last_tick;
+    std::chrono::steady_clock::time_point last_clock_refresh;
     bool        first_tick   = true;
 
     /* GPU texture */
@@ -81,6 +82,56 @@ struct TitleSourceData {
     uint64_t seen_store_revision = 0;
 };
 
+
+static bool layer_has_animation(const Layer &layer)
+{
+    return layer.pos_x.is_animated() ||
+           layer.pos_y.is_animated() ||
+           layer.scale_x.is_animated() ||
+           layer.scale_y.is_animated() ||
+           layer.rotation.is_animated() ||
+           layer.opacity.is_animated() ||
+           layer.box_width.is_animated() ||
+           layer.box_height.is_animated() ||
+           layer.origin_x_prop.is_animated() ||
+           layer.origin_y_prop.is_animated() ||
+           layer.shadow_enabled_prop.is_animated() ||
+           layer.shadow_opacity_prop.is_animated() ||
+           layer.shadow_distance_prop.is_animated() ||
+           layer.shadow_angle_prop.is_animated() ||
+           layer.shadow_blur_prop.is_animated() ||
+           layer.shadow_spread_prop.is_animated() ||
+           layer.shadow_color_a.is_animated() ||
+           layer.shadow_color_r.is_animated() ||
+           layer.shadow_color_g.is_animated() ||
+           layer.shadow_color_b.is_animated() ||
+           layer.text_color_a.is_animated() ||
+           layer.text_color_r.is_animated() ||
+           layer.text_color_g.is_animated() ||
+           layer.text_color_b.is_animated() ||
+           layer.fill_color_a.is_animated() ||
+           layer.fill_color_r.is_animated() ||
+           layer.fill_color_g.is_animated() ||
+           layer.fill_color_b.is_animated();
+}
+
+static bool title_has_clock_layer(const std::shared_ptr<Title> &title)
+{
+    if (!title) return false;
+    return std::any_of(title->layers.begin(), title->layers.end(),
+                       [](const std::shared_ptr<Layer> &layer) {
+                           return layer && layer->type == LayerType::Clock;
+                       });
+}
+
+static bool title_has_animation(const std::shared_ptr<Title> &title)
+{
+    if (!title) return false;
+    return std::any_of(title->layers.begin(), title->layers.end(),
+                       [](const std::shared_ptr<Layer> &layer) {
+                           return layer && layer_has_animation(*layer);
+                       });
+}
 
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
@@ -783,6 +834,7 @@ static void *source_create(obs_data_t *settings, obs_source_t *source)
     data->loop      = obs_data_get_bool(settings,   PROP_LOOP);
     data->speed     = (float)obs_data_get_double(settings, PROP_SPEED);
     data->last_tick = std::chrono::steady_clock::now();
+    data->last_clock_refresh = data->last_tick;
     return data;
 }
 
@@ -804,6 +856,7 @@ static void source_update(void *priv, obs_data_t *settings)
     data->playhead = 0.0;
     data->playback_reverse = false;
     data->playing = true;
+    data->last_clock_refresh = std::chrono::steady_clock::now();
     data->dirty    = true;
 }
 
@@ -861,7 +914,11 @@ static void source_video_tick(void *priv, float seconds)
         data->dirty = true;
     }
 
-    if (data->playing) {
+    const bool has_clock_layer = title_has_clock_layer(title);
+    const bool has_timeline_animation = title_has_animation(title);
+    const bool static_clock_title = has_clock_layer && !has_timeline_animation;
+
+    if (data->playing && !static_clock_title) {
         double dt = (double)seconds * data->speed;
         double duration = std::max(0.001, title->duration);
         double loop_start = std::clamp(title->loop_start, 0.0, title->duration);
@@ -941,6 +998,14 @@ static void source_video_tick(void *priv, float seconds)
         data->dirty = true;
     }
 
+
+    if (static_clock_title || (!data->playing && has_clock_layer)) {
+        auto now = std::chrono::steady_clock::now();
+        if (now - data->last_clock_refresh >= std::chrono::seconds(1)) {
+            data->last_clock_refresh = now;
+            data->dirty = true;
+        }
+    }
 
     uint64_t revision = TitleDataStore::instance().revision();
     if (revision != data->seen_store_revision) {
