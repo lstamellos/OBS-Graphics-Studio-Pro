@@ -10,6 +10,8 @@
 
 #include <obs-module.h>
 
+#include <QApplication>
+
 #include <QPainter>
 #include <QPainterPath>
 #include <QImage>
@@ -799,6 +801,8 @@ TitleEditor::TitleEditor(QWidget *parent)
         if (canvas_) canvas_->update();
     });
     clock_timer_->start();
+
+    qApp->installEventFilter(this);
 }
 
 void TitleEditor::build_ui()
@@ -1648,6 +1652,31 @@ void TitleEditor::tick()
     on_playhead_changed(snap_to_obs_frame(t));
 }
 
+static bool editor_focus_accepts_text(QWidget *widget)
+{
+    return qobject_cast<QLineEdit *>(widget) ||
+           qobject_cast<QTextEdit *>(widget) ||
+           qobject_cast<QAbstractSpinBox *>(widget) ||
+           qobject_cast<QComboBox *>(widget);
+}
+
+bool TitleEditor::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::KeyPress && isActiveWindow()) {
+        auto *key_event = static_cast<QKeyEvent *>(event);
+        auto *widget = qobject_cast<QWidget *>(watched);
+        const bool in_editor = widget && (widget == this || isAncestorOf(widget));
+        if (in_editor && key_event->key() == Qt::Key_Space && !key_event->isAutoRepeat()) {
+            if (!editor_focus_accepts_text(focusWidget())) {
+                play_pause();
+                key_event->accept();
+                return true;
+            }
+        }
+    }
+    return QDialog::eventFilter(watched, event);
+}
+
 void TitleEditor::keyPressEvent(QKeyEvent *ev)
 {
     if (ev->matches(QKeySequence::Undo)) {
@@ -1661,10 +1690,7 @@ void TitleEditor::keyPressEvent(QKeyEvent *ev)
         return;
     }
     QWidget *fw = focusWidget();
-    bool editing_value = qobject_cast<QLineEdit *>(fw) ||
-                         qobject_cast<QTextEdit *>(fw) ||
-                         qobject_cast<QAbstractSpinBox *>(fw) ||
-                         qobject_cast<QComboBox *>(fw);
+    bool editing_value = editor_focus_accepts_text(fw);
     if (!editing_value && ev->matches(QKeySequence::Copy) && !sel_layer_id_.empty()) {
         copy_selected_layer();
         ev->accept();
@@ -1686,12 +1712,7 @@ void TitleEditor::keyPressEvent(QKeyEvent *ev)
         return;
     }
     if (ev->key() == Qt::Key_Space && !ev->isAutoRepeat()) {
-        QWidget *fw = focusWidget();
-        bool editing_text = qobject_cast<QLineEdit *>(fw) ||
-                            qobject_cast<QTextEdit *>(fw) ||
-                            qobject_cast<QAbstractSpinBox *>(fw) ||
-                            qobject_cast<QComboBox *>(fw);
-        if (!editing_text) {
+        if (!editor_focus_accepts_text(focusWidget())) {
             play_pause();
             ev->accept();
             return;
@@ -2964,6 +2985,29 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     int hit_idx = -1;
     if (!hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr)) return;
 
+    const bool has_previous_segment = hit_idx > 0;
+    const bool has_next_segment = hit_idx + 1 < (int)hit_prop->keyframes.size();
+    if (!has_previous_segment && !has_next_segment) {
+        QMenu menu(this);
+        menu.setTitle("Keyframe Easing");
+        QAction *message = menu.addAction("Add another keyframe to use easing.");
+        message->setEnabled(false);
+        menu.exec(ev->globalPos());
+        return;
+    }
+
+    auto default_targets = [&]() {
+        std::vector<int> indices;
+        if (has_previous_segment && has_next_segment) {
+            indices = {hit_idx - 1, hit_idx};
+        } else if (has_next_segment) {
+            indices = {hit_idx};
+        } else {
+            indices = {hit_idx - 1};
+        }
+        return indices;
+    };
+
     struct EasingChoice {
         QAction *action = nullptr;
         std::vector<int> target_indices;
@@ -2972,11 +3016,15 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     std::vector<EasingChoice> choices;
 
     QMenu menu(this);
-    menu.setTitle("Keyframe Interpolation");
+    menu.setTitle("Keyframe Easing");
     QAction *header = menu.addAction(QString("%1 · %2")
         .arg(QString::fromStdString(layer ? layer->name : std::string()))
         .arg(property_label(hit_prop->name)));
     header->setEnabled(false);
+    QAction *scope = menu.addAction(has_previous_segment && has_next_segment
+        ? "Applies to both adjacent segments"
+        : has_next_segment ? "Applies to the next segment" : "Applies to the previous segment");
+    scope->setEnabled(false);
     menu.addSeparator();
 
     auto swatch_icon = [](EasingType easing) {
@@ -2990,44 +3038,45 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
         return QIcon(swatch);
     };
 
-    auto add_easing_actions = [&](QMenu *target_menu, const std::vector<int> &indices) {
+    auto add_easing_action = [&](QMenu *target_menu, const QString &label,
+                                 EasingType easing, const std::vector<int> &indices) {
+        QAction *action = target_menu->addAction(swatch_icon(easing), label);
+        action->setToolTip(easing == EasingType::Hold
+            ? "Jump-cut value changes; no interpolation between keyframes."
+            : "Set temporal interpolation for the selected segment(s).");
+        action->setCheckable(true);
+        action->setChecked(std::all_of(indices.begin(), indices.end(), [&](int idx) {
+            return idx >= 0 && idx < (int)hit_prop->keyframes.size() &&
+                   hit_prop->keyframes[idx].easing == easing;
+        }));
+        choices.push_back({action, indices, easing});
+        return action;
+    };
+
+    auto add_easing_group = [&](QMenu *target_menu, const std::vector<int> &indices) {
         auto *group = new QActionGroup(target_menu);
         group->setExclusive(true);
-        for (EasingType easing : {EasingType::Linear, EasingType::EaseIn, EasingType::EaseOut,
-                                  EasingType::EaseInOut, EasingType::Bezier, EasingType::Hold}) {
-            QAction *action = target_menu->addAction(swatch_icon(easing), easing_label(easing));
-            action->setCheckable(true);
-            action->setActionGroup(group);
-            action->setToolTip(easing == EasingType::Hold
-                ? "Hold the value until the next keyframe."
-                : "Set temporal interpolation for the selected keyframe segment.");
-            action->setChecked(std::all_of(indices.begin(), indices.end(), [&](int idx) {
-                return idx >= 0 && idx < (int)hit_prop->keyframes.size() &&
-                       hit_prop->keyframes[idx].easing == easing;
-            }));
-            choices.push_back({action, indices, easing});
+        for (auto [label, easing] : std::initializer_list<std::pair<QString, EasingType>>{
+                 {"Linear", EasingType::Linear},
+                 {"Easy Ease", EasingType::EaseInOut},
+                 {"Ease In", EasingType::EaseIn},
+                 {"Ease Out", EasingType::EaseOut},
+                 {"Hold", EasingType::Hold},
+                 {"Custom Bezier", EasingType::Bezier},
+             }) {
+            add_easing_action(target_menu, label, easing, indices)->setActionGroup(group);
         }
     };
 
-    const bool has_incoming = hit_idx > 0;
-    const bool has_outgoing = hit_idx + 1 < (int)hit_prop->keyframes.size();
-    if (!has_incoming && !has_outgoing) {
-        QAction *none = menu.addAction("A single keyframe has no interpolation segment.");
-        none->setEnabled(false);
-    } else {
-        if (has_incoming) {
-            QMenu *incoming = menu.addMenu("Incoming  (previous → this)");
-            add_easing_actions(incoming, {hit_idx - 1});
-        }
-        if (has_outgoing) {
-            QMenu *outgoing = menu.addMenu("Outgoing  (this → next)");
-            add_easing_actions(outgoing, {hit_idx});
-        }
-        if (has_incoming && has_outgoing) {
-            menu.addSeparator();
-            QMenu *both = menu.addMenu("Apply to Both Sides");
-            add_easing_actions(both, {hit_idx - 1, hit_idx});
-        }
+    add_easing_group(&menu, default_targets());
+
+    if (has_previous_segment && has_next_segment) {
+        menu.addSeparator();
+        QMenu *advanced = menu.addMenu("Apply to One Side");
+        QMenu *previous = advanced->addMenu("Previous Segment");
+        add_easing_group(previous, {hit_idx - 1});
+        QMenu *next = advanced->addMenu("Next Segment");
+        add_easing_group(next, {hit_idx});
     }
 
     QAction *chosen = menu.exec(ev->globalPos());

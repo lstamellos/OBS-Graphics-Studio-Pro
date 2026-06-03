@@ -51,6 +51,7 @@ class LayerStack;
 class TimelineWidget;
 class PropertiesPanel;
 class TitlePropertiesPanel;
+class QEvent;
 class QKeyEvent;
 class QContextMenuEvent;
 class QAction;
@@ -86,6 +87,7 @@ public slots:
     void on_title_modified();
 
 protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void keyPressEvent(QKeyEvent *ev) override;
 
 private slots:
