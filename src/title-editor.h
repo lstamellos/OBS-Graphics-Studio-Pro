@@ -54,6 +54,7 @@ class TitlePropertiesPanel;
 class QKeyEvent;
 class QContextMenuEvent;
 class QAction;
+class QToolButton;
 
 /* ══════════════════════════════════════════════════════════════════
  *  TitleEditor  – main editor window
@@ -241,6 +242,8 @@ private slots:
     void on_add_clock();
     void on_add_rect();
     void on_add_image();
+    void on_move_up();
+    void on_move_down();
     void on_delete();
     void on_item_changed(QListWidgetItem *item);
     void on_selection_changed();
@@ -253,11 +256,10 @@ private:
 
     std::shared_ptr<Title> title_;
     QListWidget  *list_     = nullptr;
-    QPushButton  *btn_add_text_  = nullptr;
-    QPushButton  *btn_add_clock_ = nullptr;
-    QPushButton  *btn_add_rect_  = nullptr;
-    QPushButton  *btn_add_image_ = nullptr;
-    QPushButton  *btn_del_       = nullptr;
+    QToolButton  *btn_add_  = nullptr;
+    QToolButton  *btn_move_up_ = nullptr;
+    QToolButton  *btn_move_down_ = nullptr;
+    QToolButton  *btn_del_       = nullptr;
     bool          layer_clipboard_available_ = false;
 };
 

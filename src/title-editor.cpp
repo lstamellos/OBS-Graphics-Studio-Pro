@@ -2232,28 +2232,6 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
     vl->setContentsMargins(0, 0, 0, 0);
     vl->setSpacing(0);
 
-    /* header buttons */
-    auto *hdr = new QHBoxLayout();
-    hdr->setContentsMargins(3, 3, 3, 3);
-    hdr->setSpacing(2);
-    btn_add_text_  = new QPushButton("T+",    this);
-    btn_add_text_->setIcon(obs_icon(this, {"insert-text", "format-text-bold"}, QStyle::SP_FileIcon));
-    btn_add_clock_ = new QPushButton("Clk+",  this);
-    btn_add_clock_->setIcon(obs_icon(this, {"office-calendar", "appointment-new"}, QStyle::SP_ComputerIcon));
-    btn_add_rect_  = new QPushButton("▭+",    this);
-    btn_add_rect_->setIcon(obs_icon(this, {"draw-rectangle", "insert-shape"}, QStyle::SP_FileDialogNewFolder));
-    btn_add_image_ = new QPushButton("Img+",  this);
-    btn_add_image_->setIcon(obs_icon(this, {"insert-image", "image-x-generic"}, QStyle::SP_FileIcon));
-    btn_del_       = new QPushButton("✕",     this);
-    btn_del_->setIcon(obs_icon(this, {"edit-delete", "user-trash"}, QStyle::SP_TrashIcon));
-    for (auto *b : {btn_add_text_, btn_add_clock_, btn_add_rect_, btn_add_image_, btn_del_}) {
-        b->setFixedWidth(34);
-        b->setStyleSheet("QPushButton{color:#ccc;background:#2a2a2a;border:none;"
-                         "border-radius:2px;} QPushButton:hover{background:#3a3a3a;}");
-        hdr->addWidget(b);
-    }
-    hdr->addStretch();
-    vl->addLayout(hdr);
 
     QWidget *columns = new QWidget(this);
     columns->setStyleSheet("background:#141414;border-top:1px solid #292929;border-bottom:1px solid #292929;");
@@ -2290,11 +2268,66 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
         "QListWidget::item:hover{background:#252525;}");
     vl->addWidget(list_, 1);
 
-    connect(btn_add_text_, &QPushButton::clicked, this, &LayerStack::on_add_text);
-    connect(btn_add_clock_, &QPushButton::clicked, this, &LayerStack::on_add_clock);
-    connect(btn_add_rect_,  &QPushButton::clicked, this, &LayerStack::on_add_rect);
-    connect(btn_add_image_, &QPushButton::clicked, this, &LayerStack::on_add_image);
-    connect(btn_del_,       &QPushButton::clicked, this, &LayerStack::on_delete);
+    auto *toolbar = new QToolBar(this);
+    toolbar->setMovable(false);
+    toolbar->setFloatable(false);
+    toolbar->setOrientation(Qt::Horizontal);
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    toolbar->setIconSize(QSize(16, 16));
+    toolbar->setContentsMargins(0, 0, 0, 0);
+    toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    auto make_layer_tool = [&](const QString &text, const QIcon &icon, const QString &tip) {
+        auto *button = new QToolButton(toolbar);
+        button->setText(text);
+        button->setAccessibleName(text);
+        button->setToolTip(tip);
+        button->setIcon(icon);
+        button->setIconSize(QSize(16, 16));
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        button->setAutoRaise(true);
+        button->setFocusPolicy(Qt::StrongFocus);
+        return button;
+    };
+
+    btn_add_ = make_layer_tool("Add Layer",
+                               obs_icon(this, {"list-add", "document-new"}, QStyle::SP_FileIcon),
+                               "Add a new layer");
+    auto *add_menu = new QMenu(btn_add_);
+    add_menu->addAction(obs_icon(this, {"insert-text", "format-text-bold"}, QStyle::SP_FileIcon),
+                        "Text", this, &LayerStack::on_add_text);
+    add_menu->addAction(obs_icon(this, {"office-calendar", "appointment-new"}, QStyle::SP_ComputerIcon),
+                        "Clock", this, &LayerStack::on_add_clock);
+    add_menu->addAction(obs_icon(this, {"draw-rectangle", "insert-shape"}, QStyle::SP_FileDialogNewFolder),
+                        "Shape", this, &LayerStack::on_add_rect);
+    add_menu->addAction(obs_icon(this, {"insert-image", "image-x-generic"}, QStyle::SP_FileIcon),
+                        "Image", this, &LayerStack::on_add_image);
+    btn_add_->setMenu(add_menu);
+    btn_add_->setPopupMode(QToolButton::InstantPopup);
+
+    btn_move_up_ = make_layer_tool("Move Layer Up",
+                                   obs_icon(this, {"go-up", "arrow-up"}, QStyle::SP_ArrowUp),
+                                   "Move selected layer up");
+    btn_move_down_ = make_layer_tool("Move Layer Down",
+                                     obs_icon(this, {"go-down", "arrow-down"}, QStyle::SP_ArrowDown),
+                                     "Move selected layer down");
+    btn_del_ = make_layer_tool("Delete Layer",
+                               obs_icon(this, {"edit-delete", "user-trash"}, QStyle::SP_TrashIcon),
+                               "Delete selected layer");
+    btn_move_up_->setEnabled(false);
+    btn_move_down_->setEnabled(false);
+    btn_del_->setEnabled(false);
+
+    toolbar->addWidget(btn_add_);
+    toolbar->addWidget(btn_move_up_);
+    toolbar->addWidget(btn_move_down_);
+    toolbar->addSeparator();
+    toolbar->addWidget(btn_del_);
+    vl->addWidget(toolbar);
+
+    connect(btn_move_up_, &QToolButton::clicked, this, &LayerStack::on_move_up);
+    connect(btn_move_down_, &QToolButton::clicked, this, &LayerStack::on_move_down);
+    connect(btn_del_, &QToolButton::clicked, this, &LayerStack::on_delete);
     connect(list_, &QListWidget::itemSelectionChanged,
             this, &LayerStack::on_selection_changed);
     connect(list_->model(), &QAbstractItemModel::rowsMoved,
@@ -2537,13 +2570,51 @@ std::vector<std::string> LayerStack::selected_ids() const
 void LayerStack::on_selection_changed()
 {
     std::string id = selected_id();
-    if (!id.empty()) emit layer_selected(id);
+    const bool has_layer = !id.empty() && title_ && title_->find_layer(id);
+    if (btn_del_) btn_del_->setEnabled(has_layer);
+
+    bool can_move_up = false;
+    bool can_move_down = false;
+    if (has_layer) {
+        auto it = std::find_if(title_->layers.begin(), title_->layers.end(),
+                               [&](const auto &layer) { return layer && layer->id == id; });
+        if (it != title_->layers.end()) {
+            int idx = (int)std::distance(title_->layers.begin(), it);
+            can_move_down = idx > 0;
+            can_move_up = idx < (int)title_->layers.size() - 1;
+        }
+        emit layer_selected(id);
+    }
+    if (btn_move_up_) btn_move_up_->setEnabled(can_move_up);
+    if (btn_move_down_) btn_move_down_->setEnabled(can_move_down);
 }
 
 void LayerStack::on_add_text() { emit add_layer_requested(LayerType::Text); }
 void LayerStack::on_add_clock() { emit add_layer_requested(LayerType::Clock); }
 void LayerStack::on_add_rect() { emit add_layer_requested(LayerType::SolidRect); }
 void LayerStack::on_add_image() { emit add_layer_requested(LayerType::Image); }
+
+void LayerStack::on_move_up()
+{
+    std::string id = selected_id();
+    if (!title_ || id.empty()) return;
+    auto layer = title_->find_layer(id);
+    if (!layer) return;
+    title_->move_layer(id, +1);
+    emit layer_order_changed();
+    set_selected_layer(id);
+}
+
+void LayerStack::on_move_down()
+{
+    std::string id = selected_id();
+    if (!title_ || id.empty()) return;
+    auto layer = title_->find_layer(id);
+    if (!layer) return;
+    title_->move_layer(id, -1);
+    emit layer_order_changed();
+    set_selected_layer(id);
+}
 
 void LayerStack::on_delete()
 {
