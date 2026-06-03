@@ -1,7 +1,7 @@
 /*
  * title-dock.h
  *
- * Part 2: OBS Dock – "OBS Titler Pro" panel.
+ * Part 2: OBS Dock – "OBS Graphics Studio Pro" panel.
  *
  * Shows a list of all saved titles with:
  *   • Live thumbnail preview
@@ -18,7 +18,7 @@
 #include <QListWidgetItem>
 #include <QTableWidget>
 #include <QSplitter>
-#include <QPushButton>
+#include <QToolButton>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -65,21 +65,21 @@ private:
 
     QWidget      *container_  = nullptr;
     QListWidget  *list_       = nullptr;
-    QPushButton  *btn_add_    = nullptr;
-    QPushButton  *btn_tpl_    = nullptr;
-    QPushButton  *btn_dup_    = nullptr;
-    QPushButton  *btn_rename_ = nullptr;
-    QPushButton  *btn_del_    = nullptr;
-    QPushButton  *btn_export_ = nullptr;
-    QPushButton  *btn_import_ = nullptr;
-    QPushButton  *btn_edit_   = nullptr;
-    QPushButton  *btn_scene_  = nullptr;
+    QToolButton *btn_add_    = nullptr;
+    QToolButton *btn_tpl_    = nullptr;
+    QToolButton *btn_dup_    = nullptr;
+    QToolButton *btn_rename_ = nullptr;
+    QToolButton *btn_del_    = nullptr;
+    QToolButton *btn_export_ = nullptr;
+    QToolButton *btn_import_ = nullptr;
+    QToolButton *btn_edit_   = nullptr;
+    QToolButton *btn_scene_  = nullptr;
     QLabel       *status_lbl_ = nullptr;
     QLabel       *text_editor_lbl_ = nullptr;
     QTableWidget *text_table_ = nullptr;
-    QPushButton  *btn_add_text_row_ = nullptr;
-    QPushButton  *btn_row_up_ = nullptr;
-    QPushButton  *btn_row_down_ = nullptr;
+    QToolButton *btn_add_text_row_ = nullptr;
+    QToolButton *btn_row_up_ = nullptr;
+    QToolButton *btn_row_down_ = nullptr;
     bool          updating_exposed_text_ = false;
     QTimer       *live_refresh_timer_ = nullptr;
     uint64_t      seen_store_revision_ = 0;
