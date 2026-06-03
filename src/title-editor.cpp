@@ -24,6 +24,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QIcon>
+#include <QPixmap>
 #include <QStringList>
 #include <QLocale>
 #include <QStyle>
@@ -75,6 +76,27 @@ static const QColor C_TEXT     { 0xcccccc };
 static const QColor C_RULER    { 0x1e1e1e };
 static const QColor C_KF_DOT   { 0xf0a020 };
 static const QColor C_PLAYHEAD { 0xff4444 };
+
+static QIcon keyframe_diamond_icon(bool active)
+{
+    QPixmap pix(16, 16);
+    pix.fill(Qt::transparent);
+
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor color = active ? C_KF_DOT : QColor(0x9a, 0xa5, 0xb1);
+    QPolygon diamond;
+    diamond << QPoint(8, 2) << QPoint(14, 8) << QPoint(8, 14) << QPoint(2, 8);
+
+    QPen pen(color, 1.6);
+    pen.setJoinStyle(Qt::MiterJoin);
+    painter.setPen(pen);
+    painter.setBrush(active ? QBrush(color) : Qt::NoBrush);
+    painter.drawPolygon(diamond);
+
+    return QIcon(pix);
+}
 
 
 
@@ -2585,11 +2607,11 @@ void LayerStack::populate()
             auto *ph = new QHBoxLayout(prop_widget);
             ph->setContentsMargins(64, 0, 4, 0);
             ph->setSpacing(4);
-            QLabel *stopwatch = new QLabel("◇", prop_widget);
-            stopwatch->setFixedWidth(18);
-            stopwatch->setAlignment(Qt::AlignCenter);
-            stopwatch->setStyleSheet("color:#9aa5b1;");
-            ph->addWidget(stopwatch);
+            QLabel *diamond_indicator = new QLabel("◇", prop_widget);
+            diamond_indicator->setFixedWidth(18);
+            diamond_indicator->setAlignment(Qt::AlignCenter);
+            diamond_indicator->setStyleSheet("color:#9aa5b1;");
+            ph->addWidget(diamond_indicator);
             QLabel *prop_name = new QLabel(label, prop_widget);
             prop_name->setStyleSheet("color:#b8b8b8;");
             ph->addWidget(prop_name, 1);
@@ -3560,13 +3582,16 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     };
 
     auto mk_kf_button = [&](const QString &tip) {
-        auto *b = new QPushButton("◇", inner);
+        auto *b = new QPushButton(inner);
         b->setFixedSize(22, 22);
+        b->setIconSize(QSize(16, 16));
+        b->setIcon(keyframe_diamond_icon(false));
         b->setToolTip(tip);
-        b->setStyleSheet("QPushButton{color:#8c8c8c;background:transparent;border:none;border-radius:2px;"
-                         "padding:0;font-size:12px;}"
-                         "QPushButton:hover{background:#303030;color:#ffd27a;}"
-                         "QPushButton[active=\"true\"]{color:#f0a020;background:#2b2518;}");
+        b->setAccessibleName(tip);
+        b->setProperty("active", false);
+        b->setStyleSheet("QPushButton{background:transparent;border:none;border-radius:2px;padding:0;}"
+                         "QPushButton:hover{background:#303030;}"
+                         "QPushButton[active=\"true\"]{background:#2b2518;}");
         return b;
     };
 
@@ -4361,8 +4386,15 @@ void PropertiesPanel::load_values()
         if (spn_shadow_spread_) spn_shadow_spread_->setValue(0.0);
         for (auto *b : {btn_kf_pos_x_, btn_kf_pos_y_, btn_kf_rotation_, btn_kf_opacity_,
                         btn_kf_origin_x_, btn_kf_origin_y_, btn_kf_width_, btn_kf_height_,
-                        btn_kf_text_color_, btn_kf_fill_color_})
-            if (b) { b->setText("◇"); b->setProperty("active", false); b->style()->unpolish(b); b->style()->polish(b); }
+                        btn_kf_text_color_, btn_kf_fill_color_, btn_kf_shadow_enabled_,
+                        btn_kf_shadow_opacity_, btn_kf_shadow_distance_, btn_kf_shadow_angle_,
+                        btn_kf_shadow_blur_, btn_kf_shadow_spread_, btn_kf_shadow_color_}) {
+            if (!b) continue;
+            b->setIcon(keyframe_diamond_icon(false));
+            b->setProperty("active", false);
+            b->style()->unpolish(b);
+            b->style()->polish(b);
+        }
         loading_values_ = false;
         return;
     }
@@ -4396,13 +4428,12 @@ void PropertiesPanel::load_values()
     if (row_fill_color_) row_fill_color_->setVisible(is_rect);
     if (outline_box_) outline_box_->setVisible(supports_outline);
     if (auto *outline_form = qobject_cast<QFormLayout *>(outline_box_->layout())) {
-        const bool show_outline_geometry = is_rect;
-        if (btn_outline_color_) btn_outline_color_->setVisible(show_outline_geometry);
+        if (btn_outline_color_) btn_outline_color_->setVisible(supports_outline);
         if (auto *label = outline_form->labelForField(btn_outline_color_))
-            label->setVisible(show_outline_geometry);
-        if (spn_outline_width_) spn_outline_width_->setVisible(show_outline_geometry);
+            label->setVisible(supports_outline);
+        if (spn_outline_width_) spn_outline_width_->setVisible(supports_outline);
         if (auto *label = outline_form->labelForField(spn_outline_width_))
-            label->setVisible(show_outline_geometry);
+            label->setVisible(supports_outline);
     }
     if (auto *form = qobject_cast<QFormLayout *>(rect_box_->layout())) {
         if (auto *label = form->labelForField(spn_rect_corner_))
@@ -4458,7 +4489,7 @@ void PropertiesPanel::load_values()
 
     auto set_kf_icon = [](QPushButton *button, bool active) {
         if (!button) return;
-        button->setText(active ? "◆" : "⏱");
+        button->setIcon(keyframe_diamond_icon(active));
         button->setProperty("active", active);
         button->style()->unpolish(button);
         button->style()->polish(button);
