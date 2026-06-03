@@ -79,7 +79,7 @@ static void move_live_row_marker(int &marker, int from, int to)
  *  Constructor
  * ══════════════════════════════════════════════════════════════════ */
 TitleDock::TitleDock(QWidget *parent)
-    : QDockWidget("OBS Titler Pro", parent)
+    : QDockWidget("OBS Graphics Studio Pro", parent)
 {
     setFeatures(QDockWidget::DockWidgetMovable |
                 QDockWidget::DockWidgetFloatable);
@@ -133,7 +133,7 @@ void TitleDock::build_ui()
     btn_scene_= new QPushButton("▶ Scene",  container_);
 
     btn_add_->setToolTip("New blank title");
-    btn_tpl_->setToolTip("Create a title from a Titler-style template");
+    btn_tpl_->setToolTip("Create a title from a Graphics Studio-style template");
     btn_dup_->setToolTip("Duplicate");
     btn_rename_->setToolTip("Rename selected title template");
     btn_del_->setToolTip("Delete");
@@ -711,16 +711,16 @@ void TitleDock::on_export()
     if (!title) return;
 
     QString safe_name = QString::fromStdString(title->name).trimmed();
-    if (safe_name.isEmpty()) safe_name = QStringLiteral("OBS Titler Pro Template");
+    if (safe_name.isEmpty()) safe_name = QStringLiteral("OBS Graphics Studio Pro Template");
     safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
 
     QString path = QFileDialog::getSaveFileName(
-        this, "Export Title Template", safe_name + QStringLiteral(".otpt"),
-        "OBS Titler Pro Templates (*.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        this, "Export Title Template", safe_name + QStringLiteral(".ogspt"),
+        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
     if (path.isEmpty()) return;
 
     if (QFileInfo(path).suffix().isEmpty())
-        path += QStringLiteral(".otpt");
+        path += QStringLiteral(".ogspt");
 
     std::string error;
     if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), &error)) {
@@ -736,7 +736,7 @@ void TitleDock::on_import()
 {
     QString path = QFileDialog::getOpenFileName(
         this, "Import Title Template", QString(),
-        "OBS Titler Pro Templates (*.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
     if (path.isEmpty()) return;
 
     std::string error;
@@ -819,7 +819,7 @@ void TitleDock::on_add_to_scene()
     obs_data_set_double(settings, PROP_SPEED,    1.0);
 
     obs_source_t *source = obs_source_create(
-        "obs_titles_source",
+        "obs_graphics_studio_pro_source",
         t->name.c_str(),
         settings,
         nullptr);
