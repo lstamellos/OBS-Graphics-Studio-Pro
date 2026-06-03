@@ -1,7 +1,7 @@
 /*
  * title-data.h
  *
- * Core data model for the OBS Titler Pro plugin.
+ * Core data model for the OBS Graphics Studio Pro plugin.
  *
  * A Title is composed of one or more Layers. Each layer has a set of
  * Properties (position, scale, opacity, colour, text …). Properties
@@ -112,9 +112,16 @@ struct Layer {
     int         font_size     = 72;
     bool        font_bold     = false;
     bool        font_italic   = false;
+    int         text_style    = 0;  /* 0=normal, 1=all caps, 2=small caps, 3=superscript, 4=subscript */
     uint32_t    text_color    = 0xFFFFFFFF;  /* ARGB */
-    uint32_t    stroke_color  = 0x00000000;
+
+    /* ----- Outline shared by text and solid/shape layers ----- */
+    bool        outline_enabled = false;
+    uint32_t    stroke_color  = 0xFF000000;
     float       stroke_width  = 0.0f;
+    float       outline_opacity = 1.0f;
+    int         outline_join_style = 1;  /* 0=miter, 1=round, 2=bevel */
+
     int         align_h       = 1;  /* 0=left 1=center 2=right */
     int         align_v       = 1;  /* 0=top  1=middle 2=bottom */
 
