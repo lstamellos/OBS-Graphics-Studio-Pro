@@ -1,5 +1,5 @@
 /*
- * OBS Titler Pro Plugin - plugin-main.cpp
+ * OBS Graphics Studio Pro Plugin - plugin-main.cpp
  * Entry point: registers the source, dock, and module lifecycle.
  */
 
@@ -44,8 +44,8 @@ static void add_docks_menu_entry(QMainWindow *main)
     QMenu *docks_menu = find_docks_menu(main);
     if (!docks_menu || !g_dock || g_dock_menu_action) return;
 
-    g_dock_menu_action = docks_menu->addAction("OBS Titler Pro");
-    g_dock_menu_action->setObjectName("obs-titler-pro-docks-menu-action");
+    g_dock_menu_action = docks_menu->addAction("OBS Graphics Studio Pro");
+    g_dock_menu_action->setObjectName("obs-graphics-studio-pro-docks-menu-action");
     g_dock_menu_action->setCheckable(true);
     g_dock_menu_action->setChecked(g_dock->isVisible());
     QObject::connect(g_dock_menu_action, &QAction::toggled, g_dock,
@@ -57,7 +57,7 @@ static void add_docks_menu_entry(QMainWindow *main)
 /* ── module load ────────────────────────────────────────────────── */
 bool obs_module_load(void)
 {
-    blog(LOG_INFO, "[OBS Titler Pro] Loading plugin v%s", PLUGIN_VERSION);
+    blog(LOG_INFO, "[OBS Graphics Studio Pro] Loading plugin v%s", PLUGIN_VERSION);
 
     /* 1. Initialise persistent title store */
     TitleDataStore::instance().load();
@@ -68,7 +68,7 @@ bool obs_module_load(void)
     /* 3. Defer dock creation until the OBS UI is ready */
     obs_frontend_add_event_callback(on_frontend_event, nullptr);
 
-    blog(LOG_INFO, "[OBS Titler Pro] Plugin loaded.");
+    blog(LOG_INFO, "[OBS Graphics Studio Pro] Plugin loaded.");
     return true;
 }
 
@@ -81,8 +81,8 @@ void obs_module_unload(void)
         delete g_dock_menu_action;
         g_dock_menu_action = nullptr;
     }
-    obs_frontend_remove_dock("obs-titler-pro-dock");
-    blog(LOG_INFO, "[OBS Titler Pro] Plugin unloaded.");
+    obs_frontend_remove_dock("obs-graphics-studio-pro-dock");
+    blog(LOG_INFO, "[OBS Graphics Studio Pro] Plugin unloaded.");
 }
 
 /* ── frontend event handler ─────────────────────────────────────── */
@@ -93,12 +93,12 @@ static void on_frontend_event(obs_frontend_event event, void * /*priv*/)
             static_cast<QMainWindow *>(obs_frontend_get_main_window());
 
         g_dock = new TitleDock(main);
-        g_dock->setObjectName("OBSTitlerProDock");
-        g_dock->setWindowTitle("OBS Titler Pro");
+        g_dock->setObjectName("OBSGraphicsStudioProDock");
+        g_dock->setWindowTitle("OBS Graphics Studio Pro");
 
-        obs_frontend_add_custom_qdock("obs-titler-pro-dock", g_dock);
+        obs_frontend_add_custom_qdock("obs-graphics-studio-pro-dock", g_dock);
         add_docks_menu_entry(main);
-        blog(LOG_INFO, "[OBS Titler Pro] Dock registered.");
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] Dock registered.");
     }
 
     if (event == OBS_FRONTEND_EVENT_EXIT) {
