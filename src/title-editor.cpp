@@ -321,6 +321,16 @@ static double eval_outline_opacity(const Layer &layer, double)
     return std::clamp((double)layer.outline_opacity, 0.0, 1.0);
 }
 
+static bool eval_outline_on_front(const Layer &layer, double)
+{
+    return layer.outline_on_front;
+}
+
+static bool eval_outline_antialias(const Layer &layer, double)
+{
+    return layer.outline_antialias;
+}
+
 static Qt::PenJoinStyle outline_pen_join_style(const Layer &layer)
 {
     switch (layer.outline_join_style) {
@@ -1769,15 +1779,24 @@ void CanvasPreview::render_to_pixmap()
             double outline_width = eval_outline_width(*layer, lt);
             QColor outline = color_from_argb(eval_outline_color(*layer, lt));
             outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(*layer, lt), 0.0, 1.0));
-            p.setBrush(fc);
-            if (outline_width > 0.0 && outline.alpha() > 0)
-                p.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::SquareCap, outline_pen_join_style(*layer)));
-            else
-                p.setPen(Qt::NoPen);
-            if (layer->corner_radius > 0)
-                p.drawRoundedRect(box, layer->corner_radius, layer->corner_radius);
-            else
-                p.drawRect(box);
+            auto draw_shape = [&](const QBrush &brush, const QPen &pen) {
+                p.setBrush(brush);
+                p.setPen(pen);
+                if (layer->corner_radius > 0)
+                    p.drawRoundedRect(box, layer->corner_radius, layer->corner_radius);
+                else
+                    p.drawRect(box);
+            };
+            auto draw_outline = [&]() {
+                if (outline_width <= 0.0 || outline.alpha() <= 0) return;
+                bool previous_aa = p.testRenderHint(QPainter::Antialiasing);
+                p.setRenderHint(QPainter::Antialiasing, eval_outline_antialias(*layer, lt));
+                draw_shape(QBrush(Qt::NoBrush), QPen(outline, outline_width, Qt::SolidLine, Qt::SquareCap, outline_pen_join_style(*layer)));
+                p.setRenderHint(QPainter::Antialiasing, previous_aa);
+            };
+            if (!eval_outline_on_front(*layer, lt)) draw_outline();
+            draw_shape(QBrush(fc), QPen(Qt::NoPen));
+            if (eval_outline_on_front(*layer, lt)) draw_outline();
         }
 
         if (layer->type == LayerType::Image) {
@@ -1835,15 +1854,24 @@ void CanvasPreview::render_to_pixmap()
             double outline_width = eval_outline_width(*layer, lt);
             QColor outline = color_from_argb(eval_outline_color(*layer, lt));
             outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(*layer, lt), 0.0, 1.0));
-            if (outline_width > 0.0 && outline.alpha() > 0) {
-                QPainterPath text_path = aligned_text_path(f, text_box, ha | va, text);
-                p.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(*layer)));
+            QPainterPath text_path = aligned_text_path(f, text_box, ha | va, text);
+            auto draw_text_fill = [&]() {
+                p.setPen(Qt::NoPen);
                 p.setBrush(tc);
                 p.drawPath(text_path);
-            } else {
-                p.setPen(tc);
-                p.drawText(text_box, ha | va, text);
-            }
+            };
+            auto draw_text_outline = [&]() {
+                if (outline_width <= 0.0 || outline.alpha() <= 0) return;
+                bool previous_aa = p.testRenderHint(QPainter::Antialiasing);
+                p.setRenderHint(QPainter::Antialiasing, eval_outline_antialias(*layer, lt));
+                p.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(*layer)));
+                p.setBrush(Qt::NoBrush);
+                p.drawPath(text_path);
+                p.setRenderHint(QPainter::Antialiasing, previous_aa);
+            };
+            if (!eval_outline_on_front(*layer, lt)) draw_text_outline();
+            draw_text_fill();
+            if (eval_outline_on_front(*layer, lt)) draw_text_outline();
         }
 
         p.restore();
@@ -3266,11 +3294,19 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_outline_join_->addItem("Round", 1);
     cmb_outline_join_->addItem("Bevel", 2);
     cmb_outline_join_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_outline_position_ = new QComboBox(inner);
+    cmb_outline_position_->addItem("Back", 0);
+    cmb_outline_position_->addItem("Front", 1);
+    cmb_outline_position_->setStyleSheet(cmb_font_->styleSheet());
+    chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
+    chk_outline_antialias_->setStyleSheet("color:#ccc;");
     ofl->addRow("", chk_outline_enabled_);
     ofl->addRow("Color:", row_outline_color_);
     ofl->addRow("Thickness:", spn_outline_width_);
     ofl->addRow("Opacity:", spn_outline_opacity_);
     ofl->addRow("Join:", cmb_outline_join_);
+    ofl->addRow("Position:", cmb_outline_position_);
+    ofl->addRow("", chk_outline_antialias_);
     vl->addWidget(outline_box_);
 
     /* ── Image ── */
@@ -3565,6 +3601,14 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, emit_change](int idx) {
                 if (can_edit()) { layer_->outline_join_style = cmb_outline_join_->itemData(idx).toInt(); emit_change(); }
             });
+    connect(cmb_outline_position_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx) {
+                if (can_edit()) { layer_->outline_on_front = cmb_outline_position_->itemData(idx).toInt() != 0; emit_change(); }
+            });
+    connect(chk_outline_antialias_, &QCheckBox::toggled,
+            this, [this, can_edit, emit_change](bool v) {
+                if (can_edit()) { layer_->outline_antialias = v; emit_change(); }
+            });
     connect(btn_outline_color_, &QPushButton::clicked,
             this, [this, can_edit, emit_change]() {
                 if (!can_edit()) return;
@@ -3785,6 +3829,8 @@ void PropertiesPanel::load_values()
         if (spn_outline_width_) spn_outline_width_->setValue(0.0);
         if (spn_outline_opacity_) spn_outline_opacity_->setValue(1.0);
         if (cmb_outline_join_) cmb_outline_join_->setCurrentIndex(1);
+        if (cmb_outline_position_) cmb_outline_position_->setCurrentIndex(1);
+        if (chk_outline_antialias_) chk_outline_antialias_->setChecked(true);
         spn_layer_w_->setValue(1.0);
         spn_layer_h_->setValue(1.0);
         spn_rect_corner_->setValue(0.0);
@@ -3868,6 +3914,11 @@ void PropertiesPanel::load_values()
         int join_idx = cmb_outline_join_->findData(layer_->outline_join_style);
         cmb_outline_join_->setCurrentIndex(join_idx >= 0 ? join_idx : 1);
     }
+    if (cmb_outline_position_) {
+        int position_idx = cmb_outline_position_->findData(layer_->outline_on_front ? 1 : 0);
+        cmb_outline_position_->setCurrentIndex(position_idx >= 0 ? position_idx : 1);
+    }
+    if (chk_outline_antialias_) chk_outline_antialias_->setChecked(layer_->outline_antialias);
 
     auto set_kf_icon = [](QPushButton *button, bool active) {
         if (!button) return;

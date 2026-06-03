@@ -182,6 +182,21 @@ static double eval_outline_opacity(const Layer &layer, double)
     return std::clamp((double)layer.outline_opacity, 0.0, 1.0);
 }
 
+static bool eval_outline_on_front(const Layer &layer, double)
+{
+    return layer.outline_on_front;
+}
+
+static bool eval_outline_antialias(const Layer &layer, double)
+{
+    return layer.outline_antialias;
+}
+
+static cairo_antialias_t outline_cairo_antialias(const Layer &layer)
+{
+    return layer.outline_antialias ? CAIRO_ANTIALIAS_DEFAULT : CAIRO_ANTIALIAS_NONE;
+}
+
 static cairo_line_join_t outline_cairo_join_style(const Layer &layer)
 {
     switch (layer.outline_join_style) {
@@ -391,15 +406,24 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(layer, t), 0.0, 1.0));
     QColor fill = color_from_argb(eval_text_color(layer, t));
     fill.setAlphaF(std::clamp((double)fill.alphaF(), 0.0, 1.0));
-    if (outline_width > 0.0 && outline.alpha() > 0) {
-        QPainterPath text_path = aligned_text_path(font, text_rect, align, text);
-        painter.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(layer)));
+    QPainterPath text_path = aligned_text_path(font, text_rect, align, text);
+    auto draw_text_fill = [&]() {
+        painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
         painter.drawPath(text_path);
-    } else {
-        painter.setPen(fill);
-        painter.drawText(text_rect, align, text);
-    }
+    };
+    auto draw_text_outline = [&]() {
+        if (outline_width <= 0.0 || outline.alpha() <= 0) return;
+        bool previous_aa = painter.testRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::Antialiasing, eval_outline_antialias(layer, t));
+        painter.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(layer)));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(text_path);
+        painter.setRenderHint(QPainter::Antialiasing, previous_aa);
+    };
+    if (!eval_outline_on_front(layer, t)) draw_text_outline();
+    draw_text_fill();
+    if (eval_outline_on_front(layer, t)) draw_text_outline();
     painter.end();
 
     cairo_surface_t *text_surface = cairo_image_surface_create_for_data(
@@ -484,17 +508,26 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
     } else {
         cairo_rectangle(cr, 0, 0, w, h);
     }
-    cairo_set_source_rgba(cr, fr, fg, fb, fa * alpha);
     double outline_width = eval_outline_width(layer, t);
     uint32_t outline_color = eval_outline_color(layer, t);
-    if (outline_width > 0.0 && ((outline_color >> 24) & 0xFF) > 0) {
-        cairo_fill_preserve(cr);
+    bool has_outline = outline_width > 0.0 && ((outline_color >> 24) & 0xFF) > 0;
+    auto stroke_outline = [&]() {
         double sr, sg, sb, sa;
         unpack_color(outline_color, sr, sg, sb, sa);
+        cairo_set_antialias(cr, outline_cairo_antialias(layer));
         cairo_set_line_width(cr, outline_width);
         cairo_set_line_join(cr, outline_cairo_join_style(layer));
         cairo_set_source_rgba(cr, sr, sg, sb, sa * alpha * eval_outline_opacity(layer, t));
-        cairo_stroke(cr);
+        cairo_stroke_preserve(cr);
+        cairo_set_antialias(cr, CAIRO_ANTIALIAS_DEFAULT);
+    };
+    if (has_outline && !eval_outline_on_front(layer, t))
+        stroke_outline();
+    cairo_set_source_rgba(cr, fr, fg, fb, fa * alpha);
+    if (has_outline && eval_outline_on_front(layer, t)) {
+        cairo_fill_preserve(cr);
+        stroke_outline();
+        cairo_new_path(cr);
     } else {
         cairo_fill(cr);
     }

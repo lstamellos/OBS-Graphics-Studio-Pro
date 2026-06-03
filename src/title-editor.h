@@ -385,6 +385,8 @@ private:
     QWidget         *row_outline_color_ = nullptr;
     QDoubleSpinBox  *spn_outline_opacity_ = nullptr;
     QComboBox       *cmb_outline_join_ = nullptr;
+    QComboBox       *cmb_outline_position_ = nullptr;
+    QCheckBox       *chk_outline_antialias_ = nullptr;
 
     /* Rectangle/Image geometry controls */
     QDoubleSpinBox  *spn_layer_w_   = nullptr;
