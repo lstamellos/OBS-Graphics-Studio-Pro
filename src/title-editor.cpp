@@ -3390,7 +3390,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     tfl->addRow("Y:",       with_kf(spn_py_, btn_kf_pos_y_));
     tfl->addRow("Rotation:",with_kf(spn_rot_, btn_kf_rotation_));
     tfl->addRow("Opacity:", with_kf(spn_opacity_, btn_kf_opacity_));
-    tfl->addRow("Anchor:", cmb_anchor_);
+    tfl->addRow("Anchor:", with_kf(cmb_anchor_, mk_kf_button("Toggle anchor keyframe")));
     tfl->addRow("Origin X:", with_kf(spn_origin_x_, btn_kf_origin_x_));
     tfl->addRow("Origin Y:", with_kf(spn_origin_y_, btn_kf_origin_y_));
     vl->addWidget(tform_box);
@@ -3495,11 +3495,17 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_height_ = mk_kf_button("Toggle height keyframe");
     rfl->addRow("Width:", with_kf(spn_layer_w_, btn_kf_width_));
     rfl->addRow("Height:", with_kf(spn_layer_h_, btn_kf_height_));
-    rfl->addRow("Corner:", spn_rect_corner_);
+    rfl->addRow("Corner:", with_kf(spn_rect_corner_, mk_kf_button("Toggle corner radius keyframe")));
     btn_fill_color_ = new QPushButton(inner);
     btn_kf_fill_color_ = mk_kf_button("Toggle fill color keyframe");
     row_fill_color_ = with_kf(btn_fill_color_, btn_kf_fill_color_);
     rfl->addRow("Color:", row_fill_color_);
+    spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
+    spn_outline_width_->setToolTip("Outline width for text and shape layers.");
+    btn_outline_color_ = new QPushButton(inner);
+    row_outline_color_ = btn_outline_color_;
+    rfl->addRow("Outline Width:", spn_outline_width_);
+    rfl->addRow("Outline Color:", row_outline_color_);
     vl->addWidget(rect_box_);
     make_collapsible(rect_box_);
 
@@ -3582,7 +3588,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_shadow_blur_ = mk_kf_button("Toggle shadow blur keyframe");
     btn_kf_shadow_spread_ = mk_kf_button("Toggle shadow spread keyframe");
     sfl->addRow("", with_kf(chk_shadow_enabled_, btn_kf_shadow_enabled_));
-    sfl->addRow("Preset:", cmb_shadow_preset_);
+    sfl->addRow("Preset:", with_kf(cmb_shadow_preset_, mk_kf_button("Toggle shadow preset keyframe")));
     sfl->addRow("Color:", with_kf(btn_shadow_color_, btn_kf_shadow_color_));
     sfl->addRow("Opacity:", with_kf(spn_shadow_opacity_, btn_kf_shadow_opacity_));
     sfl->addRow("Distance:", with_kf(spn_shadow_distance_, btn_kf_shadow_distance_));
@@ -4137,6 +4143,10 @@ void PropertiesPanel::load_values()
             label->setVisible(is_rect);
         if (auto *label = form->labelForField(row_fill_color_))
             label->setVisible(is_rect);
+        if (auto *label = form->labelForField(spn_outline_width_))
+            label->setVisible(supports_outline);
+        if (auto *label = form->labelForField(row_outline_color_))
+            label->setVisible(supports_outline);
     }
     image_box_->setVisible(is_image);
 
