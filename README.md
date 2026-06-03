@@ -1,6 +1,6 @@
-# OBS Titler Pro — Native OBS Plugin by OmniaTV
+# OBS Graphics Studio Pro — Native OBS Plugin by OmniaTV
 
-OBS Titler Pro is developed by OmniaTV. It is a fully native C++/Qt OBS plugin providing After Effects–style title creation,
+OBS Graphics Studio Pro is developed by OmniaTV. It is a fully native C++/Qt OBS plugin providing After Effects–style title creation,
 management, and real-time compositing.
 
 ---
@@ -8,7 +8,7 @@ management, and real-time compositing.
 ## Architecture
 
 ```
-OBS-Titler-Pro/
+OBS-Graphics-Studio-Pro/
 ├── CMakeLists.txt
 ├── data/
 │   └── locale/
@@ -26,9 +26,9 @@ OBS-Titler-Pro/
 | Component | OBS Integration | Purpose |
 |---|---|---|
 | `TitleSource` | `obs_source_type INPUT` | Renders a title to the OBS video mix per-frame via Cairo → `gs_texture` |
-| `TitleDock` | `obs_frontend_add_dock()` | Floating/dockable title list with blank-title creation, Titler-style templates, and scene-add button |
+| `TitleDock` | `obs_frontend_add_dock()` | Floating/dockable title list with blank-title creation, Graphics Studio-style templates, and scene-add button |
 | `TitleEditor` | `QDialog` (non-modal) | Full AE-style editor with canvas, layer stack, timeline, properties |
-| `TitleDataStore` | Singleton | Owns all `Title` objects; serialises to `obs-titler-pro/titles.json` |
+| `TitleDataStore` | Singleton | Owns all `Title` objects; serialises to `obs-graphics-studio-pro/titles.json` |
 
 ---
 
@@ -67,7 +67,7 @@ cmake --build build
 cmake --install build --prefix ~/.config/obs-studio/plugins
 # or copy/symlink the staged build tree:
 mkdir -p ~/.config/obs-studio/plugins
-cp -R build/obs-titler-pro ~/.config/obs-studio/plugins/
+cp -R build/obs-graphics-studio-pro ~/.config/obs-studio/plugins/
 ```
 
 ### macOS
@@ -83,7 +83,7 @@ cmake --build build
 ```
 
 The standalone build stages a directly copyable plugin folder at
-`build/obs-titler-pro`, with the binary under `bin/<arch>` and locale files under
+`build/obs-graphics-studio-pro`, with the binary under `bin/<arch>` and locale files under
 `data/locale`.
 
 ### Windows (Visual Studio / vcpkg)
@@ -115,8 +115,8 @@ Or run the convenience script:
 After install, OBS should see this structure:
 
 ```text
-C:\ProgramData\obs-studio\plugins\obs-titler-pro\
-├── bin\64bit\obs-titler-pro.dll
+C:\ProgramData\obs-studio\plugins\obs-graphics-studio-pro\
+├── bin\64bit\obs-graphics-studio-pro.dll
 ├── bin\64bit\cairo.dll
 ├── bin\64bit\pango-1.0.dll
 ├── bin\64bit\pangocairo-1.0.dll
@@ -127,17 +127,17 @@ C:\ProgramData\obs-studio\plugins\obs-titler-pro\
 ```
 
 Use `-InstallRoot` if you need a portable OBS/custom plugin root instead. If
-OBS reports that `obs-titler-pro` failed to load, first verify that the dependency
-DLLs above are beside `obs-titler-pro.dll`; a successful compile is not enough for
+OBS reports that `obs-graphics-studio-pro` failed to load, first verify that the dependency
+DLLs above are beside `obs-graphics-studio-pro.dll`; a successful compile is not enough for
 Windows to load the plugin at OBS startup.
 
 ---
 
-## OBS Titler Pro Workflow
+## OBS Graphics Studio Pro Workflow
 
-OBS Titler Pro by OmniaTV is designed around a Titler-style flow:
+OBS Graphics Studio Pro by OmniaTV is designed around a Graphics Studio-style flow:
 
-1. Open the **OBS Titler Pro** dock.
+1. Open the **OBS Graphics Studio Pro** dock.
 2. Click **Templates** and choose **Lower Third**, **Centered Title**, or **Ticker / Strap**.
 3. Enter the starter text; the editor opens with editable text and shape layers.
 4. Adjust text/position/style in the editor. Changes auto-save and update the title store.
@@ -150,9 +150,9 @@ OBS Titler Pro by OmniaTV is designed around a Titler-style flow:
 Titles are saved in the OBS profile config directory:
 
 ```
-%APPDATA%\obs-studio\plugin_config\obs-titler-pro\titles.json   (Windows)
-~/.config/obs-studio/plugin_config/obs-titler-pro/titles.json   (Linux)
-~/Library/Application Support/obs-studio/plugin_config/obs-titler-pro/titles.json (macOS)
+%APPDATA%\obs-studio\plugin_config\obs-graphics-studio-pro\titles.json   (Windows)
+~/.config/obs-studio/plugin_config/obs-graphics-studio-pro/titles.json   (Linux)
+~/Library/Application Support/obs-studio/plugin_config/obs-graphics-studio-pro/titles.json (macOS)
 ```
 
 ### Title JSON Schema (abbreviated)

@@ -496,7 +496,7 @@ static std::vector<TimelineRow> timeline_rows(const std::shared_ptr<Title> &titl
 TitleEditor::TitleEditor(QWidget *parent)
     : QDialog(parent, Qt::Window)
 {
-    setWindowTitle("OBS Titler Pro Editor");
+    setWindowTitle("OBS Graphics Studio Pro Editor");
     resize(1280, 760);
     setMinimumSize(900, 600);
 
@@ -990,7 +990,7 @@ void TitleEditor::build_toolbar()
     connect(btn_save, &QPushButton::clicked, this, [this]() {
         TitleDataStore::instance().save();
         if (title_) emit title_saved(title_->id);
-        setWindowTitle("OBS Titler Pro Editor  ·  saved");
+        setWindowTitle("OBS Graphics Studio Pro Editor  ·  saved");
     });
     toolbar_->addWidget(btn_save);
 }
@@ -1094,7 +1094,7 @@ void TitleEditor::restore_undo_snapshot(int index)
     TitleDataStore::instance().save();
     restoring_undo_ = false;
     update_undo_redo_actions();
-    setWindowTitle("OBS Titler Pro Editor  ·  modified");
+    setWindowTitle("OBS Graphics Studio Pro Editor  ·  modified");
 }
 
 void TitleEditor::update_undo_redo_actions()
@@ -1325,7 +1325,7 @@ void TitleEditor::on_playhead_changed(double t)
 
 void TitleEditor::on_title_modified()
 {
-    if (title_) setWindowTitle("OBS Titler Pro Editor  ·  modified");
+    if (title_) setWindowTitle("OBS Graphics Studio Pro Editor  ·  modified");
     canvas_->refresh_preview();
     if (title_props_) title_props_->set_title(title_);
     if (timeline_) timeline_->set_title(title_);
@@ -2971,7 +2971,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     chk_bold_   = new QCheckBox("Bold",   inner);
     chk_italic_ = new QCheckBox("Italic", inner);
     chk_expose_text_ = new QCheckBox("Expose in dock", inner);
-    chk_expose_text_->setToolTip("Show this text layer in the OBS Titler Pro dock for fast live edits.");
+    chk_expose_text_->setToolTip("Show this text layer in the OBS Graphics Studio Pro dock for fast live edits.");
     chk_bold_->setStyleSheet("color:#ccc;");
     chk_italic_->setStyleSheet("color:#ccc;");
     chk_expose_text_->setStyleSheet("color:#ccc;");

@@ -483,7 +483,7 @@ static void render_title_frame(TitleSourceData *data,
  * ══════════════════════════════════════════════════════════════════ */
 static const char *source_get_name(void *)
 {
-    return "OBS Titler Pro";
+    return "OBS Graphics Studio Pro";
 }
 
 static void *source_create(obs_data_t *settings, obs_source_t *source)
@@ -710,7 +710,7 @@ static void source_get_defaults(obs_data_t *settings)
 void title_source_register()
 {
     static obs_source_info si = {};
-    si.id             = "obs_titles_source";
+    si.id             = "obs_graphics_studio_pro_source";
     si.type           = OBS_SOURCE_TYPE_INPUT;
     si.output_flags   = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW;
     si.get_name       = source_get_name;
@@ -725,5 +725,5 @@ void title_source_register()
     si.get_defaults   = source_get_defaults;
 
     obs_register_source(&si);
-    blog(LOG_INFO, "[OBS Titler Pro] Source type registered.");
+    blog(LOG_INFO, "[OBS Graphics Studio Pro] Source type registered.");
 }

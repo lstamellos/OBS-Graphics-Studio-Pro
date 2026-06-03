@@ -1,7 +1,7 @@
 /*
  * title-data.h
  *
- * Core data model for the OBS Titler Pro plugin.
+ * Core data model for the OBS Graphics Studio Pro plugin.
  *
  * A Title is composed of one or more Layers. Each layer has a set of
  * Properties (position, scale, opacity, colour, text …). Properties
