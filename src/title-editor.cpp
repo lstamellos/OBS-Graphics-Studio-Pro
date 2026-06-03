@@ -45,6 +45,9 @@
 #include <QAbstractSpinBox>
 #include <QAbstractItemModel>
 #include <QTextEdit>
+#include <QTextLayout>
+#include <QTextOption>
+#include <QTransform>
 #include <QToolButton>
 #include <QMenu>
 #include <QContextMenuEvent>
@@ -182,25 +185,93 @@ static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
     return rect;
 }
 
-static QPainterPath aligned_text_path(const QFont &font, const QRectF &rect,
-                                      Qt::Alignment alignment, const QString &text)
+static QString overflow_layout_text(const QString &text, const Layer &layer)
 {
+    if (layer.text_overflow_mode == 2) {
+        QString single = text;
+        single.replace('\r', ' ');
+        single.replace('\n', ' ');
+        return single;
+    }
+    return text;
+}
+
+static double horizontal_fit_scale(const QFont &font, const QRectF &rect,
+                                   const QString &text, const Layer &layer)
+{
+    if (layer.text_overflow_mode != 2) return 1.0;
     QFontMetricsF metrics(font);
-    QRectF bounds = metrics.boundingRect(text);
-    double x = rect.left();
-    if (alignment & Qt::AlignHCenter)
-        x = rect.left() + (rect.width() - bounds.width()) / 2.0;
-    else if (alignment & Qt::AlignRight)
-        x = rect.right() - bounds.width();
+    double natural_width = std::max(1.0, metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    if (natural_width <= rect.width()) return 1.0;
+    return std::clamp(rect.width() / natural_width,
+                      std::clamp((double)layer.text_fit_min_scale, 0.05, 1.0),
+                      1.0);
+}
 
-    double y = rect.top() - bounds.top();
-    if (alignment & Qt::AlignVCenter)
-        y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
-    else if (alignment & Qt::AlignBottom)
-        y = rect.bottom() - bounds.height() - bounds.top();
-
+static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
+                                       Qt::Alignment alignment, const QString &text,
+                                       const Layer &layer, double *fit_scale = nullptr)
+{
     QPainterPath path;
-    path.addText(QPointF(x, y), font, text);
+    QFontMetricsF metrics(font);
+    if (layer.text_overflow_mode == 2) {
+        QString single = overflow_layout_text(text, layer);
+        QRectF bounds = metrics.boundingRect(single);
+        double scale = horizontal_fit_scale(font, rect, text, layer);
+        if (fit_scale) *fit_scale = scale;
+        double visual_width = bounds.width() * scale;
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - visual_width) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - visual_width;
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(0, y), font, single);
+        QTransform xf;
+        xf.translate(x, 0.0);
+        xf.scale(scale, 1.0);
+        return xf.map(path);
+    }
+    if (fit_scale) *fit_scale = 1.0;
+
+    struct Line { QString text; double width = 0.0; double ascent = 0.0; double height = 0.0; };
+    std::vector<Line> lines;
+    const QStringList paragraphs = text.split('\n');
+    QTextOption option;
+    option.setWrapMode(layer.text_overflow_mode == 0
+                           ? QTextOption::WrapAtWordBoundaryOrAnywhere
+                           : QTextOption::NoWrap);
+    for (const QString &paragraph : paragraphs) {
+        if (paragraph.isEmpty()) {
+            lines.push_back({QString(), 0.0, metrics.ascent(), metrics.lineSpacing()});
+            continue;
+        }
+        QTextLayout layout(paragraph, font);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            line.setLineWidth(layer.text_overflow_mode == 0 ? rect.width() : 1000000.0);
+            int start = line.textStart();
+            int len = line.textLength();
+            lines.push_back({paragraph.mid(start, len), line.naturalTextWidth(), line.ascent(), line.height()});
+            if (layer.text_overflow_mode != 0) break;
+        }
+        layout.endLayout();
+    }
+    double total_height = 0.0;
+    for (const auto &line : lines) total_height += line.height;
+    double y = rect.top();
+    if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - total_height) / 2.0;
+    else if (alignment & Qt::AlignBottom) y = rect.bottom() - total_height;
+    for (const auto &line : lines) {
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line.width) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line.width;
+        path.addText(QPointF(x, y + line.ascent), font, line.text);
+        y += line.height;
+    }
     return path;
 }
 
@@ -1821,40 +1892,36 @@ void CanvasPreview::render_to_pixmap()
             p.setFont(f);
             QString text = display_text_for_style(*layer);
             QRectF text_box = text_rect_for_style(box, *layer);
-            if (eval_shadow_enabled(*layer, lt)) {
-                QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
-                sc.setAlphaF(std::clamp((double)sc.alphaF() * eval_shadow_opacity(*layer, lt), 0.0, 1.0));
-                Qt::AlignmentFlag sha = Qt::AlignHCenter;
-                if (layer->align_h == 0) sha = Qt::AlignLeft;
-                if (layer->align_h == 2) sha = Qt::AlignRight;
-                Qt::AlignmentFlag sva = Qt::AlignVCenter;
-                if (layer->align_v == 0) sva = Qt::AlignTop;
-                if (layer->align_v == 2) sva = Qt::AlignBottom;
-                QPointF off = shadow_offset(*layer, lt);
-                double blur = eval_shadow_blur(*layer, lt);
-                double spread = eval_shadow_spread(*layer, lt);
-                int passes = std::max(1, (int)std::ceil(blur / 3.0));
-                p.setPen(sc);
-                for (int pass = passes; pass >= 1; --pass) {
-                    QColor pass_color = sc;
-                    pass_color.setAlphaF(sc.alphaF() / passes);
-                    p.setPen(pass_color);
-                    double radius = blur * pass / passes;
-                    for (double dx : {-spread - radius, 0.0, spread + radius})
-                        for (double dy : {-spread - radius, 0.0, spread + radius})
-                            p.drawText(text_box.translated(off + QPointF(dx, dy)), sha | sva, text);
-                }
-            }
+            p.save();
+            p.setClipRect(text_box);
             Qt::AlignmentFlag ha = Qt::AlignHCenter;
             if (layer->align_h == 0) ha = Qt::AlignLeft;
             if (layer->align_h == 2) ha = Qt::AlignRight;
             Qt::AlignmentFlag va = Qt::AlignVCenter;
             if (layer->align_v == 0) va = Qt::AlignTop;
             if (layer->align_v == 2) va = Qt::AlignBottom;
+            QPainterPath text_path = text_overflow_path(f, text_box, ha | va, text, *layer);
+            if (eval_shadow_enabled(*layer, lt)) {
+                QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
+                sc.setAlphaF(std::clamp((double)sc.alphaF() * eval_shadow_opacity(*layer, lt), 0.0, 1.0));
+                QPointF off = shadow_offset(*layer, lt);
+                double blur = eval_shadow_blur(*layer, lt);
+                double spread = eval_shadow_spread(*layer, lt);
+                int passes = std::max(1, (int)std::ceil(blur / 3.0));
+                for (int pass = passes; pass >= 1; --pass) {
+                    QColor pass_color = sc;
+                    pass_color.setAlphaF(sc.alphaF() / passes);
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(pass_color);
+                    double radius = blur * pass / passes;
+                    for (double dx : {-spread - radius, 0.0, spread + radius})
+                        for (double dy : {-spread - radius, 0.0, spread + radius})
+                            p.drawPath(text_path.translated(off + QPointF(dx, dy)));
+                }
+            }
             double outline_width = eval_outline_width(*layer, lt);
             QColor outline = color_from_argb(eval_outline_color(*layer, lt));
             outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(*layer, lt), 0.0, 1.0));
-            QPainterPath text_path = aligned_text_path(f, text_box, ha | va, text);
             auto draw_text_fill = [&]() {
                 p.setPen(Qt::NoPen);
                 p.setBrush(tc);
@@ -1872,6 +1939,7 @@ void CanvasPreview::render_to_pixmap()
             if (!eval_outline_on_front(*layer, lt)) draw_text_outline();
             draw_text_fill();
             if (eval_outline_on_front(*layer, lt)) draw_text_outline();
+            p.restore();
         }
 
         p.restore();
@@ -3229,6 +3297,17 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_text_style_->addItem("Subscript", 4);
     cmb_text_style_->setToolTip("Visual text style. Source text is preserved for editing and export.");
     cmb_text_style_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_text_overflow_ = new QComboBox(inner);
+    cmb_text_overflow_->addItem("Wrap", 0);
+    cmb_text_overflow_->addItem("Clip", 1);
+    cmb_text_overflow_->addItem("Horizontal Fit", 2);
+    cmb_text_overflow_->setToolTip("Controls how text behaves when it exceeds the text box width.");
+    cmb_text_overflow_->setStyleSheet(cmb_font_->styleSheet());
+    spn_text_fit_min_scale_ = mk_dspin(0.05, 1.0, 0.05);
+    spn_text_fit_min_scale_->setDecimals(2);
+    spn_text_fit_min_scale_->setToolTip("Minimum horizontal scale for Horizontal Fit mode.");
+    lbl_text_fit_scale_ = new QLabel("Scale: 100%", inner);
+    lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
 
     txfl->addRow("Text:",   txt_content_);
     txfl->addRow("Font:",   cmb_font_);
@@ -3239,6 +3318,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     bi_row->addStretch();
     txfl->addRow("Style:",  bi_row);
     txfl->addRow("Text Style:", cmb_text_style_);
+    txfl->addRow("Overflow:", cmb_text_overflow_);
+    txfl->addRow("Min Fit Scale:", spn_text_fit_min_scale_);
+    txfl->addRow("", lbl_text_fit_scale_);
     cmb_text_align_ = new QComboBox(inner);
     cmb_text_align_->addItem("Align Left", 0);
     cmb_text_align_->addItem("Align Center", 1);
@@ -3440,6 +3522,14 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     connect(cmb_text_style_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, can_edit, emit_change](int idx) {
                 if (can_edit()) { layer_->text_style = cmb_text_style_->itemData(idx).toInt(); emit_change(); }
+            });
+    connect(cmb_text_overflow_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx) {
+                if (can_edit()) { layer_->text_overflow_mode = cmb_text_overflow_->itemData(idx).toInt(); emit_change(); }
+            });
+    connect(spn_text_fit_min_scale_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) {
+                if (can_edit()) { layer_->text_fit_min_scale = (float)v; emit_change(); }
             });
     connect(chk_expose_text_, &QCheckBox::toggled,
             this, [this, can_edit, emit_change](bool v){
@@ -3838,6 +3928,9 @@ void PropertiesPanel::load_values()
         chk_bold_->setChecked(false);
         chk_italic_->setChecked(false);
         if (cmb_text_style_) cmb_text_style_->setCurrentIndex(0);
+        if (cmb_text_overflow_) cmb_text_overflow_->setCurrentIndex(0);
+        if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setValue(0.5);
+        if (lbl_text_fit_scale_) lbl_text_fit_scale_->setText("Scale: 100%");
         if (cmb_text_align_) cmb_text_align_->setCurrentIndex(1);
         if (cmb_anchor_) cmb_anchor_->setCurrentIndex(4);
         if (chk_shadow_enabled_) chk_shadow_enabled_->setChecked(false);
@@ -3861,6 +3954,12 @@ void PropertiesPanel::load_values()
     const bool is_image = layer_->type == LayerType::Image;
     const bool supports_outline = is_text || is_rect;
     text_box_->setVisible(is_text);
+    if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text && layer_->text_overflow_mode == 2);
+    if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text && layer_->text_overflow_mode == 2);
+    if (auto *text_form = qobject_cast<QFormLayout *>(text_box_->layout())) {
+        if (auto *label = text_form->labelForField(spn_text_fit_min_scale_))
+            label->setVisible(is_text && layer_->text_overflow_mode == 2);
+    }
     rect_box_->setVisible(is_text || is_rect || is_image);
     rect_box_->setTitle(is_text ? "Text Box" : (is_image ? "Image Size" : "Rectangle"));
     spn_rect_corner_->setVisible(is_rect);
@@ -3954,6 +4053,26 @@ void PropertiesPanel::load_values()
     chk_italic_->setChecked(layer_->font_italic);
     int style_idx = cmb_text_style_->findData(layer_->text_style);
     cmb_text_style_->setCurrentIndex(style_idx >= 0 ? style_idx : 0);
+    int overflow_idx = cmb_text_overflow_->findData(layer_->text_overflow_mode);
+    cmb_text_overflow_->setCurrentIndex(overflow_idx >= 0 ? overflow_idx : 0);
+    spn_text_fit_min_scale_->setValue(layer_->text_fit_min_scale);
+    bool is_fit = layer_->text_overflow_mode == 2;
+    spn_text_fit_min_scale_->setVisible(is_fit);
+    lbl_text_fit_scale_->setVisible(is_fit);
+    if (auto *form = qobject_cast<QFormLayout *>(text_box_->layout())) {
+        if (auto *label = form->labelForField(spn_text_fit_min_scale_))
+            label->setVisible(is_fit);
+    }
+    if (lbl_text_fit_scale_) {
+        QFont preview_font(QString::fromStdString(layer_->font_family));
+        preview_font.setPixelSize(layer_->font_size);
+        preview_font.setBold(layer_->font_bold);
+        preview_font.setItalic(layer_->font_italic);
+        apply_text_style_to_font(preview_font, *layer_);
+        QRectF preview_rect(0, 0, eval_box_width(*layer_, lt), eval_box_height(*layer_, lt));
+        double scale = horizontal_fit_scale(preview_font, preview_rect, display_text_for_style(*layer_), *layer_);
+        lbl_text_fit_scale_->setText(QString("Scale: %1%").arg((int)std::round(scale * 100.0)));
+    }
     chk_expose_text_->setChecked(layer_->expose_text);
     int ai = cmb_text_align_->findData(layer_->align_h);
     cmb_text_align_->setCurrentIndex(ai >= 0 ? ai : 1);

@@ -113,6 +113,8 @@ struct Layer {
     bool        font_bold     = false;
     bool        font_italic   = false;
     int         text_style    = 0;  /* 0=normal, 1=all caps, 2=small caps, 3=superscript, 4=subscript */
+    int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
+    float       text_fit_min_scale = 0.5f;
     uint32_t    text_color    = 0xFFFFFFFF;  /* ARGB */
 
     /* ----- Outline shared by text and solid/shape layers ----- */

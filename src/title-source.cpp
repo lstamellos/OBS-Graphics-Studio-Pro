@@ -27,6 +27,9 @@
 #include <QPainterPath>
 #include <QFont>
 #include <QFontMetrics>
+#include <QTextLayout>
+#include <QTextOption>
+#include <QTransform>
 #include <QColor>
 
 #include <memory>
@@ -310,25 +313,93 @@ static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
     return rect;
 }
 
-static QPainterPath aligned_text_path(const QFont &font, const QRectF &rect,
-                                      Qt::Alignment alignment, const QString &text)
+static QString overflow_layout_text(const QString &text, const Layer &layer)
 {
+    if (layer.text_overflow_mode == 2) {
+        QString single = text;
+        single.replace('\r', ' ');
+        single.replace('\n', ' ');
+        return single;
+    }
+    return text;
+}
+
+static double horizontal_fit_scale(const QFont &font, const QRectF &rect,
+                                   const QString &text, const Layer &layer)
+{
+    if (layer.text_overflow_mode != 2) return 1.0;
     QFontMetricsF metrics(font);
-    QRectF bounds = metrics.boundingRect(text);
-    double x = rect.left();
-    if (alignment & Qt::AlignHCenter)
-        x = rect.left() + (rect.width() - bounds.width()) / 2.0;
-    else if (alignment & Qt::AlignRight)
-        x = rect.right() - bounds.width();
+    double natural_width = std::max(1.0, metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    if (natural_width <= rect.width()) return 1.0;
+    return std::clamp(rect.width() / natural_width,
+                      std::clamp((double)layer.text_fit_min_scale, 0.05, 1.0),
+                      1.0);
+}
 
-    double y = rect.top() - bounds.top();
-    if (alignment & Qt::AlignVCenter)
-        y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
-    else if (alignment & Qt::AlignBottom)
-        y = rect.bottom() - bounds.height() - bounds.top();
-
+static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
+                                       Qt::Alignment alignment, const QString &text,
+                                       const Layer &layer, double *fit_scale = nullptr)
+{
     QPainterPath path;
-    path.addText(QPointF(x, y), font, text);
+    QFontMetricsF metrics(font);
+    if (layer.text_overflow_mode == 2) {
+        QString single = overflow_layout_text(text, layer);
+        QRectF bounds = metrics.boundingRect(single);
+        double scale = horizontal_fit_scale(font, rect, text, layer);
+        if (fit_scale) *fit_scale = scale;
+        double visual_width = bounds.width() * scale;
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - visual_width) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - visual_width;
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(0, y), font, single);
+        QTransform xf;
+        xf.translate(x, 0.0);
+        xf.scale(scale, 1.0);
+        return xf.map(path);
+    }
+    if (fit_scale) *fit_scale = 1.0;
+
+    struct Line { QString text; double width = 0.0; double ascent = 0.0; double height = 0.0; };
+    std::vector<Line> lines;
+    const QStringList paragraphs = text.split('\n');
+    QTextOption option;
+    option.setWrapMode(layer.text_overflow_mode == 0
+                           ? QTextOption::WrapAtWordBoundaryOrAnywhere
+                           : QTextOption::NoWrap);
+    for (const QString &paragraph : paragraphs) {
+        if (paragraph.isEmpty()) {
+            lines.push_back({QString(), 0.0, metrics.ascent(), metrics.lineSpacing()});
+            continue;
+        }
+        QTextLayout layout(paragraph, font);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            line.setLineWidth(layer.text_overflow_mode == 0 ? rect.width() : 1000000.0);
+            int start = line.textStart();
+            int len = line.textLength();
+            lines.push_back({paragraph.mid(start, len), line.naturalTextWidth(), line.ascent(), line.height()});
+            if (layer.text_overflow_mode != 0) break;
+        }
+        layout.endLayout();
+    }
+    double total_height = 0.0;
+    for (const auto &line : lines) total_height += line.height;
+    double y = rect.top();
+    if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - total_height) / 2.0;
+    else if (alignment & Qt::AlignBottom) y = rect.bottom() - total_height;
+    for (const auto &line : lines) {
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line.width) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line.width;
+        path.addText(QPointF(x, y + line.ascent), font, line.text);
+        y += line.height;
+    }
     return path;
 }
 
@@ -380,11 +451,14 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
 
     QRectF text_rect = text_rect_for_style(QRectF(pad, pad, box_w, box_h), layer);
     QString text = display_text_for_style(layer);
+    painter.save();
+    painter.setClipRect(text_rect);
     Qt::Alignment align = Qt::AlignVCenter | Qt::AlignHCenter;
     if (layer.align_h == 0) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignLeft;
     if (layer.align_h == 2) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignRight;
     if (layer.align_v == 0) align = (align & ~Qt::AlignVertical_Mask) | Qt::AlignTop;
     if (layer.align_v == 2) align = (align & ~Qt::AlignVertical_Mask) | Qt::AlignBottom;
+    QPainterPath text_path = text_overflow_path(font, text_rect, align, text, layer);
 
     if (eval_shadow_enabled(layer, t)) {
         QColor shadow = color_from_argb(eval_shadow_color(layer, t));
@@ -393,11 +467,12 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
         for (int pass = passes; pass >= 1; --pass) {
             QColor pass_color = shadow;
             pass_color.setAlphaF(shadow.alphaF() / passes);
-            painter.setPen(pass_color);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(pass_color);
             double radius = blur * pass / passes;
             for (double dx : {-spread - radius, 0.0, spread + radius})
                 for (double dy : {-spread - radius, 0.0, spread + radius})
-                    painter.drawText(text_rect.translated(off + QPointF(dx, dy)), align, text);
+                    painter.drawPath(text_path.translated(off + QPointF(dx, dy)));
         }
     }
 
@@ -406,7 +481,6 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(layer, t), 0.0, 1.0));
     QColor fill = color_from_argb(eval_text_color(layer, t));
     fill.setAlphaF(std::clamp((double)fill.alphaF(), 0.0, 1.0));
-    QPainterPath text_path = aligned_text_path(font, text_rect, align, text);
     auto draw_text_fill = [&]() {
         painter.setPen(Qt::NoPen);
         painter.setBrush(fill);
@@ -424,6 +498,7 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (!eval_outline_on_front(layer, t)) draw_text_outline();
     draw_text_fill();
     if (eval_outline_on_front(layer, t)) draw_text_outline();
+    painter.restore();
     painter.end();
 
     cairo_surface_t *text_surface = cairo_image_surface_create_for_data(
