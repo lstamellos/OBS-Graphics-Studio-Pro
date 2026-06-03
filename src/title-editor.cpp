@@ -849,36 +849,20 @@ void TitleEditor::build_ui()
 
     connect(layers_, &LayerStack::copy_layer_requested,
             this, [this](const std::string &lid) {
-                if (!title_) return;
-                auto layer = title_->find_layer(lid);
-                if (!layer) return;
-                layer_clipboard_ = std::make_shared<Layer>(*layer);
-                if (layers_) layers_->set_layer_clipboard_available(true);
+                on_layer_selected(lid);
+                copy_selected_layer();
             });
 
     connect(layers_, &LayerStack::paste_layer_requested,
             this, [this](const std::string &anchor_id) {
-                if (!title_ || !layer_clipboard_) return;
-                auto pasted = clone_layer_for_insert(*layer_clipboard_, true);
-                std::string pasted_id = pasted->id;
-                insert_layer_above(anchor_id, pasted);
-                select_after_layer_list_mutation(pasted_id);
-                on_title_modified();
+                if (!anchor_id.empty()) on_layer_selected(anchor_id);
+                paste_layer_from_clipboard();
             });
 
     connect(layers_, &LayerStack::delete_layer_requested,
             this, [this](const std::string &lid) {
-                if (!title_) return;
-                title_->remove_layer(lid);
-                if (sel_layer_id_ == lid) sel_layer_id_.clear();
-                layers_->refresh();
-
-                if (!title_->layers.empty())
-                    on_layer_selected(title_->layers.back()->id);
-                else
-                    props_->set_layer(nullptr, playhead_);
-
-                on_title_modified();
+                on_layer_selected(lid);
+                delete_selected_layer();
             });
 
     connect(layers_, &LayerStack::layer_visibility_changed,
@@ -1283,6 +1267,49 @@ void TitleEditor::select_after_layer_list_mutation(const std::string &layer_id)
     on_layer_selected(layer_id);
 }
 
+
+void TitleEditor::copy_selected_layer()
+{
+    if (!title_ || sel_layer_id_.empty()) return;
+    auto layer = title_->find_layer(sel_layer_id_);
+    if (!layer) return;
+    layer_clipboard_ = std::make_shared<Layer>(*layer);
+    if (layers_) layers_->set_layer_clipboard_available(true);
+}
+
+void TitleEditor::paste_layer_from_clipboard()
+{
+    if (!title_ || !layer_clipboard_) return;
+    std::string anchor_id = sel_layer_id_;
+    auto pasted = clone_layer_for_insert(*layer_clipboard_, true);
+    std::string pasted_id = pasted->id;
+    insert_layer_above(anchor_id, pasted);
+    select_after_layer_list_mutation(pasted_id);
+    on_title_modified();
+}
+
+void TitleEditor::delete_selected_layer()
+{
+    if (!title_ || sel_layer_id_.empty()) return;
+    std::string removed_id = sel_layer_id_;
+    title_->remove_layer(removed_id);
+    sel_layer_id_.clear();
+    layers_->refresh();
+
+    if (!title_->layers.empty())
+        on_layer_selected(title_->layers.back()->id);
+    else
+        props_->set_layer(nullptr, playhead_);
+
+    on_title_modified();
+}
+
+void TitleEditor::cut_selected_layer()
+{
+    copy_selected_layer();
+    delete_selected_layer();
+}
+
 void TitleEditor::push_undo_snapshot()
 {
     if (!title_ || restoring_undo_) return;
@@ -1519,6 +1546,31 @@ void TitleEditor::keyPressEvent(QKeyEvent *ev)
     }
     if (ev->matches(QKeySequence::Redo)) {
         if (undo_index_ + 1 < (int)undo_stack_.size()) restore_undo_snapshot(undo_index_ + 1);
+        ev->accept();
+        return;
+    }
+    QWidget *fw = focusWidget();
+    bool editing_value = qobject_cast<QLineEdit *>(fw) ||
+                         qobject_cast<QTextEdit *>(fw) ||
+                         qobject_cast<QAbstractSpinBox *>(fw) ||
+                         qobject_cast<QComboBox *>(fw);
+    if (!editing_value && ev->matches(QKeySequence::Copy) && !sel_layer_id_.empty()) {
+        copy_selected_layer();
+        ev->accept();
+        return;
+    }
+    if (!editing_value && ev->matches(QKeySequence::Cut) && !sel_layer_id_.empty()) {
+        cut_selected_layer();
+        ev->accept();
+        return;
+    }
+    if (!editing_value && ev->matches(QKeySequence::Paste) && layer_clipboard_) {
+        paste_layer_from_clipboard();
+        ev->accept();
+        return;
+    }
+    if (!editing_value && ev->key() == Qt::Key_Delete && !sel_layer_id_.empty()) {
+        delete_selected_layer();
         ev->accept();
         return;
     }
@@ -3228,6 +3280,23 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         return row;
     };
 
+    auto make_collapsible = [](QGroupBox *box) {
+        box->setCheckable(true);
+        box->setChecked(true);
+        QObject::connect(box, &QGroupBox::toggled, box, [box](bool expanded) {
+            if (!box->layout()) return;
+            for (int i = 0; i < box->layout()->count(); ++i) {
+                if (auto *item = box->layout()->itemAt(i)) {
+                    if (auto *widget = item->widget()) widget->setVisible(expanded);
+                    if (auto *child_layout = item->layout()) {
+                        for (int j = 0; j < child_layout->count(); ++j)
+                            if (auto *child = child_layout->itemAt(j)->widget()) child->setVisible(expanded);
+                    }
+                }
+            }
+        });
+    };
+
     spn_px_      = mk_dspin(-9999, 9999, 1.0);
     spn_py_      = mk_dspin(-9999, 9999, 1.0);
     spn_rot_     = mk_dspin(-360,  360,  0.5);
@@ -3254,10 +3323,11 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     tfl->addRow("Y:",       with_kf(spn_py_, btn_kf_pos_y_));
     tfl->addRow("Rotation:",with_kf(spn_rot_, btn_kf_rotation_));
     tfl->addRow("Opacity:", with_kf(spn_opacity_, btn_kf_opacity_));
-    tfl->addRow("Anchor:", cmb_anchor_);
+    tfl->addRow("Anchor:", with_kf(cmb_anchor_, mk_kf_button("Toggle anchor keyframe")));
     tfl->addRow("Origin X:", with_kf(spn_origin_x_, btn_kf_origin_x_));
     tfl->addRow("Origin Y:", with_kf(spn_origin_y_, btn_kf_origin_y_));
     vl->addWidget(tform_box);
+    make_collapsible(tform_box);
 
     /* ── Text ── */
     text_box_ = new QGroupBox("Text", inner);
@@ -3309,29 +3379,33 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     lbl_text_fit_scale_ = new QLabel("Scale: 100%", inner);
     lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
 
-    txfl->addRow("Text:",   txt_content_);
-    txfl->addRow("Font:",   cmb_font_);
-    txfl->addRow("Size:",   spn_size_);
+    txfl->addRow("Text:",   with_kf(txt_content_, mk_kf_button("Toggle text content keyframe")));
+    txfl->addRow("Font:",   with_kf(cmb_font_, mk_kf_button("Toggle font family keyframe")));
+    txfl->addRow("Size:",   with_kf(spn_size_, mk_kf_button("Toggle font size keyframe")));
     auto *bi_row = new QHBoxLayout();
+    bi_row->setContentsMargins(0, 0, 0, 0);
     bi_row->addWidget(chk_bold_);
     bi_row->addWidget(chk_italic_);
     bi_row->addStretch();
-    txfl->addRow("Style:",  bi_row);
-    txfl->addRow("Text Style:", cmb_text_style_);
-    txfl->addRow("Overflow:", cmb_text_overflow_);
-    txfl->addRow("Min Fit Scale:", spn_text_fit_min_scale_);
+    auto *bi_widget = new QWidget(inner);
+    bi_widget->setLayout(bi_row);
+    txfl->addRow("Style:",  with_kf(bi_widget, mk_kf_button("Toggle bold/italic keyframe")));
+    txfl->addRow("Text Style:", with_kf(cmb_text_style_, mk_kf_button("Toggle text style keyframe")));
+    txfl->addRow("Overflow:", with_kf(cmb_text_overflow_, mk_kf_button("Toggle text overflow keyframe")));
+    txfl->addRow("Min Fit Scale:", with_kf(spn_text_fit_min_scale_, mk_kf_button("Toggle minimum fit scale keyframe")));
     txfl->addRow("", lbl_text_fit_scale_);
     cmb_text_align_ = new QComboBox(inner);
     cmb_text_align_->addItem("Align Left", 0);
     cmb_text_align_->addItem("Align Center", 1);
     cmb_text_align_->addItem("Align Right", 2);
     cmb_text_align_->setStyleSheet(cmb_font_->styleSheet());
-    txfl->addRow("Alignment:", cmb_text_align_);
-    txfl->addRow("Live edit:", chk_expose_text_);
+    txfl->addRow("Alignment:", with_kf(cmb_text_align_, mk_kf_button("Toggle alignment keyframe")));
+    txfl->addRow("Live edit:", with_kf(chk_expose_text_, mk_kf_button("Toggle live edit keyframe")));
     btn_text_color_ = new QPushButton(inner);
     btn_kf_text_color_ = mk_kf_button("Toggle text color keyframe");
     txfl->addRow("Color:", with_kf(btn_text_color_, btn_kf_text_color_));
     vl->addWidget(text_box_);
+    make_collapsible(text_box_);
 
     /* ── Rectangle ── */
     rect_box_ = new QGroupBox("Rectangle", inner);
@@ -3345,7 +3419,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_height_ = mk_kf_button("Toggle height keyframe");
     rfl->addRow("Width:", with_kf(spn_layer_w_, btn_kf_width_));
     rfl->addRow("Height:", with_kf(spn_layer_h_, btn_kf_height_));
-    rfl->addRow("Corner:", spn_rect_corner_);
+    rfl->addRow("Corner:", with_kf(spn_rect_corner_, mk_kf_button("Toggle corner radius keyframe")));
     btn_fill_color_ = new QPushButton(inner);
     btn_kf_fill_color_ = mk_kf_button("Toggle fill color keyframe");
     row_fill_color_ = with_kf(btn_fill_color_, btn_kf_fill_color_);
@@ -3357,6 +3431,41 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     rfl->addRow("Outline Width:", spn_outline_width_);
     rfl->addRow("Outline Color:", row_outline_color_);
     vl->addWidget(rect_box_);
+    make_collapsible(rect_box_);
+
+    /* ── Outline ── */
+    outline_box_ = new QGroupBox("Outline", inner);
+    outline_box_->setStyleSheet(tform_box->styleSheet());
+    auto *ofl = new QFormLayout(outline_box_);
+    ofl->setSpacing(3);
+    chk_outline_enabled_ = new QCheckBox("Enable outline", inner);
+    chk_outline_enabled_->setStyleSheet("color:#ccc;");
+    spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
+    spn_outline_width_->setToolTip("Outline thickness in pixels. Shape outlines are centered on the perimeter.");
+    btn_outline_color_ = new QPushButton(inner);
+    row_outline_color_ = with_kf(btn_outline_color_, mk_kf_button("Toggle outline color keyframe"));
+    spn_outline_opacity_ = mk_dspin(0.0, 1.0, 0.05);
+    spn_outline_opacity_->setDecimals(2);
+    cmb_outline_join_ = new QComboBox(inner);
+    cmb_outline_join_->addItem("Miter", 0);
+    cmb_outline_join_->addItem("Round", 1);
+    cmb_outline_join_->addItem("Bevel", 2);
+    cmb_outline_join_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_outline_position_ = new QComboBox(inner);
+    cmb_outline_position_->addItem("Back", 0);
+    cmb_outline_position_->addItem("Front", 1);
+    cmb_outline_position_->setStyleSheet(cmb_font_->styleSheet());
+    chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
+    chk_outline_antialias_->setStyleSheet("color:#ccc;");
+    ofl->addRow("", with_kf(chk_outline_enabled_, mk_kf_button("Toggle outline enabled keyframe")));
+    ofl->addRow("Color:", row_outline_color_);
+    ofl->addRow("Thickness:", with_kf(spn_outline_width_, mk_kf_button("Toggle outline thickness keyframe")));
+    ofl->addRow("Opacity:", with_kf(spn_outline_opacity_, mk_kf_button("Toggle outline opacity keyframe")));
+    ofl->addRow("Join:", with_kf(cmb_outline_join_, mk_kf_button("Toggle outline join keyframe")));
+    ofl->addRow("Position:", with_kf(cmb_outline_position_, mk_kf_button("Toggle outline position keyframe")));
+    ofl->addRow("", with_kf(chk_outline_antialias_, mk_kf_button("Toggle outline antialias keyframe")));
+    vl->addWidget(outline_box_);
+    make_collapsible(outline_box_);
 
     /* ── Outline ── */
     outline_box_ = new QGroupBox("Outline", inner);
@@ -3405,10 +3514,11 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_layer_h_->setToolTip("For image layers, this is the displayed height.");
     chk_lock_aspect_ = new QCheckBox("Lock aspect ratio", inner);
     chk_lock_aspect_->setStyleSheet("color:#ccc;");
-    ifl->addRow("Path:", edit_image_path_);
+    ifl->addRow("Path:", with_kf(edit_image_path_, mk_kf_button("Toggle image path keyframe")));
     ifl->addRow("", btn_pick_image_);
-    ifl->addRow("", chk_lock_aspect_);
+    ifl->addRow("", with_kf(chk_lock_aspect_, mk_kf_button("Toggle lock aspect keyframe")));
     vl->addWidget(image_box_);
+    make_collapsible(image_box_);
 
     shadow_box_ = new QGroupBox("Drop Shadow", inner);
     shadow_box_->setStyleSheet(tform_box->styleSheet());
@@ -3434,7 +3544,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_shadow_blur_ = mk_kf_button("Toggle shadow blur keyframe");
     btn_kf_shadow_spread_ = mk_kf_button("Toggle shadow spread keyframe");
     sfl->addRow("", with_kf(chk_shadow_enabled_, btn_kf_shadow_enabled_));
-    sfl->addRow("Preset:", cmb_shadow_preset_);
+    sfl->addRow("Preset:", with_kf(cmb_shadow_preset_, mk_kf_button("Toggle shadow preset keyframe")));
     sfl->addRow("Color:", with_kf(btn_shadow_color_, btn_kf_shadow_color_));
     sfl->addRow("Opacity:", with_kf(spn_shadow_opacity_, btn_kf_shadow_opacity_));
     sfl->addRow("Distance:", with_kf(spn_shadow_distance_, btn_kf_shadow_distance_));
@@ -3442,6 +3552,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     sfl->addRow("Blur:", with_kf(spn_shadow_blur_, btn_kf_shadow_blur_));
     sfl->addRow("Spread:", with_kf(spn_shadow_spread_, btn_kf_shadow_spread_));
     vl->addWidget(shadow_box_);
+    make_collapsible(shadow_box_);
 
     vl->addStretch();
     setWidget(inner);

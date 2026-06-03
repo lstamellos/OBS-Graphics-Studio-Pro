@@ -101,6 +101,10 @@ private:
     std::shared_ptr<Layer> clone_layer_for_insert(const Layer &layer, bool suffix_name) const;
     void insert_layer_above(const std::string &anchor_id, std::shared_ptr<Layer> layer);
     void select_after_layer_list_mutation(const std::string &layer_id);
+    void copy_selected_layer();
+    void cut_selected_layer();
+    void paste_layer_from_clipboard();
+    void delete_selected_layer();
     void push_undo_snapshot();
     void restore_undo_snapshot(int index);
     void update_undo_redo_actions();
