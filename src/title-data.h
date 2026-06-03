@@ -1,7 +1,7 @@
 /*
  * title-data.h
  *
- * Core data model for the OBS Titler Pro plugin.
+ * Core data model for the OBS Graphics Studio Pro plugin.
  *
  * A Title is composed of one or more Layers. Each layer has a set of
  * Properties (position, scale, opacity, colour, text …). Properties
@@ -67,8 +67,9 @@ struct AnimatedProperty {
 private:
     static double ease(double x, EasingType e,
                        float cx1, float cy1, float cx2, float cy2);
-    static double bezierY(double t,
-                          float cy1, float cy2);
+    static double bezierY(double x,
+                          float cx1, float cy1,
+                          float cx2, float cy2);
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -79,6 +80,7 @@ enum class LayerType {
     SolidRect,
     Image,
     Shape,      /* future: polygon / ellipse */
+    Clock,
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -107,14 +109,26 @@ struct Layer {
 
     /* ----- Text-specific ----- */
     std::string text_content  = "Title";
+    std::string clock_format  = "H:i:s";  /* PHP date()-style format for clock layers */
     bool        expose_text    = false;
     std::string font_family   = "Helvetica Neue";
     int         font_size     = 72;
     bool        font_bold     = false;
     bool        font_italic   = false;
+    int         text_style    = 0;  /* 0=normal, 1=all caps, 2=small caps, 3=superscript, 4=subscript */
+    int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
+    float       text_fit_min_scale = 0.5f;
     uint32_t    text_color    = 0xFFFFFFFF;  /* ARGB */
-    uint32_t    stroke_color  = 0x00000000;
+
+    /* ----- Outline shared by text and solid/shape layers ----- */
+    bool        outline_enabled = false;
+    uint32_t    stroke_color  = 0xFF000000;
     float       stroke_width  = 0.0f;
+    float       outline_opacity = 1.0f;
+    int         outline_join_style = 1;  /* 0=miter, 1=round, 2=bevel */
+    bool        outline_on_front = true;
+    bool        outline_antialias = true;
+
     int         align_h       = 1;  /* 0=left 1=center 2=right */
     int         align_v       = 1;  /* 0=top  1=middle 2=bottom */
 
