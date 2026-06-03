@@ -379,7 +379,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     l->font_bold     = j.value("font_bold",     false);
     l->font_italic   = j.value("font_italic",   false);
     l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
-    l->stroke_color  = j.value("stroke_color",  (uint32_t)0x00000000);
+    l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
     l->stroke_width  = j.value("stroke_width",  0.0f);
     l->align_h       = j.value("align_h",       1);
     l->align_v       = j.value("align_v",       1);
@@ -522,7 +522,7 @@ void TitleDataStore::save() const
     if (f.is_open())
         f << root.dump(2);
     else
-        blog(LOG_WARNING, "[OBS Titler Pro] Failed to save titles.json");
+        blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to save titles.json");
 }
 
 bool TitleDataStore::export_title(const std::string &id, const std::string &path, std::string *error) const
@@ -534,7 +534,7 @@ bool TitleDataStore::export_title(const std::string &id, const std::string &path
     }
 
     json root;
-    root["format"] = "obs-titler-pro-title-template";
+    root["format"] = "obs-graphics-studio-pro-title-template";
     root["version"] = 1;
     root["title"] = title_to_json(*t);
 
@@ -602,7 +602,7 @@ void TitleDataStore::load()
 {
     std::ifstream f(data_path());
     if (!f.is_open()) {
-        blog(LOG_INFO, "[OBS Titler Pro] No saved titles found, starting fresh.");
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] No saved titles found, starting fresh.");
         return;
     }
 
@@ -611,8 +611,8 @@ void TitleDataStore::load()
         f >> root;
         for (auto &jt : root)
             titles_.push_back(title_from_json(jt, false));
-        blog(LOG_INFO, "[OBS Titler Pro] Loaded %zu title(s).", titles_.size());
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] Loaded %zu title(s).", titles_.size());
     } catch (std::exception &e) {
-        blog(LOG_WARNING, "[OBS Titler Pro] Failed to parse titles.json: %s", e.what());
+        blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to parse titles.json: %s", e.what());
     }
 }
