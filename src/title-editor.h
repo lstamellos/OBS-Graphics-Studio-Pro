@@ -38,6 +38,7 @@
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QTextEdit>
 #include <QSpinBox>
 #include <QPointF>
 #include <QPoint>
@@ -98,6 +99,13 @@ private:
     void align_selected_layers_vertical();
     void align_selected_layers(int x_mode, int y_mode);
     std::shared_ptr<Title> clone_title(const Title &title) const;
+    std::shared_ptr<Layer> clone_layer_for_insert(const Layer &layer, bool suffix_name) const;
+    void insert_layer_above(const std::string &anchor_id, std::shared_ptr<Layer> layer);
+    void select_after_layer_list_mutation(const std::string &layer_id);
+    void copy_selected_layer();
+    void cut_selected_layer();
+    void paste_layer_from_clipboard();
+    void delete_selected_layer();
     void push_undo_snapshot();
     void restore_undo_snapshot(int index);
     void update_undo_redo_actions();
@@ -110,6 +118,7 @@ private:
     bool                   playback_reverse_ = false;
     bool                   full_loop_playback_ = false;
     QTimer                *play_timer_ = nullptr;
+    QTimer                *clock_timer_ = nullptr;
     QElapsedTimer          playback_clock_;
 
     /* Sub-widgets */
@@ -134,6 +143,7 @@ private:
     std::vector<std::shared_ptr<Title>> undo_stack_;
     int              undo_index_ = -1;
     bool             restoring_undo_ = false;
+    std::shared_ptr<Layer> layer_clipboard_;
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -209,6 +219,7 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void refresh();
     void set_selected_layer(const std::string &layer_id);
+    void set_layer_clipboard_available(bool available);
     std::vector<std::string> selected_ids() const;
 
 signals:
@@ -220,15 +231,20 @@ signals:
     void layer_name_changed(const std::string &layer_id, const std::string &name);
     void layer_order_changed();
     void add_layer_requested(LayerType type);
+    void clone_layer_requested(const std::string &layer_id);
+    void copy_layer_requested(const std::string &layer_id);
+    void paste_layer_requested(const std::string &layer_id);
     void delete_layer_requested(const std::string &layer_id);
 
 private slots:
     void on_add_text();
+    void on_add_clock();
     void on_add_rect();
     void on_add_image();
     void on_delete();
     void on_item_changed(QListWidgetItem *item);
     void on_selection_changed();
+    void show_layer_context_menu(const QPoint &pos);
 
 private:
     void populate();
@@ -238,9 +254,11 @@ private:
     std::shared_ptr<Title> title_;
     QListWidget  *list_     = nullptr;
     QPushButton  *btn_add_text_  = nullptr;
+    QPushButton  *btn_add_clock_ = nullptr;
     QPushButton  *btn_add_rect_  = nullptr;
     QPushButton  *btn_add_image_ = nullptr;
     QPushButton  *btn_del_       = nullptr;
+    bool          layer_clipboard_available_ = false;
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -357,14 +375,30 @@ private:
     QGroupBox       *image_box_    = nullptr;
 
     /* Text controls */
-    QLineEdit       *txt_content_  = nullptr;
+    QTextEdit       *txt_content_  = nullptr;
     QComboBox       *cmb_font_     = nullptr;
     QSpinBox        *spn_size_     = nullptr;
     QCheckBox       *chk_bold_     = nullptr;
     QCheckBox       *chk_italic_   = nullptr;
+    QComboBox       *cmb_text_style_ = nullptr;
+    QComboBox       *cmb_text_overflow_ = nullptr;
+    QDoubleSpinBox  *spn_text_fit_min_scale_ = nullptr;
+    QLabel          *lbl_text_fit_scale_ = nullptr;
     QCheckBox       *chk_expose_text_ = nullptr;
     QComboBox       *cmb_text_align_ = nullptr;
+    QComboBox       *cmb_text_valign_ = nullptr;
     QPushButton     *btn_text_color_ = nullptr;
+
+    /* Text/shape outline controls */
+    QGroupBox       *outline_box_ = nullptr;
+    QCheckBox       *chk_outline_enabled_ = nullptr;
+    QDoubleSpinBox  *spn_outline_width_ = nullptr;
+    QPushButton     *btn_outline_color_ = nullptr;
+    QWidget         *row_outline_color_ = nullptr;
+    QDoubleSpinBox  *spn_outline_opacity_ = nullptr;
+    QComboBox       *cmb_outline_join_ = nullptr;
+    QComboBox       *cmb_outline_position_ = nullptr;
+    QCheckBox       *chk_outline_antialias_ = nullptr;
 
     /* Rectangle/Image geometry controls */
     QDoubleSpinBox  *spn_layer_w_   = nullptr;
