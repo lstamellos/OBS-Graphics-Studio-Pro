@@ -67,8 +67,9 @@ struct AnimatedProperty {
 private:
     static double ease(double x, EasingType e,
                        float cx1, float cy1, float cx2, float cy2);
-    static double bezierY(double t,
-                          float cy1, float cy2);
+    static double bezierY(double x,
+                          float cx1, float cy1,
+                          float cx2, float cy2);
 };
 
 /* ══════════════════════════════════════════════════════════════════

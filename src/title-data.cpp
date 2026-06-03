@@ -95,28 +95,51 @@ double AnimatedProperty::ease(double x, EasingType e,
     case EasingType::EaseInOut:
         return x < 0.5 ? 2.0 * x * x : -1.0 + (4.0 - 2.0 * x) * x;
     case EasingType::Bezier:
-        return bezierY(x, cy1, cy2);
+        return bezierY(x, cx1, cy1, cx2, cy2);
     default: return x;
     }
     (void)cx1; (void)cx2; // used by full bezier solver if needed
 }
 
-/* Approximate cubic bezier Y given X (Newton-Raphson, 4 iters) */
-double AnimatedProperty::bezierY(double x, float cy1, float cy2)
+/* Cubic-bezier Y for a given X using P0=(0,0), P3=(1,1). */
+double AnimatedProperty::bezierY(double x, float cx1, float cy1,
+                                 float cx2, float cy2)
 {
-    // Simplified: solve t from Bx(t) = x then evaluate By(t)
-    // Using standard CSS cubic-bezier with fixed P0=(0,0) P3=(1,1)
+    auto sample = [](double t, double p1, double p2) {
+        double inv = 1.0 - t;
+        return 3.0 * inv * inv * t * p1 +
+               3.0 * inv * t * t * p2 +
+               t * t * t;
+    };
+    auto slope = [](double t, double p1, double p2) {
+        double inv = 1.0 - t;
+        return 3.0 * inv * inv * p1 +
+               6.0 * inv * t * (p2 - p1) +
+               3.0 * t * t * (1.0 - p2);
+    };
+
+    x = std::clamp(x, 0.0, 1.0);
+    cx1 = std::clamp(cx1, 0.0f, 1.0f);
+    cx2 = std::clamp(cx2, 0.0f, 1.0f);
+
     double t = x;
     for (int i = 0; i < 8; ++i) {
-        double t2 = t * t, t3 = t2 * t;
-        double bx = 3.0*t*(1-t)*(1-t)*0.333 + 3.0*t2*(1-t)*0.667 + t3;
-        // simple linear bezier for now
-        (void)bx;
-        break;
+        double dx = sample(t, cx1, cx2) - x;
+        double d = slope(t, cx1, cx2);
+        if (std::abs(dx) < 1e-6) break;
+        if (std::abs(d) < 1e-6) break;
+        t = std::clamp(t - dx / d, 0.0, 1.0);
     }
-    // Fallback: use ease-in-out when bezier not fully solved
-    return t < 0.5 ? 2.0*t*t : -1.0 + (4.0 - 2.0*t)*t;
-    (void)cy1; (void)cy2;
+
+    double lo = 0.0, hi = 1.0;
+    for (int i = 0; i < 12; ++i) {
+        double bx = sample(t, cx1, cx2);
+        if (std::abs(bx - x) < 1e-6) break;
+        if (bx < x) lo = t; else hi = t;
+        t = 0.5 * (lo + hi);
+    }
+
+    return std::clamp(sample(t, cy1, cy2), 0.0, 1.0);
 }
 
 /* ══════════════════════════════════════════════════════════════════

@@ -20,6 +20,7 @@
 #include <QSplitter>
 #include <QToolBar>
 #include <QAction>
+#include <QActionGroup>
 #include <QIcon>
 #include <QStringList>
 #include <QLocale>
@@ -524,6 +525,35 @@ static void set_channel_statics(Layer &layer, bool text, uint32_t argb)
     b.static_value = argb & 0xFF;
 }
 
+static void apply_easing_preset(Keyframe &keyframe, EasingType easing)
+{
+    keyframe.easing = easing;
+    switch (easing) {
+    case EasingType::Bezier:
+        keyframe.cx1 = 0.33f; keyframe.cy1 = 0.0f;
+        keyframe.cx2 = 0.67f; keyframe.cy2 = 1.0f;
+        break;
+    case EasingType::EaseIn:
+        keyframe.cx1 = 0.42f; keyframe.cy1 = 0.0f;
+        keyframe.cx2 = 1.0f; keyframe.cy2 = 1.0f;
+        break;
+    case EasingType::EaseOut:
+        keyframe.cx1 = 0.0f; keyframe.cy1 = 0.0f;
+        keyframe.cx2 = 0.58f; keyframe.cy2 = 1.0f;
+        break;
+    case EasingType::EaseInOut:
+        keyframe.cx1 = 0.42f; keyframe.cy1 = 0.0f;
+        keyframe.cx2 = 0.58f; keyframe.cy2 = 1.0f;
+        break;
+    case EasingType::Linear:
+    case EasingType::Hold:
+    default:
+        keyframe.cx1 = 0.333f; keyframe.cy1 = 0.0f;
+        keyframe.cx2 = 0.667f; keyframe.cy2 = 1.0f;
+        break;
+    }
+}
+
 static void add_or_replace_keyframe(AnimatedProperty &prop, double time, double value)
 {
     constexpr double kEpsilon = 1.0 / 240.0;
@@ -538,7 +568,7 @@ static void add_or_replace_keyframe(AnimatedProperty &prop, double time, double 
     Keyframe kf;
     kf.time = time;
     kf.value = value;
-    kf.easing = EasingType::Linear;
+    apply_easing_preset(kf, EasingType::Linear);
     prop.keyframes.push_back(kf);
     std::sort(prop.keyframes.begin(), prop.keyframes.end(),
               [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
@@ -631,6 +661,19 @@ static QColor keyframe_color(EasingType easing)
         return QColor(0x55, 0xbc, 0xff);
     default:
         return C_KF_DOT;
+    }
+}
+
+static QString easing_label(EasingType easing)
+{
+    switch (easing) {
+    case EasingType::Linear: return "Linear";
+    case EasingType::EaseIn: return "Ease In";
+    case EasingType::EaseOut: return "Ease Out";
+    case EasingType::EaseInOut: return "Easy Ease";
+    case EasingType::Bezier: return "Custom Bezier";
+    case EasingType::Hold: return "Hold";
+    default: return "Linear";
     }
 }
 
@@ -788,7 +831,8 @@ void TitleEditor::build_ui()
     title_props_ = new TitlePropertiesPanel(global_panel);
     global_layout->addWidget(title_props_);
     global_layout->addStretch(1);
-    global_panel->setFixedWidth(300);
+    global_panel->setMinimumWidth(240);
+    global_panel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     upper_split->addWidget(global_panel);
 
     canvas_ = new CanvasPreview(upper_split);
@@ -818,6 +862,7 @@ void TitleEditor::build_ui()
 
     auto *layer_transport = new QToolBar(layers_panel);
     layer_transport->setMovable(false);
+    layer_transport->setFixedHeight(34);
     layer_transport->setIconSize(QSize(14, 14));
     layer_transport->setStyleSheet(
         "QToolBar{background:#141414;border-bottom:1px solid #333;spacing:1px;}"
@@ -834,14 +879,17 @@ void TitleEditor::build_ui()
     layers_ = new LayerStack(layers_panel);
     layers_->setMinimumHeight(140);
     layers_layout->addWidget(layers_, 1);
-    layers_panel->setFixedWidth(360);
+    layers_panel->setMinimumWidth(280);
+    layers_panel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     lower_split->addWidget(layers_panel);
 
     timeline_ = new TimelineWidget(lower_split);
     timeline_->setMinimumHeight(140);
     lower_split->addWidget(timeline_);
-    lower_split->setStretchFactor(0, 0);
-    lower_split->setStretchFactor(1, 1);
+    lower_split->setStretchFactor(0, 1);
+    lower_split->setStretchFactor(1, 3);
+    lower_split->setCollapsible(0, false);
+    lower_split->setCollapsible(1, false);
 
     /* ── Outer vertical split ── */
     auto *vsplit = new QSplitter(Qt::Vertical, this);
@@ -2234,6 +2282,7 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
 
 
     QWidget *columns = new QWidget(this);
+    columns->setFixedHeight(38);
     columns->setStyleSheet("background:#141414;border-top:1px solid #292929;border-bottom:1px solid #292929;");
     auto *ch = new QHBoxLayout(columns);
     ch->setContentsMargins(4, 0, 4, 0);
@@ -2914,16 +2963,23 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     AnimatedProperty *hit_prop = nullptr;
     int hit_idx = -1;
     if (!hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr)) return;
-    Keyframe *hit_keyframe = &hit_prop->keyframes[hit_idx];
+
+    struct EasingChoice {
+        QAction *action = nullptr;
+        std::vector<int> target_indices;
+        EasingType easing = EasingType::Linear;
+    };
+    std::vector<EasingChoice> choices;
 
     QMenu menu(this);
-    menu.setTitle(QString("%1 easing").arg(QString::fromStdString(hit_prop->name)));
+    menu.setTitle("Keyframe Interpolation");
+    QAction *header = menu.addAction(QString("%1 · %2")
+        .arg(QString::fromStdString(layer ? layer->name : std::string()))
+        .arg(property_label(hit_prop->name)));
+    header->setEnabled(false);
+    menu.addSeparator();
 
-    auto add_easing = [&](const QString &label, EasingType easing) {
-        QAction *action = menu.addAction(label);
-        action->setCheckable(true);
-        action->setChecked(hit_keyframe->easing == easing);
-        action->setData((int)easing);
+    auto swatch_icon = [](EasingType easing) {
         QPixmap swatch(12, 12);
         swatch.fill(Qt::transparent);
         QPainter painter(&swatch);
@@ -2931,21 +2987,60 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
         painter.setBrush(keyframe_color(easing));
         painter.setPen(Qt::NoPen);
         painter.drawEllipse(1, 1, 10, 10);
-        action->setIcon(QIcon(swatch));
-        return action;
+        return QIcon(swatch);
     };
 
-    add_easing("Linear", EasingType::Linear);
-    add_easing("Ease In", EasingType::EaseIn);
-    add_easing("Ease Out", EasingType::EaseOut);
-    add_easing("Ease In/Out", EasingType::EaseInOut);
-    add_easing("Bezier", EasingType::Bezier);
-    add_easing("Step / Hold", EasingType::Hold);
+    auto add_easing_actions = [&](QMenu *target_menu, const std::vector<int> &indices) {
+        auto *group = new QActionGroup(target_menu);
+        group->setExclusive(true);
+        for (EasingType easing : {EasingType::Linear, EasingType::EaseIn, EasingType::EaseOut,
+                                  EasingType::EaseInOut, EasingType::Bezier, EasingType::Hold}) {
+            QAction *action = target_menu->addAction(swatch_icon(easing), easing_label(easing));
+            action->setCheckable(true);
+            action->setActionGroup(group);
+            action->setToolTip(easing == EasingType::Hold
+                ? "Hold the value until the next keyframe."
+                : "Set temporal interpolation for the selected keyframe segment.");
+            action->setChecked(std::all_of(indices.begin(), indices.end(), [&](int idx) {
+                return idx >= 0 && idx < (int)hit_prop->keyframes.size() &&
+                       hit_prop->keyframes[idx].easing == easing;
+            }));
+            choices.push_back({action, indices, easing});
+        }
+    };
+
+    const bool has_incoming = hit_idx > 0;
+    const bool has_outgoing = hit_idx + 1 < (int)hit_prop->keyframes.size();
+    if (!has_incoming && !has_outgoing) {
+        QAction *none = menu.addAction("A single keyframe has no interpolation segment.");
+        none->setEnabled(false);
+    } else {
+        if (has_incoming) {
+            QMenu *incoming = menu.addMenu("Incoming  (previous → this)");
+            add_easing_actions(incoming, {hit_idx - 1});
+        }
+        if (has_outgoing) {
+            QMenu *outgoing = menu.addMenu("Outgoing  (this → next)");
+            add_easing_actions(outgoing, {hit_idx});
+        }
+        if (has_incoming && has_outgoing) {
+            menu.addSeparator();
+            QMenu *both = menu.addMenu("Apply to Both Sides");
+            add_easing_actions(both, {hit_idx - 1, hit_idx});
+        }
+    }
 
     QAction *chosen = menu.exec(ev->globalPos());
     if (!chosen) return;
 
-    hit_keyframe->easing = (EasingType)chosen->data().toInt();
+    auto choice = std::find_if(choices.begin(), choices.end(),
+                               [&](const EasingChoice &candidate) { return candidate.action == chosen; });
+    if (choice == choices.end()) return;
+
+    for (int idx : choice->target_indices) {
+        if (idx >= 0 && idx < (int)hit_prop->keyframes.size())
+            apply_easing_preset(hit_prop->keyframes[idx], choice->easing);
+    }
     update();
     emit keyframe_easing_changed();
 }
