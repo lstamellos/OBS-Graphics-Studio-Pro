@@ -16,9 +16,14 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QStyle>
+#include <QToolButton>
+#include <QToolBar>
+#include <QPushButton>
 #include <QFont>
 #include <QSizePolicy>
 #include <QString>
+#include <QStringList>
 #include <QHeaderView>
 #include <QLineEdit>
 #include <QSignalBlocker>
@@ -26,6 +31,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <algorithm>
 
 namespace {
 
@@ -73,13 +79,79 @@ static void move_live_row_marker(int &marker, int from, int to)
     else if (marker == to) marker = from;
 }
 
+
+static QIcon obs_icon(QWidget *widget, const QStringList &names, QStyle::StandardPixmap fallback)
+{
+    for (const QString &name : names) {
+        QIcon icon = QIcon::fromTheme(name);
+        if (!icon.isNull()) return icon;
+    }
+    return widget ? widget->style()->standardIcon(fallback) : QIcon();
+}
+
+static int obs_toolbar_icon_extent(QWidget *widget)
+{
+    int size = widget ? widget->style()->pixelMetric(QStyle::PM_SmallIconSize, nullptr, widget) : 0;
+    return size > 0 ? size : 16;
+}
+
+static int obs_layout_spacing(QWidget *widget)
+{
+    int spacing = widget ? widget->style()->pixelMetric(QStyle::PM_LayoutVerticalSpacing, nullptr, widget) : -1;
+    return spacing >= 0 ? spacing : 4;
+}
+
+static QToolBar *make_obs_dock_toolbar(QWidget *parent)
+{
+    auto *toolbar = new QToolBar(parent);
+    toolbar->setMovable(false);
+    toolbar->setFloatable(false);
+    toolbar->setOrientation(Qt::Horizontal);
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    toolbar->setIconSize(QSize(obs_toolbar_icon_extent(parent), obs_toolbar_icon_extent(parent)));
+    toolbar->setContentsMargins(0, 0, 0, 0);
+    toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    return toolbar;
+}
+
+static QToolButton *make_obs_dock_tool_button(QWidget *parent, const QString &text,
+                                              const QIcon &icon, const QString &tooltip)
+{
+    auto *button = new QToolButton(parent);
+    button->setText(text);
+    button->setAccessibleName(text);
+    button->setToolTip(tooltip);
+    button->setIcon(icon);
+    button->setIconSize(QSize(obs_toolbar_icon_extent(parent), obs_toolbar_icon_extent(parent)));
+    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    button->setAutoRaise(true);
+    button->setFocusPolicy(Qt::StrongFocus);
+    button->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    return button;
+}
+
+static QWidget *toolbar_spacer(QWidget *parent)
+{
+    auto *spacer = new QWidget(parent);
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    return spacer;
+}
+
+static void set_bold_label(QLabel *label)
+{
+    if (!label) return;
+    QFont font = label->font();
+    font.setBold(true);
+    label->setFont(font);
+}
+
 } // namespace
 
 /* ══════════════════════════════════════════════════════════════════
  *  Constructor
  * ══════════════════════════════════════════════════════════════════ */
 TitleDock::TitleDock(QWidget *parent)
-    : QDockWidget("OBS Titler Pro", parent)
+    : QDockWidget("OBS Graphics Studio Pro", parent)
 {
     setFeatures(QDockWidget::DockWidgetMovable |
                 QDockWidget::DockWidgetFloatable);
@@ -115,52 +187,8 @@ void TitleDock::build_ui()
 {
     container_ = new QWidget(this);
     auto *root = new QVBoxLayout(container_);
-    root->setContentsMargins(4, 4, 4, 4);
-    root->setSpacing(4);
-
-    /* ── header toolbar ── */
-    auto *toolbar = new QHBoxLayout();
-    toolbar->setSpacing(2);
-
-    btn_add_  = new QPushButton("+",        container_);
-    btn_tpl_  = new QPushButton("Templates", container_);
-    btn_dup_  = new QPushButton("⧉",        container_);
-    btn_rename_ = new QPushButton("Rename", container_);
-    btn_del_  = new QPushButton("✕",        container_);
-    btn_export_ = new QPushButton("Export", container_);
-    btn_import_ = new QPushButton("Import", container_);
-    btn_edit_ = new QPushButton("Edit …",   container_);
-    btn_scene_= new QPushButton("▶ Scene",  container_);
-
-    btn_add_->setToolTip("New blank title");
-    btn_tpl_->setToolTip("Create a title from a Titler-style template");
-    btn_dup_->setToolTip("Duplicate");
-    btn_rename_->setToolTip("Rename selected title template");
-    btn_del_->setToolTip("Delete");
-    btn_export_->setToolTip("Export selected title template to a file");
-    btn_import_->setToolTip("Import a title template file");
-    btn_edit_->setToolTip("Open title editor");
-    btn_scene_->setToolTip("Add selected title to current scene");
-
-    for (auto *b : {btn_add_, btn_dup_, btn_del_})
-        b->setFixedWidth(28);
-    btn_tpl_->setFixedHeight(24);
-    btn_rename_->setFixedHeight(24);
-    btn_export_->setFixedHeight(24);
-    btn_import_->setFixedHeight(24);
-    btn_edit_->setFixedHeight(24);
-    btn_scene_->setFixedHeight(24);
-
-    toolbar->addWidget(btn_add_);
-    toolbar->addWidget(btn_tpl_);
-    toolbar->addWidget(btn_import_);
-    toolbar->addWidget(btn_dup_);
-    toolbar->addWidget(btn_del_);
-    toolbar->addStretch();
-    toolbar->addWidget(btn_rename_);
-    toolbar->addWidget(btn_export_);
-    toolbar->addWidget(btn_edit_);
-    toolbar->addWidget(btn_scene_);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
     auto *sections = new QSplitter(Qt::Vertical, container_);
     sections->setChildrenCollapsible(false);
@@ -169,12 +197,43 @@ void TitleDock::build_ui()
     auto *template_section = new QWidget(sections);
     auto *template_layout = new QVBoxLayout(template_section);
     template_layout->setContentsMargins(0, 0, 0, 0);
-    template_layout->setSpacing(4);
-    template_layout->addLayout(toolbar);
+    template_layout->setSpacing(obs_layout_spacing(template_section));
+
+    /* ── header toolbar ── */
+    auto *toolbar = make_obs_dock_toolbar(template_section);
+
+    btn_add_ = make_obs_dock_tool_button(toolbar, "Add", obs_icon(toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
+                                         "Add a blank title or create one from a template");
+    btn_import_ = make_obs_dock_tool_button(toolbar, "Import", obs_icon(toolbar, {"document-open", "go-down"}, QStyle::SP_DialogOpenButton),
+                                            "Import a title template file");
+    btn_dup_ = make_obs_dock_tool_button(toolbar, "Duplicate", obs_icon(toolbar, {"edit-copy"}, QStyle::SP_FileDialogDetailedView),
+                                         "Duplicate");
+    btn_del_ = make_obs_dock_tool_button(toolbar, "Delete", obs_icon(toolbar, {"edit-delete", "user-trash"}, QStyle::SP_TrashIcon),
+                                         "Delete");
+    btn_rename_ = make_obs_dock_tool_button(toolbar, "Rename", obs_icon(toolbar, {"edit-rename", "document-edit"}, QStyle::SP_FileDialogInfoView),
+                                            "Rename selected title template");
+    btn_export_ = make_obs_dock_tool_button(toolbar, "Export", obs_icon(toolbar, {"document-save", "go-up"}, QStyle::SP_DialogSaveButton),
+                                            "Export selected title template to a file");
+    btn_edit_ = make_obs_dock_tool_button(toolbar, "Edit", obs_icon(toolbar, {"document-edit"}, QStyle::SP_FileDialogDetailedView),
+                                          "Open title editor");
+    btn_scene_ = make_obs_dock_tool_button(toolbar, "Add to Scene", obs_icon(toolbar, {"media-playback-start", "list-add"}, QStyle::SP_MediaPlay),
+                                           "Add selected title to current scene");
+
+    toolbar->addWidget(btn_add_);
+    toolbar->addWidget(btn_import_);
+    toolbar->addSeparator();
+    toolbar->addWidget(btn_dup_);
+    toolbar->addWidget(btn_del_);
+    toolbar->addWidget(toolbar_spacer(toolbar));
+    toolbar->addWidget(btn_rename_);
+    toolbar->addWidget(btn_export_);
+    toolbar->addWidget(btn_edit_);
+    toolbar->addWidget(btn_scene_);
+    template_layout->addWidget(toolbar);
 
     /* ── template/title section ── */
     auto *template_lbl = new QLabel("Title templates", template_section);
-    template_lbl->setStyleSheet("font-weight:bold;color:#ddd;");
+    set_bold_label(template_lbl);
     template_layout->addWidget(template_lbl);
 
     list_ = new QListWidget(template_section);
@@ -186,26 +245,30 @@ void TitleDock::build_ui()
     auto *live_section = new QWidget(sections);
     auto *live_layout = new QVBoxLayout(live_section);
     live_layout->setContentsMargins(0, 0, 0, 0);
-    live_layout->setSpacing(4);
+    live_layout->setSpacing(obs_layout_spacing(live_section));
 
     auto *live_header = new QHBoxLayout();
+    live_header->setContentsMargins(0, 0, 0, 0);
+    live_header->setSpacing(0);
+
     /* ── exposed text section ── */
     text_editor_lbl_ = new QLabel("Live text", live_section);
-    text_editor_lbl_->setStyleSheet("font-weight:bold;color:#ddd;margin-top:4px;");
-    btn_add_text_row_ = new QPushButton("+ Row", live_section);
-    btn_add_text_row_->setToolTip("Add another live text cue row");
-    btn_add_text_row_->setFixedHeight(22);
-    btn_row_up_ = new QPushButton("▲", live_section);
-    btn_row_up_->setToolTip("Move selected cue row up");
-    btn_row_up_->setFixedSize(24, 22);
-    btn_row_down_ = new QPushButton("▼", live_section);
-    btn_row_down_->setToolTip("Move selected cue row down");
-    btn_row_down_->setFixedSize(24, 22);
+    set_bold_label(text_editor_lbl_);
+
+    auto *live_toolbar = make_obs_dock_toolbar(live_section);
+    btn_row_up_ = make_obs_dock_tool_button(live_toolbar, "Move Up", obs_icon(live_toolbar, {"go-up", "arrow-up"}, QStyle::SP_ArrowUp),
+                                            "Move selected cue row up");
+    btn_row_down_ = make_obs_dock_tool_button(live_toolbar, "Move Down", obs_icon(live_toolbar, {"go-down", "arrow-down"}, QStyle::SP_ArrowDown),
+                                              "Move selected cue row down");
+    btn_add_text_row_ = make_obs_dock_tool_button(live_toolbar, "Add Row", obs_icon(live_toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
+                                                  "Add another live text cue row");
+    live_toolbar->addWidget(btn_row_up_);
+    live_toolbar->addWidget(btn_row_down_);
+    live_toolbar->addWidget(btn_add_text_row_);
+
     live_header->addWidget(text_editor_lbl_);
     live_header->addStretch();
-    live_header->addWidget(btn_row_up_);
-    live_header->addWidget(btn_row_down_);
-    live_header->addWidget(btn_add_text_row_);
+    live_header->addWidget(live_toolbar);
     live_layout->addLayout(live_header);
 
     text_table_ = new QTableWidget(live_section);
@@ -229,30 +292,32 @@ void TitleDock::build_ui()
     status_lbl_ = new QLabel("No title selected", container_);
     status_lbl_->setAlignment(Qt::AlignCenter);
     QFont sf = status_lbl_->font();
-    sf.setPointSize(sf.pointSize() - 1);
+    sf.setPointSize(std::max(1, sf.pointSize() - 1));
     status_lbl_->setFont(sf);
     template_layout->addWidget(status_lbl_);
 
     setWidget(container_);
 
     /* ── connections ── */
-    auto *template_menu = new QMenu(btn_tpl_);
-    template_menu->addAction("Lower Third", this, &TitleDock::on_add_template_lower_third);
-    template_menu->addAction("Centered Title", this, &TitleDock::on_add_template_center_title);
-    template_menu->addAction("Ticker / Strap", this, &TitleDock::on_add_template_ticker);
-    btn_tpl_->setMenu(template_menu);
+    auto *add_menu = new QMenu(btn_add_);
+    add_menu->addAction("Add Blank Title", this, &TitleDock::on_add);
+    add_menu->addSeparator();
+    add_menu->addAction("Lower Third", this, &TitleDock::on_add_template_lower_third);
+    add_menu->addAction("Centered Title", this, &TitleDock::on_add_template_center_title);
+    add_menu->addAction("Ticker / Strap", this, &TitleDock::on_add_template_ticker);
+    btn_add_->setMenu(add_menu);
+    btn_add_->setPopupMode(QToolButton::InstantPopup);
 
-    connect(btn_add_,   &QPushButton::clicked, this, &TitleDock::on_add);
-    connect(btn_dup_,   &QPushButton::clicked, this, &TitleDock::on_duplicate);
-    connect(btn_rename_, &QPushButton::clicked, this, &TitleDock::on_rename);
-    connect(btn_del_,   &QPushButton::clicked, this, &TitleDock::on_delete);
-    connect(btn_export_, &QPushButton::clicked, this, &TitleDock::on_export);
-    connect(btn_import_, &QPushButton::clicked, this, &TitleDock::on_import);
-    connect(btn_edit_,  &QPushButton::clicked, this, &TitleDock::on_edit);
-    connect(btn_scene_, &QPushButton::clicked, this, &TitleDock::on_add_to_scene);
-    connect(btn_add_text_row_, &QPushButton::clicked, this, &TitleDock::on_add_live_text_row);
-    connect(btn_row_up_, &QPushButton::clicked, this, &TitleDock::on_move_live_text_row_up);
-    connect(btn_row_down_, &QPushButton::clicked, this, &TitleDock::on_move_live_text_row_down);
+    connect(btn_dup_,   &QToolButton::clicked, this, &TitleDock::on_duplicate);
+    connect(btn_rename_, &QToolButton::clicked, this, &TitleDock::on_rename);
+    connect(btn_del_,   &QToolButton::clicked, this, &TitleDock::on_delete);
+    connect(btn_export_, &QToolButton::clicked, this, &TitleDock::on_export);
+    connect(btn_import_, &QToolButton::clicked, this, &TitleDock::on_import);
+    connect(btn_edit_,  &QToolButton::clicked, this, &TitleDock::on_edit);
+    connect(btn_scene_, &QToolButton::clicked, this, &TitleDock::on_add_to_scene);
+    connect(btn_add_text_row_, &QToolButton::clicked, this, &TitleDock::on_add_live_text_row);
+    connect(btn_row_up_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_up);
+    connect(btn_row_down_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_down);
     connect(list_, &QListWidget::itemSelectionChanged,
             this, &TitleDock::on_selection_changed);
     connect(list_, &QListWidget::itemDoubleClicked,
@@ -326,7 +391,7 @@ void TitleDock::on_selection_changed()
                     .arg(t->duration, 0, 'f', 1));
     } else {
         status_lbl_->setText(list_->count() == 0
-            ? "Click + or Templates to create a title"
+            ? "Use Add to create a blank title or template"
             : "No title selected");
     }
     populate_exposed_text();
@@ -711,16 +776,16 @@ void TitleDock::on_export()
     if (!title) return;
 
     QString safe_name = QString::fromStdString(title->name).trimmed();
-    if (safe_name.isEmpty()) safe_name = QStringLiteral("OBS Titler Pro Template");
+    if (safe_name.isEmpty()) safe_name = QStringLiteral("OBS Graphics Studio Pro Template");
     safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
 
     QString path = QFileDialog::getSaveFileName(
-        this, "Export Title Template", safe_name + QStringLiteral(".otpt"),
-        "OBS Titler Pro Templates (*.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        this, "Export Title Template", safe_name + QStringLiteral(".ogspt"),
+        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
     if (path.isEmpty()) return;
 
     if (QFileInfo(path).suffix().isEmpty())
-        path += QStringLiteral(".otpt");
+        path += QStringLiteral(".ogspt");
 
     std::string error;
     if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), &error)) {
@@ -736,7 +801,7 @@ void TitleDock::on_import()
 {
     QString path = QFileDialog::getOpenFileName(
         this, "Import Title Template", QString(),
-        "OBS Titler Pro Templates (*.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
     if (path.isEmpty()) return;
 
     std::string error;
@@ -819,7 +884,7 @@ void TitleDock::on_add_to_scene()
     obs_data_set_double(settings, PROP_SPEED,    1.0);
 
     obs_source_t *source = obs_source_create(
-        "obs_titles_source",
+        "obs_graphics_studio_pro_source",
         t->name.c_str(),
         settings,
         nullptr);
