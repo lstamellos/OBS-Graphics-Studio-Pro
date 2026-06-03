@@ -162,6 +162,11 @@ static uint32_t eval_fill_color(const Layer &layer, double t)
            (uint32_t)eval_channel(layer.fill_color_b, layer.fill_color & 0xFF, t);
 }
 
+static bool eval_outline_enabled(const Layer &layer, double)
+{
+    return layer.outline_enabled;
+}
+
 static uint32_t eval_outline_color(const Layer &layer, double)
 {
     return layer.stroke_color;
@@ -169,7 +174,32 @@ static uint32_t eval_outline_color(const Layer &layer, double)
 
 static double eval_outline_width(const Layer &layer, double)
 {
-    return std::max(0.0f, layer.stroke_width);
+    return eval_outline_enabled(layer, 0.0) ? std::max(0.0f, layer.stroke_width) : 0.0;
+}
+
+static double eval_outline_opacity(const Layer &layer, double)
+{
+    return std::clamp((double)layer.outline_opacity, 0.0, 1.0);
+}
+
+static cairo_line_join_t outline_cairo_join_style(const Layer &layer)
+{
+    switch (layer.outline_join_style) {
+    case 0: return CAIRO_LINE_JOIN_MITER;
+    case 2: return CAIRO_LINE_JOIN_BEVEL;
+    case 1:
+    default: return CAIRO_LINE_JOIN_ROUND;
+    }
+}
+
+static Qt::PenJoinStyle outline_pen_join_style(const Layer &layer)
+{
+    switch (layer.outline_join_style) {
+    case 0: return Qt::MiterJoin;
+    case 2: return Qt::BevelJoin;
+    case 1:
+    default: return Qt::RoundJoin;
+    }
 }
 
 static bool eval_shadow_enabled(const Layer &layer, double t)
@@ -358,11 +388,12 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
 
     double outline_width = eval_outline_width(layer, t);
     QColor outline = color_from_argb(eval_outline_color(layer, t));
+    outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(layer, t), 0.0, 1.0));
     QColor fill = color_from_argb(eval_text_color(layer, t));
     fill.setAlphaF(std::clamp((double)fill.alphaF(), 0.0, 1.0));
     if (outline_width > 0.0 && outline.alpha() > 0) {
         QPainterPath text_path = aligned_text_path(font, text_rect, align, text);
-        painter.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(layer)));
         painter.setBrush(fill);
         painter.drawPath(text_path);
     } else {
@@ -461,7 +492,8 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
         double sr, sg, sb, sa;
         unpack_color(outline_color, sr, sg, sb, sa);
         cairo_set_line_width(cr, outline_width);
-        cairo_set_source_rgba(cr, sr, sg, sb, sa * alpha);
+        cairo_set_line_join(cr, outline_cairo_join_style(layer));
+        cairo_set_source_rgba(cr, sr, sg, sb, sa * alpha * eval_outline_opacity(layer, t));
         cairo_stroke(cr);
     } else {
         cairo_fill(cr);

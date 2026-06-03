@@ -116,8 +116,11 @@ struct Layer {
     uint32_t    text_color    = 0xFFFFFFFF;  /* ARGB */
 
     /* ----- Outline shared by text and solid/shape layers ----- */
+    bool        outline_enabled = false;
     uint32_t    stroke_color  = 0xFF000000;
     float       stroke_width  = 0.0f;
+    float       outline_opacity = 1.0f;
+    int         outline_join_style = 1;  /* 0=miter, 1=round, 2=bevel */
 
     int         align_h       = 1;  /* 0=left 1=center 2=right */
     int         align_v       = 1;  /* 0=top  1=middle 2=bottom */

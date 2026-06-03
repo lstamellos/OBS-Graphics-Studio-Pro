@@ -308,8 +308,11 @@ static json layer_to_json(const Layer &l)
     j["font_italic"]   = l.font_italic;
     j["text_style"]    = l.text_style;
     j["text_color"]    = l.text_color;
+    j["outline_enabled"] = l.outline_enabled;
     j["stroke_color"]  = l.stroke_color;
     j["stroke_width"]  = l.stroke_width;
+    j["outline_opacity"] = l.outline_opacity;
+    j["outline_join_style"] = l.outline_join_style;
     j["align_h"]       = l.align_h;
     j["align_v"]       = l.align_v;
 
@@ -383,6 +386,9 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
     l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
     l->stroke_width  = j.value("stroke_width",  0.0f);
+    l->outline_enabled = j.value("outline_enabled", l->stroke_width > 0.0f);
+    l->outline_opacity = j.value("outline_opacity", 1.0f);
+    l->outline_join_style = j.value("outline_join_style", 1);
     l->align_h       = j.value("align_h",       1);
     l->align_v       = j.value("align_v",       1);
 
