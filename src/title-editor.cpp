@@ -3436,8 +3436,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     /* ── Outline ── */
     outline_box_ = new QGroupBox("Outline", inner);
     outline_box_->setStyleSheet(tform_box->styleSheet());
-    auto *ofl = new QFormLayout(outline_box_);
-    ofl->setSpacing(3);
+    auto *outline_form = new QFormLayout(outline_box_);
+    outline_form->setSpacing(3);
     chk_outline_enabled_ = new QCheckBox("Enable outline", inner);
     chk_outline_enabled_->setStyleSheet("color:#ccc;");
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
@@ -3457,54 +3457,21 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_outline_position_->setStyleSheet(cmb_font_->styleSheet());
     chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
     chk_outline_antialias_->setStyleSheet("color:#ccc;");
-    ofl->addRow("", with_kf(chk_outline_enabled_, mk_kf_button("Toggle outline enabled keyframe")));
-    ofl->addRow("Color:", row_outline_color_);
-    ofl->addRow("Thickness:", with_kf(spn_outline_width_, mk_kf_button("Toggle outline thickness keyframe")));
-    ofl->addRow("Opacity:", with_kf(spn_outline_opacity_, mk_kf_button("Toggle outline opacity keyframe")));
-    ofl->addRow("Join:", with_kf(cmb_outline_join_, mk_kf_button("Toggle outline join keyframe")));
-    ofl->addRow("Position:", with_kf(cmb_outline_position_, mk_kf_button("Toggle outline position keyframe")));
-    ofl->addRow("", with_kf(chk_outline_antialias_, mk_kf_button("Toggle outline antialias keyframe")));
+    outline_form->addRow("", with_kf(chk_outline_enabled_, mk_kf_button("Toggle outline enabled keyframe")));
+    outline_form->addRow("Color:", row_outline_color_);
+    outline_form->addRow("Thickness:", with_kf(spn_outline_width_, mk_kf_button("Toggle outline thickness keyframe")));
+    outline_form->addRow("Opacity:", with_kf(spn_outline_opacity_, mk_kf_button("Toggle outline opacity keyframe")));
+    outline_form->addRow("Join:", with_kf(cmb_outline_join_, mk_kf_button("Toggle outline join keyframe")));
+    outline_form->addRow("Position:", with_kf(cmb_outline_position_, mk_kf_button("Toggle outline position keyframe")));
+    outline_form->addRow("", with_kf(chk_outline_antialias_, mk_kf_button("Toggle outline antialias keyframe")));
     vl->addWidget(outline_box_);
     make_collapsible(outline_box_);
-
-    /* ── Outline ── */
-    outline_box_ = new QGroupBox("Outline", inner);
-    outline_box_->setStyleSheet(tform_box->styleSheet());
-    auto *ofl = new QFormLayout(outline_box_);
-    ofl->setSpacing(3);
-    chk_outline_enabled_ = new QCheckBox("Enable outline", inner);
-    chk_outline_enabled_->setStyleSheet("color:#ccc;");
-    spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
-    spn_outline_width_->setToolTip("Outline thickness in pixels. Shape outlines are centered on the perimeter.");
-    btn_outline_color_ = new QPushButton(inner);
-    row_outline_color_ = btn_outline_color_;
-    spn_outline_opacity_ = mk_dspin(0.0, 1.0, 0.05);
-    spn_outline_opacity_->setDecimals(2);
-    cmb_outline_join_ = new QComboBox(inner);
-    cmb_outline_join_->addItem("Miter", 0);
-    cmb_outline_join_->addItem("Round", 1);
-    cmb_outline_join_->addItem("Bevel", 2);
-    cmb_outline_join_->setStyleSheet(cmb_font_->styleSheet());
-    cmb_outline_position_ = new QComboBox(inner);
-    cmb_outline_position_->addItem("Back", 0);
-    cmb_outline_position_->addItem("Front", 1);
-    cmb_outline_position_->setStyleSheet(cmb_font_->styleSheet());
-    chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
-    chk_outline_antialias_->setStyleSheet("color:#ccc;");
-    ofl->addRow("", chk_outline_enabled_);
-    ofl->addRow("Color:", row_outline_color_);
-    ofl->addRow("Thickness:", spn_outline_width_);
-    ofl->addRow("Opacity:", spn_outline_opacity_);
-    ofl->addRow("Join:", cmb_outline_join_);
-    ofl->addRow("Position:", cmb_outline_position_);
-    ofl->addRow("", chk_outline_antialias_);
-    vl->addWidget(outline_box_);
 
     /* ── Image ── */
     image_box_ = new QGroupBox("Image", inner);
     image_box_->setStyleSheet(tform_box->styleSheet());
-    auto *ifl = new QFormLayout(image_box_);
-    ifl->setSpacing(3);
+    auto *image_form = new QFormLayout(image_box_);
+    image_form->setSpacing(3);
     edit_image_path_ = new QLineEdit(inner);
     edit_image_path_->setStyleSheet(txt_content_->styleSheet());
     btn_pick_image_ = new QPushButton("Browse…", inner);
@@ -3514,9 +3481,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_layer_h_->setToolTip("For image layers, this is the displayed height.");
     chk_lock_aspect_ = new QCheckBox("Lock aspect ratio", inner);
     chk_lock_aspect_->setStyleSheet("color:#ccc;");
-    ifl->addRow("Path:", with_kf(edit_image_path_, mk_kf_button("Toggle image path keyframe")));
-    ifl->addRow("", btn_pick_image_);
-    ifl->addRow("", with_kf(chk_lock_aspect_, mk_kf_button("Toggle lock aspect keyframe")));
+    image_form->addRow("Path:", with_kf(edit_image_path_, mk_kf_button("Toggle image path keyframe")));
+    image_form->addRow("", btn_pick_image_);
+    image_form->addRow("", with_kf(chk_lock_aspect_, mk_kf_button("Toggle lock aspect keyframe")));
     vl->addWidget(image_box_);
     make_collapsible(image_box_);
 
