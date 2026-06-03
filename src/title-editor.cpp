@@ -3560,7 +3560,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     };
 
     auto mk_kf_button = [&](const QString &tip) {
-        auto *b = new QPushButton("⏱", inner);
+        auto *b = new QPushButton("◇", inner);
         b->setFixedSize(22, 22);
         b->setToolTip(tip);
         b->setStyleSheet("QPushButton{color:#8c8c8c;background:transparent;border:none;border-radius:2px;"
@@ -3758,7 +3758,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     make_collapsible(rect_box_);
 
     /* ── Outline ── */
-    outline_box_ = new QGroupBox("Stroke", inner);
+    outline_box_ = new QGroupBox("Outline", inner);
     outline_box_->setStyleSheet(section_style);
     auto *outline_form = new QFormLayout(outline_box_);
     style_form(outline_form);
@@ -4362,7 +4362,7 @@ void PropertiesPanel::load_values()
         for (auto *b : {btn_kf_pos_x_, btn_kf_pos_y_, btn_kf_rotation_, btn_kf_opacity_,
                         btn_kf_origin_x_, btn_kf_origin_y_, btn_kf_width_, btn_kf_height_,
                         btn_kf_text_color_, btn_kf_fill_color_})
-            if (b) { b->setText("⏱"); b->setProperty("active", false); b->style()->unpolish(b); b->style()->polish(b); }
+            if (b) { b->setText("◇"); b->setProperty("active", false); b->style()->unpolish(b); b->style()->polish(b); }
         loading_values_ = false;
         return;
     }
@@ -4381,6 +4381,11 @@ void PropertiesPanel::load_values()
     if (auto *text_form = qobject_cast<QFormLayout *>(text_box_->layout())) {
         if (auto *label = text_form->labelForField(spn_text_fit_min_scale_))
             label->setVisible(is_text_like && layer_->text_overflow_mode == 2);
+        if (chk_expose_text_) {
+            chk_expose_text_->setVisible(is_text);
+            if (auto *label = text_form->labelForField(chk_expose_text_))
+                label->setVisible(is_text);
+        }
     }
     rect_box_->setVisible(is_text_like || is_rect || is_image);
     rect_box_->setTitle(is_text_like ? (is_clock ? "Clock Box" : "Text Box") : (is_image ? "Image Size" : "Shape · Geometry / Fill"));
@@ -4390,6 +4395,15 @@ void PropertiesPanel::load_values()
     btn_kf_fill_color_->setVisible(is_rect);
     if (row_fill_color_) row_fill_color_->setVisible(is_rect);
     if (outline_box_) outline_box_->setVisible(supports_outline);
+    if (auto *outline_form = qobject_cast<QFormLayout *>(outline_box_->layout())) {
+        const bool show_outline_geometry = is_rect;
+        if (btn_outline_color_) btn_outline_color_->setVisible(show_outline_geometry);
+        if (auto *label = outline_form->labelForField(btn_outline_color_))
+            label->setVisible(show_outline_geometry);
+        if (spn_outline_width_) spn_outline_width_->setVisible(show_outline_geometry);
+        if (auto *label = outline_form->labelForField(spn_outline_width_))
+            label->setVisible(show_outline_geometry);
+    }
     if (auto *form = qobject_cast<QFormLayout *>(rect_box_->layout())) {
         if (auto *label = form->labelForField(spn_rect_corner_))
             label->setVisible(is_rect);
