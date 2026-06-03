@@ -382,6 +382,7 @@ private:
     QCheckBox       *chk_outline_enabled_ = nullptr;
     QDoubleSpinBox  *spn_outline_width_ = nullptr;
     QPushButton     *btn_outline_color_ = nullptr;
+    QWidget         *row_outline_color_ = nullptr;
     QDoubleSpinBox  *spn_outline_opacity_ = nullptr;
     QComboBox       *cmb_outline_join_ = nullptr;
 

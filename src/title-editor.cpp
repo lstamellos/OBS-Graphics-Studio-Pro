@@ -3258,6 +3258,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
     spn_outline_width_->setToolTip("Outline thickness in pixels. Shape outlines are centered on the perimeter.");
     btn_outline_color_ = new QPushButton(inner);
+    row_outline_color_ = btn_outline_color_;
     spn_outline_opacity_ = mk_dspin(0.0, 1.0, 0.05);
     spn_outline_opacity_->setDecimals(2);
     cmb_outline_join_ = new QComboBox(inner);
@@ -3266,7 +3267,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_outline_join_->addItem("Bevel", 2);
     cmb_outline_join_->setStyleSheet(cmb_font_->styleSheet());
     ofl->addRow("", chk_outline_enabled_);
-    ofl->addRow("Color:", btn_outline_color_);
+    ofl->addRow("Color:", row_outline_color_);
     ofl->addRow("Thickness:", spn_outline_width_);
     ofl->addRow("Opacity:", spn_outline_opacity_);
     ofl->addRow("Join:", cmb_outline_join_);
