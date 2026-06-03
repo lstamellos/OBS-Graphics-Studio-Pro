@@ -29,6 +29,7 @@
 #include <QFontMetrics>
 #include <QTextLayout>
 #include <QTextOption>
+#include <QDateTime>
 #include <QTransform>
 #include <QColor>
 
@@ -288,9 +289,56 @@ static QLocale locale_for_text_transform(const QString &text)
     return locale;
 }
 
+
+static QString php_date_format(const QString &format, const QDateTime &date_time)
+{
+    QString out;
+    const QDate date = date_time.date();
+    const QTime time = date_time.time();
+    for (int i = 0; i < format.size(); ++i) {
+        const QChar token = format.at(i);
+        if (token == QLatin1Char('\\') && i + 1 < format.size()) {
+            out.append(format.at(++i));
+            continue;
+        }
+        switch (token.unicode()) {
+        case 'd': out += QString("%1").arg(date.day(), 2, 10, QChar('0')); break;
+        case 'D': out += date_time.toString("ddd"); break;
+        case 'j': out += QString::number(date.day()); break;
+        case 'l': out += date_time.toString("dddd"); break;
+        case 'F': out += date_time.toString("MMMM"); break;
+        case 'm': out += QString("%1").arg(date.month(), 2, 10, QChar('0')); break;
+        case 'M': out += date_time.toString("MMM"); break;
+        case 'n': out += QString::number(date.month()); break;
+        case 'Y': out += QString::number(date.year()); break;
+        case 'y': out += QString("%1").arg(date.year() % 100, 2, 10, QChar('0')); break;
+        case 'a': out += (time.hour() < 12 ? "am" : "pm"); break;
+        case 'A': out += (time.hour() < 12 ? "AM" : "PM"); break;
+        case 'g': { int h = time.hour() % 12; out += QString::number(h == 0 ? 12 : h); break; }
+        case 'G': out += QString::number(time.hour()); break;
+        case 'h': { int h = time.hour() % 12; out += QString("%1").arg(h == 0 ? 12 : h, 2, 10, QChar('0')); break; }
+        case 'H': out += QString("%1").arg(time.hour(), 2, 10, QChar('0')); break;
+        case 'i': out += QString("%1").arg(time.minute(), 2, 10, QChar('0')); break;
+        case 's': out += QString("%1").arg(time.second(), 2, 10, QChar('0')); break;
+        case 'U': out += QString::number(date_time.toSecsSinceEpoch()); break;
+        default: out.append(token); break;
+        }
+    }
+    return out;
+}
+
+static QString clock_text_for_layer(const Layer &layer)
+{
+    QString format = QString::fromStdString(layer.clock_format);
+    if (format.isEmpty()) format = QStringLiteral("H:i:s");
+    return php_date_format(format, QDateTime::currentDateTime());
+}
+
 static QString display_text_for_style(const Layer &layer)
 {
-    QString text = QString::fromStdString(layer.text_content);
+    QString text = layer.type == LayerType::Clock
+        ? clock_text_for_layer(layer)
+        : QString::fromStdString(layer.text_content);
     if (layer.text_style == 1)
         return locale_for_text_transform(text).toUpper(text);
     return text;
@@ -690,6 +738,7 @@ static void render_title_frame(TitleSourceData *data,
 
         switch (layer->type) {
         case LayerType::Text:
+        case LayerType::Clock:
             render_layer_text(cr, *layer, lt, (int)w, (int)h);
             break;
         case LayerType::SolidRect:

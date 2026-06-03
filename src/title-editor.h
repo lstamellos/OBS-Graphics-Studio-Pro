@@ -118,6 +118,7 @@ private:
     bool                   playback_reverse_ = false;
     bool                   full_loop_playback_ = false;
     QTimer                *play_timer_ = nullptr;
+    QTimer                *clock_timer_ = nullptr;
     QElapsedTimer          playback_clock_;
 
     /* Sub-widgets */
@@ -237,6 +238,7 @@ signals:
 
 private slots:
     void on_add_text();
+    void on_add_clock();
     void on_add_rect();
     void on_add_image();
     void on_delete();
@@ -252,6 +254,7 @@ private:
     std::shared_ptr<Title> title_;
     QListWidget  *list_     = nullptr;
     QPushButton  *btn_add_text_  = nullptr;
+    QPushButton  *btn_add_clock_ = nullptr;
     QPushButton  *btn_add_rect_  = nullptr;
     QPushButton  *btn_add_image_ = nullptr;
     QPushButton  *btn_del_       = nullptr;

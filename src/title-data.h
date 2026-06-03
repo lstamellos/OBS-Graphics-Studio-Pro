@@ -79,6 +79,7 @@ enum class LayerType {
     SolidRect,
     Image,
     Shape,      /* future: polygon / ellipse */
+    Clock,
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -107,6 +108,7 @@ struct Layer {
 
     /* ----- Text-specific ----- */
     std::string text_content  = "Title";
+    std::string clock_format  = "H:i:s";  /* PHP date()-style format for clock layers */
     bool        expose_text    = false;
     std::string font_family   = "Helvetica Neue";
     int         font_size     = 72;

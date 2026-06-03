@@ -47,6 +47,7 @@
 #include <QTextEdit>
 #include <QTextLayout>
 #include <QTextOption>
+#include <QDateTime>
 #include <QTransform>
 #include <QToolButton>
 #include <QMenu>
@@ -113,6 +114,8 @@ static QColor layer_color(const Layer &layer, int row)
 {
     if (layer.type == LayerType::Text)
         return QColor(0xb4, 0x5a, 0xa0);
+    if (layer.type == LayerType::Clock)
+        return QColor(0x4b, 0x9a, 0xc8);
     if (layer.type == LayerType::SolidRect || layer.type == LayerType::Shape)
         return QColor(0x4f, 0x8f, 0x58);
     if (layer.type == LayerType::Image)
@@ -127,6 +130,7 @@ static QString layer_type_short(LayerType type)
 {
     switch (type) {
     case LayerType::Text: return "T";
+    case LayerType::Clock: return "⏱";
     case LayerType::SolidRect: return "■";
     case LayerType::Image: return "▧";
     case LayerType::Shape: return "◆";
@@ -160,9 +164,56 @@ static QLocale locale_for_text_transform(const QString &text)
     return locale;
 }
 
+
+static QString php_date_format(const QString &format, const QDateTime &date_time)
+{
+    QString out;
+    const QDate date = date_time.date();
+    const QTime time = date_time.time();
+    for (int i = 0; i < format.size(); ++i) {
+        const QChar token = format.at(i);
+        if (token == QLatin1Char('\\') && i + 1 < format.size()) {
+            out.append(format.at(++i));
+            continue;
+        }
+        switch (token.unicode()) {
+        case 'd': out += QString("%1").arg(date.day(), 2, 10, QChar('0')); break;
+        case 'D': out += date_time.toString("ddd"); break;
+        case 'j': out += QString::number(date.day()); break;
+        case 'l': out += date_time.toString("dddd"); break;
+        case 'F': out += date_time.toString("MMMM"); break;
+        case 'm': out += QString("%1").arg(date.month(), 2, 10, QChar('0')); break;
+        case 'M': out += date_time.toString("MMM"); break;
+        case 'n': out += QString::number(date.month()); break;
+        case 'Y': out += QString::number(date.year()); break;
+        case 'y': out += QString("%1").arg(date.year() % 100, 2, 10, QChar('0')); break;
+        case 'a': out += (time.hour() < 12 ? "am" : "pm"); break;
+        case 'A': out += (time.hour() < 12 ? "AM" : "PM"); break;
+        case 'g': { int h = time.hour() % 12; out += QString::number(h == 0 ? 12 : h); break; }
+        case 'G': out += QString::number(time.hour()); break;
+        case 'h': { int h = time.hour() % 12; out += QString("%1").arg(h == 0 ? 12 : h, 2, 10, QChar('0')); break; }
+        case 'H': out += QString("%1").arg(time.hour(), 2, 10, QChar('0')); break;
+        case 'i': out += QString("%1").arg(time.minute(), 2, 10, QChar('0')); break;
+        case 's': out += QString("%1").arg(time.second(), 2, 10, QChar('0')); break;
+        case 'U': out += QString::number(date_time.toSecsSinceEpoch()); break;
+        default: out.append(token); break;
+        }
+    }
+    return out;
+}
+
+static QString clock_text_for_layer(const Layer &layer)
+{
+    QString format = QString::fromStdString(layer.clock_format);
+    if (format.isEmpty()) format = QStringLiteral("H:i:s");
+    return php_date_format(format, QDateTime::currentDateTime());
+}
+
 static QString display_text_for_style(const Layer &layer)
 {
-    QString text = QString::fromStdString(layer.text_content);
+    QString text = layer.type == LayerType::Clock
+        ? clock_text_for_layer(layer)
+        : QString::fromStdString(layer.text_content);
     if (layer.text_style == 1)
         return locale_for_text_transform(text).toUpper(text);
     return text;
@@ -696,6 +747,13 @@ TitleEditor::TitleEditor(QWidget *parent)
     play_timer_ = new QTimer(this);
     play_timer_->setInterval(std::max(1, (int)std::round(obs_frame_duration() * 1000.0)));
     connect(play_timer_, &QTimer::timeout, this, &TitleEditor::tick);
+
+    clock_timer_ = new QTimer(this);
+    clock_timer_->setInterval(1000);
+    connect(clock_timer_, &QTimer::timeout, this, [this]() {
+        if (canvas_) canvas_->update();
+    });
+    clock_timer_->start();
 }
 
 void TitleEditor::build_ui()
@@ -800,9 +858,11 @@ void TitleEditor::build_ui()
                 auto l = std::make_shared<Layer>();
                 l->id   = TitleDataStore::make_uuid();
                 l->name = (type == LayerType::Text) ? "Text" :
+                          (type == LayerType::Clock) ? "Clock" :
                           (type == LayerType::Image) ? "Image" : "Rectangle";
                 l->type = type;
                 l->text_content = (type == LayerType::Text) ? "New Text" : "";
+                l->clock_format = (type == LayerType::Clock) ? "H:i:s" : l->clock_format;
                 l->pos_x.static_value = title_->width  / 2.0;
                 l->pos_y.static_value = title_->height / 2.0;
                 l->rect_width = title_->width * 0.5f;
@@ -1934,7 +1994,7 @@ void CanvasPreview::render_to_pixmap()
             }
         }
 
-        if (layer->type == LayerType::Text) {
+        if (layer->type == LayerType::Text || layer->type == LayerType::Clock) {
             QColor tc = color_from_argb(eval_text_color(*layer, lt));
             QFont f(QString::fromStdString(layer->font_family));
             f.setPixelSize(layer->font_size);
@@ -2175,13 +2235,15 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
     hdr->setSpacing(2);
     btn_add_text_  = new QPushButton("T+",    this);
     btn_add_text_->setIcon(obs_icon(this, {"insert-text", "format-text-bold"}, QStyle::SP_FileIcon));
+    btn_add_clock_ = new QPushButton("Clk+",  this);
+    btn_add_clock_->setIcon(obs_icon(this, {"office-calendar", "appointment-new"}, QStyle::SP_ComputerIcon));
     btn_add_rect_  = new QPushButton("▭+",    this);
     btn_add_rect_->setIcon(obs_icon(this, {"draw-rectangle", "insert-shape"}, QStyle::SP_FileDialogNewFolder));
     btn_add_image_ = new QPushButton("Img+",  this);
     btn_add_image_->setIcon(obs_icon(this, {"insert-image", "image-x-generic"}, QStyle::SP_FileIcon));
     btn_del_       = new QPushButton("✕",     this);
     btn_del_->setIcon(obs_icon(this, {"edit-delete", "user-trash"}, QStyle::SP_TrashIcon));
-    for (auto *b : {btn_add_text_, btn_add_rect_, btn_add_image_, btn_del_}) {
+    for (auto *b : {btn_add_text_, btn_add_clock_, btn_add_rect_, btn_add_image_, btn_del_}) {
         b->setFixedWidth(34);
         b->setStyleSheet("QPushButton{color:#ccc;background:#2a2a2a;border:none;"
                          "border-radius:2px;} QPushButton:hover{background:#3a3a3a;}");
@@ -2226,6 +2288,7 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
     vl->addWidget(list_, 1);
 
     connect(btn_add_text_, &QPushButton::clicked, this, &LayerStack::on_add_text);
+    connect(btn_add_clock_, &QPushButton::clicked, this, &LayerStack::on_add_clock);
     connect(btn_add_rect_,  &QPushButton::clicked, this, &LayerStack::on_add_rect);
     connect(btn_add_image_, &QPushButton::clicked, this, &LayerStack::on_add_image);
     connect(btn_del_,       &QPushButton::clicked, this, &LayerStack::on_delete);
@@ -2475,6 +2538,7 @@ void LayerStack::on_selection_changed()
 }
 
 void LayerStack::on_add_text() { emit add_layer_requested(LayerType::Text); }
+void LayerStack::on_add_clock() { emit add_layer_requested(LayerType::Clock); }
 void LayerStack::on_add_rect() { emit add_layer_requested(LayerType::SolidRect); }
 void LayerStack::on_add_image() { emit add_layer_requested(LayerType::Image); }
 
@@ -3589,7 +3653,13 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             });
     connect(txt_content_, &QTextEdit::textChanged,
             this, [this, can_edit, emit_change]() {
-                if (can_edit()) { layer_->text_content = txt_content_->toPlainText().toStdString(); emit_change(); }
+                if (!can_edit()) return;
+                std::string value = txt_content_->toPlainText().toStdString();
+                if (layer_->type == LayerType::Clock)
+                    layer_->clock_format = value.empty() ? "H:i:s" : value;
+                else
+                    layer_->text_content = value;
+                emit_change();
             });
     connect(cmb_font_, &QComboBox::currentTextChanged,
             this, [this, can_edit, emit_change](const QString &s){
@@ -4043,21 +4113,25 @@ void PropertiesPanel::load_values()
     }
 
     const bool is_text = layer_->type == LayerType::Text;
+    const bool is_clock = layer_->type == LayerType::Clock;
+    const bool is_text_like = is_text || is_clock;
     const bool is_rect = layer_->type == LayerType::SolidRect || layer_->type == LayerType::Shape;
     const bool is_image = layer_->type == LayerType::Image;
-    const bool supports_outline = is_text || is_rect;
-    text_box_->setVisible(is_text);
-    if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text && layer_->text_overflow_mode == 2);
-    if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text && layer_->text_overflow_mode == 2);
+    const bool supports_outline = is_text_like || is_rect;
+    text_box_->setVisible(is_text_like);
+    text_box_->setTitle(is_clock ? "Clock" : "Text");
+    txt_content_->setPlaceholderText(is_clock ? "H:i:s" : "Enter text…");
+    if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2);
+    if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2);
     if (auto *text_form = qobject_cast<QFormLayout *>(text_box_->layout())) {
         if (auto *label = text_form->labelForField(spn_text_fit_min_scale_))
-            label->setVisible(is_text && layer_->text_overflow_mode == 2);
+            label->setVisible(is_text_like && layer_->text_overflow_mode == 2);
     }
-    rect_box_->setVisible(is_text || is_rect || is_image);
-    rect_box_->setTitle(is_text ? "Text Box" : (is_image ? "Image Size" : "Rectangle"));
+    rect_box_->setVisible(is_text_like || is_rect || is_image);
+    rect_box_->setTitle(is_text_like ? (is_clock ? "Clock Box" : "Text Box") : (is_image ? "Image Size" : "Rectangle"));
     spn_rect_corner_->setVisible(is_rect);
     btn_fill_color_->setVisible(is_rect);
-    btn_kf_text_color_->setVisible(is_text);
+    btn_kf_text_color_->setVisible(is_text_like);
     btn_kf_fill_color_->setVisible(is_rect);
     if (row_fill_color_) row_fill_color_->setVisible(is_rect);
     if (outline_box_) outline_box_->setVisible(supports_outline);
@@ -4138,7 +4212,7 @@ void PropertiesPanel::load_values()
     set_kf_icon(btn_kf_shadow_color_, any_keyframe_at_time({&layer_->shadow_color_a, &layer_->shadow_color_r,
                                                             &layer_->shadow_color_g, &layer_->shadow_color_b}, lt));
 
-    txt_content_->setPlainText(QString::fromStdString(layer_->text_content));
+    txt_content_->setPlainText(QString::fromStdString(is_clock ? layer_->clock_format : layer_->text_content));
     int fi = cmb_font_->findText(QString::fromStdString(layer_->font_family));
     if (fi >= 0) cmb_font_->setCurrentIndex(fi);
     spn_size_->setValue(layer_->font_size);

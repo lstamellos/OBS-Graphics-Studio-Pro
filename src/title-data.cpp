@@ -301,6 +301,7 @@ static json layer_to_json(const Layer &l)
     j["opacity"]  = aprop_to_json(l.opacity);
 
     j["text_content"]  = l.text_content;
+    j["clock_format"]  = l.clock_format;
     j["expose_text"]   = l.expose_text;
     j["font_family"]   = l.font_family;
     j["font_size"]     = l.font_size;
@@ -381,6 +382,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     if (j.contains("opacity"))  l->opacity  = aprop_from_json(j["opacity"],  "opacity");
 
     l->text_content  = j.value("text_content",  "Title");
+    l->clock_format  = j.value("clock_format",  "H:i:s");
     l->expose_text   = j.value("expose_text",   false);
     l->font_family   = j.value("font_family",   "Helvetica Neue");
     l->font_size     = j.value("font_size",     72);
