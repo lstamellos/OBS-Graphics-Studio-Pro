@@ -1,4 +1,4 @@
-# build-windows.ps1 - Windows build helper for obs-titler-pro.
+# build-windows.ps1 - Windows build helper for obs-graphics-studio-pro.
 # Validates prerequisites, configures CMake, builds, and installs the plugin.
 
 param(
@@ -37,7 +37,7 @@ if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
     }
 }
 
-$PluginName = "obs-titler-pro"
+$PluginName = "obs-graphics-studio-pro"
 $VcpkgToolchain = Join-Path $VcpkgDir "scripts\buildsystems\vcpkg.cmake"
 $ObsArchDir = if ($Architecture -eq "Win32" -or $Architecture -eq "x86") { "32bit" } else { "64bit" }
 $PluginDllName = "$PluginName.dll"
@@ -45,7 +45,7 @@ $ObsPluginRoot = Join-Path $InstallRoot $PluginName
 $ObsPluginBin = Join-Path $ObsPluginRoot "bin\$ObsArchDir"
 $ObsPluginData = Join-Path $ObsPluginRoot "data\locale"
 
-Write-Host "=== Starting OBS Titler Pro build process ==="
+Write-Host "=== Starting OBS Graphics Studio Pro build process ==="
 
 
 # Guard against accidental duplicate out-of-class bodies in large UI
@@ -186,7 +186,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 5. Build the Plugin
-Write-Host "`n=== Building OBS Titler Pro ==="
+Write-Host "`n=== Building OBS Graphics Studio Pro ==="
 & cmake --build $BuildDir --config Release
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Build failed."
@@ -251,7 +251,7 @@ if (Test-Path $StagedData) {
 
 # 7. Copy runtime DLL dependencies next to the plugin binary.
 # A plugin can compile and still fail to load in OBS if Qt/Cairo/Pango DLLs are
-# not beside obs-titler-pro.dll, so copy every vcpkg runtime DLL rather than trying
+# not beside obs-graphics-studio-pro.dll, so copy every vcpkg runtime DLL rather than trying
 # to maintain a fragile hand-written dependency list.
 Write-Host "`n=== Copying runtime DLL dependencies ==="
 $RuntimeDllDirs = @()
@@ -280,7 +280,7 @@ foreach ($RuntimeDllDir in ($RuntimeDllDirs | Select-Object -Unique)) {
 }
 
 if ($CopiedCount -eq 0) {
-    Write-Warning "No vcpkg runtime DLLs were copied. If OBS says obs-titler-pro failed to load, check for missing Qt/Cairo/Pango DLLs in $ObsPluginBin."
+    Write-Warning "No vcpkg runtime DLLs were copied. If OBS says obs-graphics-studio-pro failed to load, check for missing Qt/Cairo/Pango DLLs in $ObsPluginBin."
 } else {
     Write-Host "Copied $CopiedCount runtime DLL dependencies."
 }
@@ -298,11 +298,11 @@ foreach ($Dll in $ExpectedDlls) {
     }
 }
 if ($MissingExpectedDlls.Count -gt 0) {
-    Write-Warning "The install folder is missing expected DLL(s): $($MissingExpectedDlls -join ', '). OBS may report that obs-titler-pro failed to load."
+    Write-Warning "The install folder is missing expected DLL(s): $($MissingExpectedDlls -join ', '). OBS may report that obs-graphics-studio-pro failed to load."
 }
 
 Write-Host "`nInstalled OBS plugin layout:"
 Write-Host "  $ObsPluginRoot"
 Write-Host "  $ObsPluginBin\$PluginDllName"
 Write-Host "  $ObsPluginData\en-US.ini"
-Write-Host "`n=== OBS Titler Pro built and installed successfully! ==="
+Write-Host "`n=== OBS Graphics Studio Pro built and installed successfully! ==="
