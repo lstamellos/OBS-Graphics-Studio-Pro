@@ -3424,6 +3424,12 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_fill_color_ = mk_kf_button("Toggle fill color keyframe");
     row_fill_color_ = with_kf(btn_fill_color_, btn_kf_fill_color_);
     rfl->addRow("Color:", row_fill_color_);
+    spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
+    spn_outline_width_->setToolTip("Outline width for text and shape layers.");
+    btn_outline_color_ = new QPushButton(inner);
+    row_outline_color_ = btn_outline_color_;
+    rfl->addRow("Outline Width:", spn_outline_width_);
+    rfl->addRow("Outline Color:", row_outline_color_);
     vl->addWidget(rect_box_);
     make_collapsible(rect_box_);
 
@@ -4045,6 +4051,10 @@ void PropertiesPanel::load_values()
             label->setVisible(is_rect);
         if (auto *label = form->labelForField(row_fill_color_))
             label->setVisible(is_rect);
+        if (auto *label = form->labelForField(spn_outline_width_))
+            label->setVisible(supports_outline);
+        if (auto *label = form->labelForField(row_outline_color_))
+            label->setVisible(supports_outline);
     }
     image_box_->setVisible(is_image);
 
