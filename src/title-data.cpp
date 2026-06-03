@@ -95,28 +95,51 @@ double AnimatedProperty::ease(double x, EasingType e,
     case EasingType::EaseInOut:
         return x < 0.5 ? 2.0 * x * x : -1.0 + (4.0 - 2.0 * x) * x;
     case EasingType::Bezier:
-        return bezierY(x, cy1, cy2);
+        return bezierY(x, cx1, cy1, cx2, cy2);
     default: return x;
     }
     (void)cx1; (void)cx2; // used by full bezier solver if needed
 }
 
-/* Approximate cubic bezier Y given X (Newton-Raphson, 4 iters) */
-double AnimatedProperty::bezierY(double x, float cy1, float cy2)
+/* Cubic-bezier Y for a given X using P0=(0,0), P3=(1,1). */
+double AnimatedProperty::bezierY(double x, float cx1, float cy1,
+                                 float cx2, float cy2)
 {
-    // Simplified: solve t from Bx(t) = x then evaluate By(t)
-    // Using standard CSS cubic-bezier with fixed P0=(0,0) P3=(1,1)
+    auto sample = [](double t, double p1, double p2) {
+        double inv = 1.0 - t;
+        return 3.0 * inv * inv * t * p1 +
+               3.0 * inv * t * t * p2 +
+               t * t * t;
+    };
+    auto slope = [](double t, double p1, double p2) {
+        double inv = 1.0 - t;
+        return 3.0 * inv * inv * p1 +
+               6.0 * inv * t * (p2 - p1) +
+               3.0 * t * t * (1.0 - p2);
+    };
+
+    x = std::clamp(x, 0.0, 1.0);
+    cx1 = std::clamp(cx1, 0.0f, 1.0f);
+    cx2 = std::clamp(cx2, 0.0f, 1.0f);
+
     double t = x;
     for (int i = 0; i < 8; ++i) {
-        double t2 = t * t, t3 = t2 * t;
-        double bx = 3.0*t*(1-t)*(1-t)*0.333 + 3.0*t2*(1-t)*0.667 + t3;
-        // simple linear bezier for now
-        (void)bx;
-        break;
+        double dx = sample(t, cx1, cx2) - x;
+        double d = slope(t, cx1, cx2);
+        if (std::abs(dx) < 1e-6) break;
+        if (std::abs(d) < 1e-6) break;
+        t = std::clamp(t - dx / d, 0.0, 1.0);
     }
-    // Fallback: use ease-in-out when bezier not fully solved
-    return t < 0.5 ? 2.0*t*t : -1.0 + (4.0 - 2.0*t)*t;
-    (void)cy1; (void)cy2;
+
+    double lo = 0.0, hi = 1.0;
+    for (int i = 0; i < 12; ++i) {
+        double bx = sample(t, cx1, cx2);
+        if (std::abs(bx - x) < 1e-6) break;
+        if (bx < x) lo = t; else hi = t;
+        t = 0.5 * (lo + hi);
+    }
+
+    return std::clamp(sample(t, cy1, cy2), 0.0, 1.0);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -301,14 +324,23 @@ static json layer_to_json(const Layer &l)
     j["opacity"]  = aprop_to_json(l.opacity);
 
     j["text_content"]  = l.text_content;
+    j["clock_format"]  = l.clock_format;
     j["expose_text"]   = l.expose_text;
     j["font_family"]   = l.font_family;
     j["font_size"]     = l.font_size;
     j["font_bold"]     = l.font_bold;
     j["font_italic"]   = l.font_italic;
+    j["text_style"]    = l.text_style;
+    j["text_overflow_mode"] = l.text_overflow_mode;
+    j["text_fit_min_scale"] = l.text_fit_min_scale;
     j["text_color"]    = l.text_color;
+    j["outline_enabled"] = l.outline_enabled;
     j["stroke_color"]  = l.stroke_color;
     j["stroke_width"]  = l.stroke_width;
+    j["outline_opacity"] = l.outline_opacity;
+    j["outline_join_style"] = l.outline_join_style;
+    j["outline_on_front"] = l.outline_on_front;
+    j["outline_antialias"] = l.outline_antialias;
     j["align_h"]       = l.align_h;
     j["align_v"]       = l.align_v;
 
@@ -373,14 +405,23 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     if (j.contains("opacity"))  l->opacity  = aprop_from_json(j["opacity"],  "opacity");
 
     l->text_content  = j.value("text_content",  "Title");
+    l->clock_format  = j.value("clock_format",  "H:i:s");
     l->expose_text   = j.value("expose_text",   false);
     l->font_family   = j.value("font_family",   "Helvetica Neue");
     l->font_size     = j.value("font_size",     72);
     l->font_bold     = j.value("font_bold",     false);
     l->font_italic   = j.value("font_italic",   false);
+    l->text_style    = j.value("text_style",    0);
+    l->text_overflow_mode = j.value("text_overflow_mode", 0);
+    l->text_fit_min_scale = j.value("text_fit_min_scale", 0.5f);
     l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
-    l->stroke_color  = j.value("stroke_color",  (uint32_t)0x00000000);
+    l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
     l->stroke_width  = j.value("stroke_width",  0.0f);
+    l->outline_enabled = j.value("outline_enabled", l->stroke_width > 0.0f);
+    l->outline_opacity = j.value("outline_opacity", 1.0f);
+    l->outline_join_style = j.value("outline_join_style", 1);
+    l->outline_on_front = j.value("outline_on_front", true);
+    l->outline_antialias = j.value("outline_antialias", true);
     l->align_h       = j.value("align_h",       1);
     l->align_v       = j.value("align_v",       1);
 
@@ -522,7 +563,7 @@ void TitleDataStore::save() const
     if (f.is_open())
         f << root.dump(2);
     else
-        blog(LOG_WARNING, "[OBS Titler Pro] Failed to save titles.json");
+        blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to save titles.json");
 }
 
 bool TitleDataStore::export_title(const std::string &id, const std::string &path, std::string *error) const
@@ -534,7 +575,7 @@ bool TitleDataStore::export_title(const std::string &id, const std::string &path
     }
 
     json root;
-    root["format"] = "obs-titler-pro-title-template";
+    root["format"] = "obs-graphics-studio-pro-title-template";
     root["version"] = 1;
     root["title"] = title_to_json(*t);
 
@@ -602,7 +643,7 @@ void TitleDataStore::load()
 {
     std::ifstream f(data_path());
     if (!f.is_open()) {
-        blog(LOG_INFO, "[OBS Titler Pro] No saved titles found, starting fresh.");
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] No saved titles found, starting fresh.");
         return;
     }
 
@@ -611,8 +652,8 @@ void TitleDataStore::load()
         f >> root;
         for (auto &jt : root)
             titles_.push_back(title_from_json(jt, false));
-        blog(LOG_INFO, "[OBS Titler Pro] Loaded %zu title(s).", titles_.size());
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] Loaded %zu title(s).", titles_.size());
     } catch (std::exception &e) {
-        blog(LOG_WARNING, "[OBS Titler Pro] Failed to parse titles.json: %s", e.what());
+        blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to parse titles.json: %s", e.what());
     }
 }
