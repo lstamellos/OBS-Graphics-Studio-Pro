@@ -38,6 +38,7 @@
 #include <QFontDatabase>
 #include <QFontMetrics>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSizePolicy>
 #include <QFrame>
 #include <QSignalBlocker>
@@ -3294,45 +3295,63 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 {
     setWidgetResizable(true);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setStyleSheet("QScrollArea{background:#1a1a1a;border:none;}");
+    setStyleSheet("QScrollArea{background:#151515;border:none;}");
 
     auto *inner = new QWidget(this);
-    inner->setStyleSheet("background:#1a1a1a;");
+    inner->setStyleSheet("background:#151515;");
     auto *vl = new QVBoxLayout(inner);
-    vl->setContentsMargins(6, 6, 6, 6);
-    vl->setSpacing(8);
+    vl->setContentsMargins(4, 4, 4, 4);
+    vl->setSpacing(3);
 
     /* Header */
     auto *hdr = new QLabel("PROPERTIES", inner);
-    hdr->setStyleSheet("color:#666;font-size:9px;font-weight:bold;");
+    hdr->setStyleSheet("color:#888;font-size:9px;font-weight:bold;letter-spacing:1px;padding:2px 4px;");
     vl->addWidget(hdr);
+
+    const QString section_style =
+        "QGroupBox{color:#d0d0d0;background:#1b1b1b;border:1px solid #303030;"
+        "border-radius:2px;margin-top:16px;font-size:10px;font-weight:bold;}"
+        "QGroupBox::title{subcontrol-origin:margin;left:6px;top:2px;padding:0 4px;}"
+        "QGroupBox::indicator{width:10px;height:10px;margin-left:2px;}"
+        "QLabel{color:#a9a9a9;font-size:10px;}";
+    const QString control_style =
+        "QDoubleSpinBox,QSpinBox,QComboBox,QLineEdit,QTextEdit{color:#ddd;background:#252525;"
+        "border:1px solid #363636;border-radius:2px;padding:1px 3px;selection-background-color:#4b6ea8;}"
+        "QDoubleSpinBox:focus,QSpinBox:focus,QComboBox:focus,QLineEdit:focus,QTextEdit:focus{border-color:#5a78ad;}";
+
+    auto style_form = [](QFormLayout *form) {
+        form->setContentsMargins(6, 5, 6, 6);
+        form->setHorizontalSpacing(6);
+        form->setVerticalSpacing(2);
+        form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        form->setFormAlignment(Qt::AlignTop);
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    };
 
     /* ── Transform ── */
     auto *tform_box = new QGroupBox("Transform", inner);
-    tform_box->setStyleSheet(
-        "QGroupBox{color:#aaa;border:1px solid #333;border-radius:3px;margin-top:6px;"
-        "  font-size:10px;padding-top:4px;}"
-        "QGroupBox::title{subcontrol-origin:margin;left:8px;}");
+    tform_box->setStyleSheet(section_style);
     auto *tfl = new QFormLayout(tform_box);
-    tfl->setSpacing(3);
+    style_form(tfl);
 
     auto mk_dspin = [&](double lo, double hi, double step) {
         auto *s = new QDoubleSpinBox(inner);
         s->setRange(lo, hi);
         s->setSingleStep(step);
         s->setDecimals(1);
-        s->setStyleSheet("QDoubleSpinBox{color:#ccc;background:#2a2a2a;border:none;"
-                         "border-radius:2px;padding:2px;}");
+        s->setFixedHeight(22);
+        s->setStyleSheet(control_style);
         return s;
     };
 
     auto mk_kf_button = [&](const QString &tip) {
-        auto *b = new QPushButton("◇", inner);
-        b->setFixedWidth(24);
+        auto *b = new QPushButton("⏱", inner);
+        b->setFixedSize(22, 22);
         b->setToolTip(tip);
-        b->setStyleSheet("QPushButton{color:#f0a020;background:#2a2a2a;border:none;"
-                         "border-radius:3px;padding:2px;font-weight:bold;}"
-                         "QPushButton:hover{background:#3a3a3a;color:#ffd27a;}");
+        b->setStyleSheet("QPushButton{color:#8c8c8c;background:transparent;border:none;border-radius:2px;"
+                         "padding:0;font-size:12px;}"
+                         "QPushButton:hover{background:#303030;color:#ffd27a;}"
+                         "QPushButton[active=\"true\"]{color:#f0a020;background:#2b2518;}");
         return b;
     };
 
@@ -3342,25 +3361,35 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         hl->setContentsMargins(0, 0, 0, 0);
         hl->setSpacing(3);
         field->setSizePolicy(QSizePolicy::Expanding, field->sizePolicy().verticalPolicy());
-        hl->addWidget(field, 1);
         hl->addWidget(button);
+        hl->addWidget(field, 1);
         return row;
     };
 
-    auto make_collapsible = [](QGroupBox *box) {
+    auto make_collapsible = [this](QGroupBox *box) {
         box->setCheckable(true);
         box->setChecked(true);
-        QObject::connect(box, &QGroupBox::toggled, box, [box](bool expanded) {
-            if (!box->layout()) return;
-            for (int i = 0; i < box->layout()->count(); ++i) {
-                if (auto *item = box->layout()->itemAt(i)) {
-                    if (auto *widget = item->widget()) widget->setVisible(expanded);
-                    if (auto *child_layout = item->layout()) {
-                        for (int j = 0; j < child_layout->count(); ++j)
-                            if (auto *child = child_layout->itemAt(j)->widget()) child->setVisible(expanded);
+        QObject::connect(box, &QGroupBox::toggled, box, [this, box](bool expanded) {
+            const int scroll = verticalScrollBar() ? verticalScrollBar()->value() : 0;
+            if (auto *form = qobject_cast<QFormLayout *>(box->layout())) {
+                for (int row = 0; row < form->rowCount(); ++row) {
+                    for (auto role : {QFormLayout::LabelRole, QFormLayout::FieldRole}) {
+                        if (auto *item = form->itemAt(row, role)) {
+                            if (auto *widget = item->widget()) widget->setVisible(expanded);
+                            if (auto *child_layout = item->layout()) {
+                                for (int j = 0; j < child_layout->count(); ++j)
+                                    if (auto *child = child_layout->itemAt(j)->widget()) child->setVisible(expanded);
+                            }
+                        }
                     }
                 }
+            } else if (box->layout()) {
+                for (int i = 0; i < box->layout()->count(); ++i)
+                    if (auto *widget = box->layout()->itemAt(i)->widget()) widget->setVisible(expanded);
             }
+            QTimer::singleShot(0, this, [this, scroll]() {
+                if (verticalScrollBar()) verticalScrollBar()->setValue(scroll);
+            });
         });
     };
 
@@ -3378,7 +3407,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     for (const QString &label : QStringList{"Top Left", "Top Center", "Top Right", "Center Left", "Center", "Center Right", "Bottom Left", "Bottom Center", "Bottom Right"})
         cmb_anchor_->addItem(label);
     cmb_anchor_->setToolTip("Change layer anchor/origin while preserving visual position.");
-    cmb_anchor_->setStyleSheet("QComboBox{color:#ccc;background:#2a2a2a;border:none;border-radius:2px;padding:2px;}");
+    cmb_anchor_->setFixedHeight(22);
+    cmb_anchor_->setStyleSheet(control_style);
 
     btn_kf_pos_x_ = mk_kf_button("Toggle X position keyframe");
     btn_kf_pos_y_ = mk_kf_button("Toggle Y position keyframe");
@@ -3398,29 +3428,28 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     /* ── Text ── */
     text_box_ = new QGroupBox("Text", inner);
-    text_box_->setStyleSheet(tform_box->styleSheet());
+    text_box_->setStyleSheet(section_style);
     auto *txfl = new QFormLayout(text_box_);
-    txfl->setSpacing(3);
+    style_form(txfl);
 
     txt_content_ = new QTextEdit(inner);
     txt_content_->setAcceptRichText(false);
     txt_content_->setMinimumHeight(96);
     txt_content_->setPlaceholderText("Enter text…");
-    txt_content_->setStyleSheet("QTextEdit{color:#fff;background:#2a2a2a;border:none;"
-                                "border-radius:2px;padding:4px;}");
+    txt_content_->setStyleSheet(control_style);
 
     /* Font family combo populated from system */
     cmb_font_ = new QComboBox(inner);
-    cmb_font_->setStyleSheet("QComboBox{color:#ccc;background:#2a2a2a;border:none;"
-                             "border-radius:2px;padding:2px;}");
+    cmb_font_->setFixedHeight(22);
+    cmb_font_->setStyleSheet(control_style);
     QFontDatabase fdb;
     for (auto &fam : fdb.families())
         cmb_font_->addItem(fam, fam);
 
     spn_size_ = new QSpinBox(inner);
     spn_size_->setRange(6, 500);
-    spn_size_->setStyleSheet("QSpinBox{color:#ccc;background:#2a2a2a;border:none;"
-                             "border-radius:2px;padding:2px;}");
+    spn_size_->setFixedHeight(22);
+    spn_size_->setStyleSheet(control_style);
 
     chk_bold_   = new QCheckBox("Bold",   inner);
     chk_italic_ = new QCheckBox("Italic", inner);
@@ -3436,13 +3465,15 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_text_style_->addItem("Superscript", 3);
     cmb_text_style_->addItem("Subscript", 4);
     cmb_text_style_->setToolTip("Visual text style. Source text is preserved for editing and export.");
-    cmb_text_style_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_text_style_->setFixedHeight(22);
+    cmb_text_style_->setStyleSheet(control_style);
     cmb_text_overflow_ = new QComboBox(inner);
     cmb_text_overflow_->addItem("Wrap", 0);
     cmb_text_overflow_->addItem("Clip", 1);
     cmb_text_overflow_->addItem("Horizontal Fit", 2);
     cmb_text_overflow_->setToolTip("Controls how text behaves when it exceeds the text box width.");
-    cmb_text_overflow_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_text_overflow_->setFixedHeight(22);
+    cmb_text_overflow_->setStyleSheet(control_style);
     spn_text_fit_min_scale_ = mk_dspin(0.05, 1.0, 0.05);
     spn_text_fit_min_scale_->setDecimals(2);
     spn_text_fit_min_scale_->setToolTip("Minimum horizontal scale for Horizontal Fit mode.");
@@ -3462,19 +3493,21 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     txfl->addRow("Style:",  bi_widget);
     txfl->addRow("Text Style:", cmb_text_style_);
     txfl->addRow("Overflow:", cmb_text_overflow_);
-    txfl->addRow("Min Fit Scale:", spn_text_fit_min_scale_);
+    txfl->addRow("  Min Fit Scale:", spn_text_fit_min_scale_);
     txfl->addRow("", lbl_text_fit_scale_);
     cmb_text_align_ = new QComboBox(inner);
     cmb_text_align_->addItem("Align Left", 0);
     cmb_text_align_->addItem("Align Center", 1);
     cmb_text_align_->addItem("Align Right", 2);
-    cmb_text_align_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_text_align_->setFixedHeight(22);
+    cmb_text_align_->setStyleSheet(control_style);
     txfl->addRow("Alignment:", cmb_text_align_);
     cmb_text_valign_ = new QComboBox(inner);
     cmb_text_valign_->addItem("Align Top", 0);
     cmb_text_valign_->addItem("Align Middle", 1);
     cmb_text_valign_->addItem("Align Bottom", 2);
-    cmb_text_valign_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_text_valign_->setFixedHeight(22);
+    cmb_text_valign_->setStyleSheet(control_style);
     txfl->addRow("Vertical Align:", cmb_text_valign_);
     txfl->addRow("Live edit:", chk_expose_text_);
     btn_text_color_ = new QPushButton(inner);
@@ -3485,9 +3518,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     /* ── Rectangle ── */
     rect_box_ = new QGroupBox("Rectangle", inner);
-    rect_box_->setStyleSheet(tform_box->styleSheet());
+    rect_box_->setStyleSheet(section_style);
     auto *rfl = new QFormLayout(rect_box_);
-    rfl->setSpacing(3);
+    style_form(rfl);
     spn_layer_w_ = mk_dspin(1.0, 9999.0, 10.0);
     spn_layer_h_ = mk_dspin(1.0, 9999.0, 10.0);
     spn_rect_corner_ = mk_dspin(0.0, 1000.0, 1.0);
@@ -3510,10 +3543,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     make_collapsible(rect_box_);
 
     /* ── Outline ── */
-    outline_box_ = new QGroupBox("Outline", inner);
-    outline_box_->setStyleSheet(tform_box->styleSheet());
+    outline_box_ = new QGroupBox("Stroke", inner);
+    outline_box_->setStyleSheet(section_style);
     auto *outline_form = new QFormLayout(outline_box_);
-    outline_form->setSpacing(3);
+    style_form(outline_form);
     chk_outline_enabled_ = new QCheckBox("Enable outline", inner);
     chk_outline_enabled_->setStyleSheet("color:#ccc;");
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
@@ -3526,31 +3559,33 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_outline_join_->addItem("Miter", 0);
     cmb_outline_join_->addItem("Round", 1);
     cmb_outline_join_->addItem("Bevel", 2);
-    cmb_outline_join_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_outline_join_->setFixedHeight(22);
+    cmb_outline_join_->setStyleSheet(control_style);
     cmb_outline_position_ = new QComboBox(inner);
     cmb_outline_position_->addItem("Back", 0);
     cmb_outline_position_->addItem("Front", 1);
-    cmb_outline_position_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_outline_position_->setFixedHeight(22);
+    cmb_outline_position_->setStyleSheet(control_style);
     chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
     chk_outline_antialias_->setStyleSheet("color:#ccc;");
     outline_form->addRow("", chk_outline_enabled_);
     outline_form->addRow("Color:", btn_outline_color_);
     outline_form->addRow("Thickness:", spn_outline_width_);
     outline_form->addRow("Opacity:", spn_outline_opacity_);
-    outline_form->addRow("Join:", cmb_outline_join_);
-    outline_form->addRow("Position:", cmb_outline_position_);
+    outline_form->addRow("  Join:", cmb_outline_join_);
+    outline_form->addRow("  Position:", cmb_outline_position_);
     outline_form->addRow("", chk_outline_antialias_);
     vl->addWidget(outline_box_);
     make_collapsible(outline_box_);
 
     /* ── Image ── */
     image_box_ = new QGroupBox("Image", inner);
-    image_box_->setStyleSheet(tform_box->styleSheet());
+    image_box_->setStyleSheet(section_style);
     auto *image_form = new QFormLayout(image_box_);
-    image_form->setSpacing(3);
+    style_form(image_form);
     edit_image_path_ = new QLineEdit(inner);
-    edit_image_path_->setStyleSheet("QLineEdit{color:#fff;background:#2a2a2a;border:none;"
-                                    "border-radius:2px;padding:2px;}");
+    edit_image_path_->setFixedHeight(22);
+    edit_image_path_->setStyleSheet(control_style);
     btn_pick_image_ = new QPushButton("Browse…", inner);
     btn_pick_image_->setStyleSheet("QPushButton{color:#fff;background:#0078d4;border:none;"
                                      "border-radius:3px;padding:3px 8px;}");
@@ -3564,15 +3599,16 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     vl->addWidget(image_box_);
     make_collapsible(image_box_);
 
-    shadow_box_ = new QGroupBox("Drop Shadow", inner);
-    shadow_box_->setStyleSheet(tform_box->styleSheet());
+    shadow_box_ = new QGroupBox("Effects · Drop Shadow", inner);
+    shadow_box_->setStyleSheet(section_style);
     auto *sfl = new QFormLayout(shadow_box_);
-    sfl->setSpacing(3);
+    style_form(sfl);
     chk_shadow_enabled_ = new QCheckBox("Enable shadow", inner);
     chk_shadow_enabled_->setStyleSheet("color:#ccc;");
     cmb_shadow_preset_ = new QComboBox(inner);
     cmb_shadow_preset_->addItems({"Custom", "Soft", "Medium", "Strong", "Broadcast"});
-    cmb_shadow_preset_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_shadow_preset_->setFixedHeight(22);
+    cmb_shadow_preset_->setStyleSheet(control_style);
     btn_shadow_color_ = new QPushButton(inner);
     spn_shadow_opacity_ = mk_dspin(0.0, 1.0, 0.05);
     spn_shadow_opacity_->setDecimals(2);
@@ -3588,7 +3624,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_shadow_blur_ = mk_kf_button("Toggle shadow blur keyframe");
     btn_kf_shadow_spread_ = mk_kf_button("Toggle shadow spread keyframe");
     sfl->addRow("", with_kf(chk_shadow_enabled_, btn_kf_shadow_enabled_));
-    sfl->addRow("Preset:", with_kf(cmb_shadow_preset_, mk_kf_button("Toggle shadow preset keyframe")));
+    sfl->addRow("  Preset:", cmb_shadow_preset_);
     sfl->addRow("Color:", with_kf(btn_shadow_color_, btn_kf_shadow_color_));
     sfl->addRow("Opacity:", with_kf(spn_shadow_opacity_, btn_kf_shadow_opacity_));
     sfl->addRow("Distance:", with_kf(spn_shadow_distance_, btn_kf_shadow_distance_));
@@ -4068,6 +4104,7 @@ void PropertiesPanel::load_values()
         rect_box_->setVisible(false);
         image_box_->setVisible(false);
         if (outline_box_) outline_box_->setVisible(false);
+        if (shadow_box_) shadow_box_->setVisible(false);
         spn_px_->setValue(0.0);
         spn_py_->setValue(0.0);
         spn_rot_->setValue(0.0);
@@ -4110,7 +4147,7 @@ void PropertiesPanel::load_values()
         for (auto *b : {btn_kf_pos_x_, btn_kf_pos_y_, btn_kf_rotation_, btn_kf_opacity_,
                         btn_kf_origin_x_, btn_kf_origin_y_, btn_kf_width_, btn_kf_height_,
                         btn_kf_text_color_, btn_kf_fill_color_})
-            if (b) b->setText("◇");
+            if (b) { b->setText("⏱"); b->setProperty("active", false); b->style()->unpolish(b); b->style()->polish(b); }
         loading_values_ = false;
         return;
     }
@@ -4131,7 +4168,7 @@ void PropertiesPanel::load_values()
             label->setVisible(is_text_like && layer_->text_overflow_mode == 2);
     }
     rect_box_->setVisible(is_text_like || is_rect || is_image);
-    rect_box_->setTitle(is_text_like ? (is_clock ? "Clock Box" : "Text Box") : (is_image ? "Image Size" : "Rectangle"));
+    rect_box_->setTitle(is_text_like ? (is_clock ? "Clock Box" : "Text Box") : (is_image ? "Image Size" : "Shape · Geometry / Fill"));
     spn_rect_corner_->setVisible(is_rect);
     btn_fill_color_->setVisible(is_rect);
     btn_kf_text_color_->setVisible(is_text_like);
@@ -4149,6 +4186,7 @@ void PropertiesPanel::load_values()
             label->setVisible(supports_outline);
     }
     image_box_->setVisible(is_image);
+    if (shadow_box_) shadow_box_->setVisible(true);
 
     double lt = std::clamp(playhead_ - layer_->in_time, 0.0,
                            std::max(0.0, layer_->out_time - layer_->in_time));
@@ -4191,8 +4229,10 @@ void PropertiesPanel::load_values()
 
     auto set_kf_icon = [](QPushButton *button, bool active) {
         if (!button) return;
-        button->setText(active ? "◆" : "◇");
+        button->setText(active ? "◆" : "⏱");
         button->setProperty("active", active);
+        button->style()->unpolish(button);
+        button->style()->polish(button);
     };
     set_kf_icon(btn_kf_pos_x_, keyframe_at_time(layer_->pos_x, lt));
     set_kf_icon(btn_kf_pos_y_, keyframe_at_time(layer_->pos_y, lt));
