@@ -23,7 +23,9 @@
 #include <QString>
 #include <QPointF>
 #include <QPainter>
+#include <QPainterPath>
 #include <QFont>
+#include <QFontMetrics>
 #include <QColor>
 
 #include <memory>
@@ -159,6 +161,16 @@ static uint32_t eval_fill_color(const Layer &layer, double t)
            (uint32_t)eval_channel(layer.fill_color_b, layer.fill_color & 0xFF, t);
 }
 
+static uint32_t eval_outline_color(const Layer &layer, double)
+{
+    return layer.stroke_color;
+}
+
+static double eval_outline_width(const Layer &layer, double)
+{
+    return std::max(0.0f, layer.stroke_width);
+}
+
 static bool eval_shadow_enabled(const Layer &layer, double t)
 {
     return layer.shadow_enabled_prop.is_animated()
@@ -210,6 +222,29 @@ static QPointF shadow_offset(const Layer &layer, double t)
 /* ══════════════════════════════════════════════════════════════════
  *  Cairo rendering
  * ══════════════════════════════════════════════════════════════════ */
+
+static QPainterPath aligned_text_path(const QFont &font, const QRectF &rect,
+                                      Qt::Alignment alignment, const QString &text)
+{
+    QFontMetricsF metrics(font);
+    QRectF bounds = metrics.boundingRect(text);
+    double x = rect.left();
+    if (alignment & Qt::AlignHCenter)
+        x = rect.left() + (rect.width() - bounds.width()) / 2.0;
+    else if (alignment & Qt::AlignRight)
+        x = rect.right() - bounds.width();
+
+    double y = rect.top() - bounds.top();
+    if (alignment & Qt::AlignVCenter)
+        y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+    else if (alignment & Qt::AlignBottom)
+        y = rect.bottom() - bounds.height() - bounds.top();
+
+    QPainterPath path;
+    path.addText(QPointF(x, y), font, text);
+    return path;
+}
+
 static QColor color_from_argb(uint32_t argb)
 {
     return QColor((argb >> 16) & 0xFF,
@@ -277,10 +312,20 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
         }
     }
 
+    QString text = QString::fromStdString(layer.text_content);
+    double outline_width = eval_outline_width(layer, t);
+    QColor outline = color_from_argb(eval_outline_color(layer, t));
     QColor fill = color_from_argb(eval_text_color(layer, t));
     fill.setAlphaF(std::clamp((double)fill.alphaF(), 0.0, 1.0));
-    painter.setPen(fill);
-    painter.drawText(text_rect, align, QString::fromStdString(layer.text_content));
+    if (outline_width > 0.0 && outline.alpha() > 0) {
+        QPainterPath text_path = aligned_text_path(font, text_rect, align, text);
+        painter.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(fill);
+        painter.drawPath(text_path);
+    } else {
+        painter.setPen(fill);
+        painter.drawText(text_rect, align, text);
+    }
     painter.end();
 
     cairo_surface_t *text_surface = cairo_image_surface_create_for_data(
@@ -366,7 +411,18 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
         cairo_rectangle(cr, 0, 0, w, h);
     }
     cairo_set_source_rgba(cr, fr, fg, fb, fa * alpha);
-    cairo_fill(cr);
+    double outline_width = eval_outline_width(layer, t);
+    uint32_t outline_color = eval_outline_color(layer, t);
+    if (outline_width > 0.0 && ((outline_color >> 24) & 0xFF) > 0) {
+        cairo_fill_preserve(cr);
+        double sr, sg, sb, sa;
+        unpack_color(outline_color, sr, sg, sb, sa);
+        cairo_set_line_width(cr, outline_width);
+        cairo_set_source_rgba(cr, sr, sg, sb, sa * alpha);
+        cairo_stroke(cr);
+    } else {
+        cairo_fill(cr);
+    }
     cairo_restore(cr);
 }
 
@@ -454,6 +510,7 @@ static void render_title_frame(TitleSourceData *data,
             render_layer_text(cr, *layer, lt, (int)w, (int)h);
             break;
         case LayerType::SolidRect:
+        case LayerType::Shape:
             render_layer_rect(cr, *layer, lt);
             break;
         case LayerType::Image:

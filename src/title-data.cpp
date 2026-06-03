@@ -379,7 +379,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     l->font_bold     = j.value("font_bold",     false);
     l->font_italic   = j.value("font_italic",   false);
     l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
-    l->stroke_color  = j.value("stroke_color",  (uint32_t)0x00000000);
+    l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
     l->stroke_width  = j.value("stroke_width",  0.0f);
     l->align_h       = j.value("align_h",       1);
     l->align_v       = j.value("align_v",       1);

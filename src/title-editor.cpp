@@ -11,6 +11,7 @@
 #include <obs-module.h>
 
 #include <QPainter>
+#include <QPainterPath>
 #include <QImage>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -34,6 +35,7 @@
 #include <QColorDialog>
 #include <QFileDialog>
 #include <QFontDatabase>
+#include <QFontMetrics>
 #include <QScrollArea>
 #include <QFrame>
 #include <QSignalBlocker>
@@ -107,7 +109,7 @@ static QColor layer_color(const Layer &layer, int row)
 {
     if (layer.type == LayerType::Text)
         return QColor(0xb4, 0x5a, 0xa0);
-    if (layer.type == LayerType::SolidRect)
+    if (layer.type == LayerType::SolidRect || layer.type == LayerType::Shape)
         return QColor(0x4f, 0x8f, 0x58);
     if (layer.type == LayerType::Image)
         return QColor(0x7d, 0x8b, 0x7f);
@@ -135,6 +137,29 @@ static QIcon obs_icon(QWidget *widget, const QStringList &names, QStyle::Standar
         if (!icon.isNull()) return icon;
     }
     return widget ? widget->style()->standardIcon(fallback) : QIcon();
+}
+
+
+static QPainterPath aligned_text_path(const QFont &font, const QRectF &rect,
+                                      Qt::Alignment alignment, const QString &text)
+{
+    QFontMetricsF metrics(font);
+    QRectF bounds = metrics.boundingRect(text);
+    double x = rect.left();
+    if (alignment & Qt::AlignHCenter)
+        x = rect.left() + (rect.width() - bounds.width()) / 2.0;
+    else if (alignment & Qt::AlignRight)
+        x = rect.right() - bounds.width();
+
+    double y = rect.top() - bounds.top();
+    if (alignment & Qt::AlignVCenter)
+        y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+    else if (alignment & Qt::AlignBottom)
+        y = rect.bottom() - bounds.height() - bounds.top();
+
+    QPainterPath path;
+    path.addText(QPointF(x, y), font, text);
+    return path;
 }
 
 static QColor color_from_argb(uint32_t argb)
@@ -232,6 +257,16 @@ static uint32_t eval_fill_color(const Layer &layer, double t)
            ((uint32_t)eval_channel(layer.fill_color_r, (layer.fill_color >> 16) & 0xFF, t) << 16) |
            ((uint32_t)eval_channel(layer.fill_color_g, (layer.fill_color >> 8) & 0xFF, t) << 8) |
            (uint32_t)eval_channel(layer.fill_color_b, layer.fill_color & 0xFF, t);
+}
+
+static uint32_t eval_outline_color(const Layer &layer, double)
+{
+    return layer.stroke_color;
+}
+
+static double eval_outline_width(const Layer &layer, double)
+{
+    return std::max(0.0f, layer.stroke_width);
 }
 
 static bool eval_shadow_enabled(const Layer &layer, double t)
@@ -657,6 +692,37 @@ void TitleEditor::build_ui()
                 on_title_modified();
             });
 
+    connect(layers_, &LayerStack::clone_layer_requested,
+            this, [this](const std::string &lid) {
+                if (!title_) return;
+                auto original = title_->find_layer(lid);
+                if (!original) return;
+                auto clone = clone_layer_for_insert(*original, true);
+                std::string clone_id = clone->id;
+                insert_layer_above(lid, clone);
+                select_after_layer_list_mutation(clone_id);
+                on_title_modified();
+            });
+
+    connect(layers_, &LayerStack::copy_layer_requested,
+            this, [this](const std::string &lid) {
+                if (!title_) return;
+                auto layer = title_->find_layer(lid);
+                if (!layer) return;
+                layer_clipboard_ = std::make_shared<Layer>(*layer);
+                if (layers_) layers_->set_layer_clipboard_available(true);
+            });
+
+    connect(layers_, &LayerStack::paste_layer_requested,
+            this, [this](const std::string &anchor_id) {
+                if (!title_ || !layer_clipboard_) return;
+                auto pasted = clone_layer_for_insert(*layer_clipboard_, true);
+                std::string pasted_id = pasted->id;
+                insert_layer_above(anchor_id, pasted);
+                select_after_layer_list_mutation(pasted_id);
+                on_title_modified();
+            });
+
     connect(layers_, &LayerStack::delete_layer_requested,
             this, [this](const std::string &lid) {
                 if (!title_) return;
@@ -1012,6 +1078,7 @@ void TitleEditor::open_title(const std::string &tid)
     update_title_bar();
     canvas_->set_title(title_);
     layers_->set_title(title_);
+    layers_->set_layer_clipboard_available(layer_clipboard_ != nullptr);
     timeline_->set_title(title_);
     props_->set_title(title_);
     title_props_->set_title(title_);
@@ -1038,6 +1105,39 @@ std::shared_ptr<Title> TitleEditor::clone_title(const Title &title) const
         if (layer) clone->layers.push_back(std::make_shared<Layer>(*layer));
     }
     return clone;
+}
+
+
+std::shared_ptr<Layer> TitleEditor::clone_layer_for_insert(const Layer &layer, bool suffix_name) const
+{
+    auto clone = std::make_shared<Layer>(layer);
+    clone->id = TitleDataStore::make_uuid();
+    if (suffix_name)
+        clone->name = clone->name.empty() ? "Layer (copy)" : clone->name + " (copy)";
+    if (!clone->parent_id.empty() && (!title_ || !title_->find_layer(clone->parent_id)))
+        clone->parent_id.clear();
+    return clone;
+}
+
+void TitleEditor::insert_layer_above(const std::string &anchor_id, std::shared_ptr<Layer> layer)
+{
+    if (!title_ || !layer) return;
+
+    auto it = std::find_if(title_->layers.begin(), title_->layers.end(),
+                           [&](const auto &candidate) {
+                               return candidate && candidate->id == anchor_id;
+                           });
+    if (it == title_->layers.end())
+        title_->layers.push_back(layer);
+    else
+        title_->layers.insert(it + 1, layer);
+}
+
+void TitleEditor::select_after_layer_list_mutation(const std::string &layer_id)
+{
+    layers_->refresh();
+    timeline_->set_title(title_);
+    on_layer_selected(layer_id);
 }
 
 void TitleEditor::push_undo_snapshot()
@@ -1582,7 +1682,7 @@ void CanvasPreview::render_to_pixmap()
 
         QRectF box = layer_local_rect(*layer);
 
-        if (layer->type == LayerType::SolidRect) {
+        if (layer->type == LayerType::SolidRect || layer->type == LayerType::Shape) {
             QColor fc = color_from_argb(eval_fill_color(*layer, lt));
             if (eval_shadow_enabled(*layer, lt)) {
                 QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
@@ -1604,13 +1704,17 @@ void CanvasPreview::render_to_pixmap()
                     else p.drawRect(shadow_box);
                 }
             }
-            if (layer->corner_radius > 0) {
-                p.setBrush(fc);
+            double outline_width = eval_outline_width(*layer, lt);
+            QColor outline = color_from_argb(eval_outline_color(*layer, lt));
+            p.setBrush(fc);
+            if (outline_width > 0.0 && outline.alpha() > 0)
+                p.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::SquareCap, Qt::RoundJoin));
+            else
                 p.setPen(Qt::NoPen);
+            if (layer->corner_radius > 0)
                 p.drawRoundedRect(box, layer->corner_radius, layer->corner_radius);
-            } else {
-                p.fillRect(box, fc);
-            }
+            else
+                p.drawRect(box);
         }
 
         if (layer->type == LayerType::Image) {
@@ -1656,14 +1760,24 @@ void CanvasPreview::render_to_pixmap()
                             p.drawText(box.translated(off + QPointF(dx, dy)), sha | sva, QString::fromStdString(layer->text_content));
                 }
             }
-            p.setPen(tc);
             Qt::AlignmentFlag ha = Qt::AlignHCenter;
             if (layer->align_h == 0) ha = Qt::AlignLeft;
             if (layer->align_h == 2) ha = Qt::AlignRight;
             Qt::AlignmentFlag va = Qt::AlignVCenter;
             if (layer->align_v == 0) va = Qt::AlignTop;
             if (layer->align_v == 2) va = Qt::AlignBottom;
-            p.drawText(box, ha | va, QString::fromStdString(layer->text_content));
+            QString text = QString::fromStdString(layer->text_content);
+            double outline_width = eval_outline_width(*layer, lt);
+            QColor outline = color_from_argb(eval_outline_color(*layer, lt));
+            if (outline_width > 0.0 && outline.alpha() > 0) {
+                QPainterPath text_path = aligned_text_path(f, box, ha | va, text);
+                p.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                p.setBrush(tc);
+                p.drawPath(text_path);
+            } else {
+                p.setPen(tc);
+                p.drawText(box, ha | va, text);
+            }
         }
 
         p.restore();
@@ -1905,6 +2019,9 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
             this, &LayerStack::on_selection_changed);
     connect(list_->model(), &QAbstractItemModel::rowsMoved,
             this, [this]() { sync_order_from_list(); });
+    list_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(list_, &QListWidget::customContextMenuRequested,
+            this, &LayerStack::show_layer_context_menu);
 }
 
 void LayerStack::set_title(std::shared_ptr<Title> t)
@@ -1913,6 +2030,11 @@ void LayerStack::set_title(std::shared_ptr<Title> t)
 }
 
 void LayerStack::refresh() { populate(); }
+
+void LayerStack::set_layer_clipboard_available(bool available)
+{
+    layer_clipboard_available_ = available;
+}
 
 void LayerStack::sync_order_from_list()
 {
@@ -2146,6 +2268,36 @@ void LayerStack::on_delete()
 {
     std::string id = selected_id();
     if (!id.empty()) emit delete_layer_requested(id);
+}
+
+void LayerStack::show_layer_context_menu(const QPoint &pos)
+{
+    if (!title_) return;
+
+    QListWidgetItem *item = list_->itemAt(pos);
+    std::string id = item ? item->data(Qt::UserRole).toString().toStdString() : selected_id();
+    if (id.empty()) return;
+
+    if (item && item->data(Qt::UserRole + 1).toString() == "layer")
+        list_->setCurrentItem(item);
+
+    QMenu menu(this);
+    menu.setStyleSheet("QMenu{color:#ddd;background:#252525;border:1px solid #3a3a3a;}"
+                       "QMenu::item{padding:5px 22px;}"
+                       "QMenu::item:selected{background:#3b4f64;}"
+                       "QMenu::item:disabled{color:#666;}");
+    QAction *clone = menu.addAction("Clone Layer");
+    QAction *copy = menu.addAction("Copy Layer");
+    QAction *paste = menu.addAction("Paste Layer");
+    paste->setEnabled(layer_clipboard_available_);
+    menu.addSeparator();
+    QAction *del = menu.addAction("Delete Layer");
+
+    QAction *chosen = menu.exec(list_->viewport()->mapToGlobal(pos));
+    if (chosen == clone) emit clone_layer_requested(id);
+    else if (chosen == copy) emit copy_layer_requested(id);
+    else if (chosen == paste) emit paste_layer_requested(id);
+    else if (chosen == del) emit delete_layer_requested(id);
 }
 
 void LayerStack::on_item_changed(QListWidgetItem *item)
@@ -3013,6 +3165,12 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_fill_color_ = mk_kf_button("Toggle fill color keyframe");
     row_fill_color_ = with_kf(btn_fill_color_, btn_kf_fill_color_);
     rfl->addRow("Color:", row_fill_color_);
+    spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
+    spn_outline_width_->setToolTip("Outline width for text and shape layers.");
+    btn_outline_color_ = new QPushButton(inner);
+    row_outline_color_ = btn_outline_color_;
+    rfl->addRow("Outline Width:", spn_outline_width_);
+    rfl->addRow("Outline Color:", row_outline_color_);
     vl->addWidget(rect_box_);
 
     /* ── Image ── */
@@ -3287,6 +3445,21 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                 style_color_button(btn_fill_color_, layer_->fill_color);
                 emit_change();
             });
+    connect(spn_outline_width_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) {
+                if (can_edit()) { layer_->stroke_width = (float)v; emit_change(); }
+            });
+    connect(btn_outline_color_, &QPushButton::clicked,
+            this, [this, can_edit, emit_change]() {
+                if (!can_edit()) return;
+                QColor initial = color_from_argb(layer_->stroke_color);
+                QColor picked = QColorDialog::getColor(initial, this, "Outline Color",
+                                                        QColorDialog::ShowAlphaChannel);
+                if (!picked.isValid()) return;
+                layer_->stroke_color = argb_from_color(picked);
+                style_color_button(btn_outline_color_, layer_->stroke_color);
+                emit_change();
+            });
     connect(edit_image_path_, &QLineEdit::textChanged,
             this, [this, can_edit, emit_change](const QString &path){
                 if (can_edit()) { layer_->image_path = path.toStdString(); emit_change(); }
@@ -3490,6 +3663,8 @@ void PropertiesPanel::load_values()
         edit_image_path_->clear();
         style_color_button(btn_text_color_, 0xFFFFFFFF);
         style_color_button(btn_fill_color_, 0xFF222222);
+        if (btn_outline_color_) style_color_button(btn_outline_color_, 0xFF000000);
+        if (spn_outline_width_) spn_outline_width_->setValue(0.0);
         spn_layer_w_->setValue(1.0);
         spn_layer_h_->setValue(1.0);
         spn_rect_corner_->setValue(0.0);
@@ -3515,8 +3690,9 @@ void PropertiesPanel::load_values()
     }
 
     const bool is_text = layer_->type == LayerType::Text;
-    const bool is_rect = layer_->type == LayerType::SolidRect;
+    const bool is_rect = layer_->type == LayerType::SolidRect || layer_->type == LayerType::Shape;
     const bool is_image = layer_->type == LayerType::Image;
+    const bool supports_outline = is_text || is_rect;
     text_box_->setVisible(is_text);
     rect_box_->setVisible(is_text || is_rect || is_image);
     rect_box_->setTitle(is_text ? "Text Box" : (is_image ? "Image Size" : "Rectangle"));
@@ -3525,11 +3701,17 @@ void PropertiesPanel::load_values()
     btn_kf_text_color_->setVisible(is_text);
     btn_kf_fill_color_->setVisible(is_rect);
     if (row_fill_color_) row_fill_color_->setVisible(is_rect);
+    if (spn_outline_width_) spn_outline_width_->setVisible(supports_outline);
+    if (row_outline_color_) row_outline_color_->setVisible(supports_outline);
     if (auto *form = qobject_cast<QFormLayout *>(rect_box_->layout())) {
         if (auto *label = form->labelForField(spn_rect_corner_))
             label->setVisible(is_rect);
         if (auto *label = form->labelForField(row_fill_color_))
             label->setVisible(is_rect);
+        if (auto *label = form->labelForField(spn_outline_width_))
+            label->setVisible(supports_outline);
+        if (auto *label = form->labelForField(row_outline_color_))
+            label->setVisible(supports_outline);
     }
     image_box_->setVisible(is_image);
 
@@ -3558,6 +3740,8 @@ void PropertiesPanel::load_values()
     chk_lock_aspect_->setChecked(layer_->lock_aspect_ratio);
     style_color_button(btn_text_color_, eval_text_color(*layer_, lt));
     style_color_button(btn_fill_color_, eval_fill_color(*layer_, lt));
+    if (spn_outline_width_) spn_outline_width_->setValue(eval_outline_width(*layer_, lt));
+    if (btn_outline_color_) style_color_button(btn_outline_color_, eval_outline_color(*layer_, lt));
 
     auto set_kf_icon = [](QPushButton *button, bool active) {
         if (!button) return;
