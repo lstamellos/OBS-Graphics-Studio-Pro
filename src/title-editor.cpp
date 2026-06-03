@@ -3424,6 +3424,12 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_fill_color_ = mk_kf_button("Toggle fill color keyframe");
     row_fill_color_ = with_kf(btn_fill_color_, btn_kf_fill_color_);
     rfl->addRow("Color:", row_fill_color_);
+    spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
+    spn_outline_width_->setToolTip("Outline width for text and shape layers.");
+    btn_outline_color_ = new QPushButton(inner);
+    row_outline_color_ = btn_outline_color_;
+    rfl->addRow("Outline Width:", spn_outline_width_);
+    rfl->addRow("Outline Color:", row_outline_color_);
     vl->addWidget(rect_box_);
     make_collapsible(rect_box_);
 
@@ -3460,6 +3466,39 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     ofl->addRow("", with_kf(chk_outline_antialias_, mk_kf_button("Toggle outline antialias keyframe")));
     vl->addWidget(outline_box_);
     make_collapsible(outline_box_);
+
+    /* ── Outline ── */
+    outline_box_ = new QGroupBox("Outline", inner);
+    outline_box_->setStyleSheet(tform_box->styleSheet());
+    auto *ofl = new QFormLayout(outline_box_);
+    ofl->setSpacing(3);
+    chk_outline_enabled_ = new QCheckBox("Enable outline", inner);
+    chk_outline_enabled_->setStyleSheet("color:#ccc;");
+    spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
+    spn_outline_width_->setToolTip("Outline thickness in pixels. Shape outlines are centered on the perimeter.");
+    btn_outline_color_ = new QPushButton(inner);
+    row_outline_color_ = btn_outline_color_;
+    spn_outline_opacity_ = mk_dspin(0.0, 1.0, 0.05);
+    spn_outline_opacity_->setDecimals(2);
+    cmb_outline_join_ = new QComboBox(inner);
+    cmb_outline_join_->addItem("Miter", 0);
+    cmb_outline_join_->addItem("Round", 1);
+    cmb_outline_join_->addItem("Bevel", 2);
+    cmb_outline_join_->setStyleSheet(cmb_font_->styleSheet());
+    cmb_outline_position_ = new QComboBox(inner);
+    cmb_outline_position_->addItem("Back", 0);
+    cmb_outline_position_->addItem("Front", 1);
+    cmb_outline_position_->setStyleSheet(cmb_font_->styleSheet());
+    chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
+    chk_outline_antialias_->setStyleSheet("color:#ccc;");
+    ofl->addRow("", chk_outline_enabled_);
+    ofl->addRow("Color:", row_outline_color_);
+    ofl->addRow("Thickness:", spn_outline_width_);
+    ofl->addRow("Opacity:", spn_outline_opacity_);
+    ofl->addRow("Join:", cmb_outline_join_);
+    ofl->addRow("Position:", cmb_outline_position_);
+    ofl->addRow("", chk_outline_antialias_);
+    vl->addWidget(outline_box_);
 
     /* ── Image ── */
     image_box_ = new QGroupBox("Image", inner);
@@ -4045,6 +4084,10 @@ void PropertiesPanel::load_values()
             label->setVisible(is_rect);
         if (auto *label = form->labelForField(row_fill_color_))
             label->setVisible(is_rect);
+        if (auto *label = form->labelForField(spn_outline_width_))
+            label->setVisible(supports_outline);
+        if (auto *label = form->labelForField(row_outline_color_))
+            label->setVisible(supports_outline);
     }
     image_box_->setVisible(is_image);
 
