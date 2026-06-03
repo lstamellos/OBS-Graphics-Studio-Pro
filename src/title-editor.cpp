@@ -3335,9 +3335,12 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     auto *txfl = new QFormLayout(text_box_);
     txfl->setSpacing(3);
 
-    txt_content_ = new QLineEdit(inner);
-    txt_content_->setStyleSheet("QLineEdit{color:#fff;background:#2a2a2a;border:none;"
-                                "border-radius:2px;padding:2px;}");
+    txt_content_ = new QTextEdit(inner);
+    txt_content_->setAcceptRichText(false);
+    txt_content_->setMinimumHeight(96);
+    txt_content_->setPlaceholderText("Enter text…");
+    txt_content_->setStyleSheet("QTextEdit{color:#fff;background:#2a2a2a;border:none;"
+                                "border-radius:2px;padding:4px;}");
 
     /* Font family combo populated from system */
     cmb_font_ = new QComboBox(inner);
@@ -3399,7 +3402,13 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_text_align_->addItem("Align Center", 1);
     cmb_text_align_->addItem("Align Right", 2);
     cmb_text_align_->setStyleSheet(cmb_font_->styleSheet());
-    txfl->addRow("Alignment:", with_kf(cmb_text_align_, mk_kf_button("Toggle alignment keyframe")));
+    txfl->addRow("Alignment:", with_kf(cmb_text_align_, mk_kf_button("Toggle horizontal alignment keyframe")));
+    cmb_text_valign_ = new QComboBox(inner);
+    cmb_text_valign_->addItem("Align Top", 0);
+    cmb_text_valign_->addItem("Align Middle", 1);
+    cmb_text_valign_->addItem("Align Bottom", 2);
+    cmb_text_valign_->setStyleSheet(cmb_font_->styleSheet());
+    txfl->addRow("Vertical Align:", with_kf(cmb_text_valign_, mk_kf_button("Toggle vertical alignment keyframe")));
     txfl->addRow("Live edit:", with_kf(chk_expose_text_, mk_kf_button("Toggle live edit keyframe")));
     btn_text_color_ = new QPushButton(inner);
     btn_kf_text_color_ = mk_kf_button("Toggle text color keyframe");
@@ -3473,7 +3482,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     auto *image_form = new QFormLayout(image_box_);
     image_form->setSpacing(3);
     edit_image_path_ = new QLineEdit(inner);
-    edit_image_path_->setStyleSheet(txt_content_->styleSheet());
+    edit_image_path_->setStyleSheet("QLineEdit{color:#fff;background:#2a2a2a;border:none;"
+                                    "border-radius:2px;padding:2px;}");
     btn_pick_image_ = new QPushButton("Browse…", inner);
     btn_pick_image_->setStyleSheet("QPushButton{color:#fff;background:#0078d4;border:none;"
                                      "border-radius:3px;padding:3px 8px;}");
@@ -3577,9 +3587,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                 load_values();
                 emit_change();
             });
-    connect(txt_content_, &QLineEdit::textChanged,
-            this, [this, can_edit, emit_change](const QString &s){
-                if (can_edit()) { layer_->text_content = s.toStdString(); emit_change(); }
+    connect(txt_content_, &QTextEdit::textChanged,
+            this, [this, can_edit, emit_change]() {
+                if (can_edit()) { layer_->text_content = txt_content_->toPlainText().toStdString(); emit_change(); }
             });
     connect(cmb_font_, &QComboBox::currentTextChanged,
             this, [this, can_edit, emit_change](const QString &s){
@@ -3616,6 +3626,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     connect(cmb_text_align_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, can_edit, emit_change](int idx) {
                 if (can_edit()) { layer_->align_h = cmb_text_align_->itemData(idx).toInt(); emit_change(); }
+            });
+    connect(cmb_text_valign_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx) {
+                if (can_edit()) { layer_->align_v = cmb_text_valign_->itemData(idx).toInt(); emit_change(); }
             });
     connect(btn_text_color_, &QPushButton::clicked,
             this, [this, can_edit, local_time, emit_change]() {
@@ -4010,6 +4024,7 @@ void PropertiesPanel::load_values()
         if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setValue(0.5);
         if (lbl_text_fit_scale_) lbl_text_fit_scale_->setText("Scale: 100%");
         if (cmb_text_align_) cmb_text_align_->setCurrentIndex(1);
+        if (cmb_text_valign_) cmb_text_valign_->setCurrentIndex(1);
         if (cmb_anchor_) cmb_anchor_->setCurrentIndex(4);
         if (chk_shadow_enabled_) chk_shadow_enabled_->setChecked(false);
         if (cmb_shadow_preset_) cmb_shadow_preset_->setCurrentIndex(0);
@@ -4123,7 +4138,7 @@ void PropertiesPanel::load_values()
     set_kf_icon(btn_kf_shadow_color_, any_keyframe_at_time({&layer_->shadow_color_a, &layer_->shadow_color_r,
                                                             &layer_->shadow_color_g, &layer_->shadow_color_b}, lt));
 
-    txt_content_->setText(QString::fromStdString(layer_->text_content));
+    txt_content_->setPlainText(QString::fromStdString(layer_->text_content));
     int fi = cmb_font_->findText(QString::fromStdString(layer_->font_family));
     if (fi >= 0) cmb_font_->setCurrentIndex(fi);
     spn_size_->setValue(layer_->font_size);
@@ -4154,6 +4169,8 @@ void PropertiesPanel::load_values()
     chk_expose_text_->setChecked(layer_->expose_text);
     int ai = cmb_text_align_->findData(layer_->align_h);
     cmb_text_align_->setCurrentIndex(ai >= 0 ? ai : 1);
+    int vai = cmb_text_valign_->findData(layer_->align_v);
+    cmb_text_valign_->setCurrentIndex(vai >= 0 ? vai : 1);
 
     chk_shadow_enabled_->setChecked(eval_shadow_enabled(*layer_, lt));
     cmb_shadow_preset_->setCurrentIndex(0);

@@ -38,6 +38,7 @@
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QTextEdit>
 #include <QSpinBox>
 #include <QPointF>
 #include <QPoint>
@@ -371,7 +372,7 @@ private:
     QGroupBox       *image_box_    = nullptr;
 
     /* Text controls */
-    QLineEdit       *txt_content_  = nullptr;
+    QTextEdit       *txt_content_  = nullptr;
     QComboBox       *cmb_font_     = nullptr;
     QSpinBox        *spn_size_     = nullptr;
     QCheckBox       *chk_bold_     = nullptr;
@@ -382,6 +383,7 @@ private:
     QLabel          *lbl_text_fit_scale_ = nullptr;
     QCheckBox       *chk_expose_text_ = nullptr;
     QComboBox       *cmb_text_align_ = nullptr;
+    QComboBox       *cmb_text_valign_ = nullptr;
     QPushButton     *btn_text_color_ = nullptr;
 
     /* Text/shape outline controls */
