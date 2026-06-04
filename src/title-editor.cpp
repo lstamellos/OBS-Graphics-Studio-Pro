@@ -3170,7 +3170,7 @@ void LayerStack::populate()
         item->setData(Qt::UserRole + 1, "layer");
         item->setFlags((item->flags() | Qt::ItemIsSelectable | Qt::ItemIsEnabled |
                         Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled) & ~Qt::ItemIsUserCheckable);
-        item->setSizeHint(QSize(0, 24));
+        item->setSizeHint(QSize(0, 28));
         list_->addItem(item);
 
         QWidget *row_widget = new QWidget(list_);
@@ -3294,7 +3294,7 @@ void LayerStack::populate()
             prop_item->setData(Qt::UserRole + 2, label);
             prop_item->setFlags((prop_item->flags() | Qt::ItemIsSelectable | Qt::ItemIsEnabled) &
                                 ~(Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled | Qt::ItemIsUserCheckable));
-            prop_item->setSizeHint(QSize(0, 24));
+            prop_item->setSizeHint(QSize(0, 28));
             list_->addItem(prop_item);
 
             QWidget *prop_widget = new QWidget(list_);
@@ -3649,6 +3649,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
             p.drawPolygon(marker);
             p.setPen(QColor(0xff, 0xe0, 0x85));
             p.drawText(pause_x + 4, 22, 100, 16, Qt::AlignVCenter, obsgs_tr("OBSTitles.Pause"));
+            p.setBrush(Qt::NoBrush);
         }
     }
 
@@ -3676,6 +3677,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
             QColor bar_col = layer_color(*layer, row);
             if (sel) bar_col = bar_col.lighter(125);
             p.fillRect(x0, y + 3, x1 - x0, rowh - 6, bar_col);
+            p.setBrush(Qt::NoBrush);
             p.setPen(QColor(0x0d,0x0d,0x0d));
             p.drawRect(x0, y + 3, x1 - x0, rowh - 6);
 

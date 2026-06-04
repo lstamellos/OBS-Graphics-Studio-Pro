@@ -335,7 +335,7 @@ private:
     double x_to_time(int x) const;
     int    time_to_x(double t) const;
     int    ruler_height() const { return 72; }
-    int    row_height()   const { return 24; }
+    int    row_height()   const { return 28; }
     double snap_time(double t) const;
     void   clamp_scroll();
     void   clamp_vertical_scroll();
