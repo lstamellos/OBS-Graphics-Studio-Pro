@@ -412,6 +412,10 @@ void TitleDock::build_ui()
         if (item && item->column() == 0)
             update_live_text_select_all_state();
     });
+    connect(text_table_->horizontalHeader(), &QHeaderView::sectionMoved,
+            this, [this](int, int, int) { save_live_text_header_state(); });
+    connect(text_table_->horizontalHeader(), &QHeaderView::sectionResized,
+            this, [this](int, int, int) { save_live_text_header_state(); });
     connect(list_, &QListWidget::itemSelectionChanged,
             this, &TitleDock::on_selection_changed);
     connect(list_, &QListWidget::itemDoubleClicked,
@@ -492,6 +496,21 @@ void TitleDock::on_selection_changed()
 }
 
 
+
+void TitleDock::save_live_text_header_state()
+{
+    if (!text_table_ || text_table_->columnCount() <= 0) return;
+    live_text_header_states_[text_table_->columnCount()] = text_table_->horizontalHeader()->saveState();
+}
+
+bool TitleDock::restore_live_text_header_state()
+{
+    if (!text_table_ || text_table_->columnCount() <= 0) return false;
+    auto it = live_text_header_states_.find(text_table_->columnCount());
+    if (it == live_text_header_states_.end()) return false;
+    return text_table_->horizontalHeader()->restoreState(it->second);
+}
+
 void TitleDock::set_all_live_text_rows_checked(bool checked)
 {
     if (!text_table_) return;
@@ -550,6 +569,7 @@ void TitleDock::populate_exposed_text()
 {
     if (!text_table_) return;
     QSignalBlocker block(text_table_);
+    QSignalBlocker header_block(text_table_->horizontalHeader());
     text_table_->clear();
     text_table_->setRowCount(0);
     text_table_->setColumnCount(0);
@@ -598,8 +618,10 @@ void TitleDock::populate_exposed_text()
     }
     text_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     text_table_->horizontalHeader()->setSectionsMovable(true);
-    text_table_->resizeColumnToContents(0);
-    text_table_->resizeColumnToContents((int)exposed.size() + 1);
+    if (!restore_live_text_header_state()) {
+        text_table_->resizeColumnToContents(0);
+        text_table_->resizeColumnToContents((int)exposed.size() + 1);
+    }
 
     for (int row = 0; row < (int)title->live_text_rows.size(); ++row) {
         text_table_->setVerticalHeaderItem(row, new QTableWidgetItem(QString::number(row + 1)));

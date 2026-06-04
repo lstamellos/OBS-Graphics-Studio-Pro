@@ -24,6 +24,8 @@
 #include <QHBoxLayout>
 #include <QToolBar>
 #include <QTimer>
+#include <QByteArray>
+#include <map>
 
 class TitleEditor;
 
@@ -61,6 +63,8 @@ private:
     void populate_exposed_text();
     void set_all_live_text_rows_checked(bool checked);
     void update_live_text_select_all_state();
+    void save_live_text_header_state();
+    bool restore_live_text_header_state();
     std::string selected_id() const;
     std::shared_ptr<Title> create_template_title(const std::string &name, int template_id);
     void select_title(const std::string &id);
@@ -85,6 +89,7 @@ private:
     QToolButton *btn_row_up_ = nullptr;
     QToolButton *btn_row_down_ = nullptr;
     bool          updating_exposed_text_ = false;
+    std::map<int, QByteArray> live_text_header_states_;
     QTimer       *live_refresh_timer_ = nullptr;
     uint64_t      seen_store_revision_ = 0;
 
