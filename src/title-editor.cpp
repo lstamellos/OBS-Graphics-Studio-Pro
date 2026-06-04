@@ -165,6 +165,8 @@ static std::string editor_text_std(const char *key)
     return obsgs_tr(key).toStdString();
 }
 
+
+
 static QLocale locale_for_text_transform(const QString &text)
 {
     QLocale locale;
