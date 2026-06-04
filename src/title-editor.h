@@ -392,9 +392,15 @@ private:
     /* Text controls */
     QTextEdit       *txt_content_  = nullptr;
     QComboBox       *cmb_font_     = nullptr;
+    QComboBox       *cmb_font_style_ = nullptr;
     QSpinBox        *spn_size_     = nullptr;
     QCheckBox       *chk_bold_     = nullptr;
     QCheckBox       *chk_italic_   = nullptr;
+    QCheckBox       *chk_font_kerning_ = nullptr;
+    QDoubleSpinBox  *spn_text_leading_ = nullptr;
+    QDoubleSpinBox  *spn_char_tracking_ = nullptr;
+    QDoubleSpinBox  *spn_char_scale_x_ = nullptr;
+    QDoubleSpinBox  *spn_char_scale_y_ = nullptr;
     QComboBox       *cmb_text_style_ = nullptr;
     QComboBox       *cmb_text_overflow_ = nullptr;
     QDoubleSpinBox  *spn_text_fit_min_scale_ = nullptr;

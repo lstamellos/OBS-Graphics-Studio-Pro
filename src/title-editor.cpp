@@ -304,6 +304,50 @@ static void apply_text_style_to_font(QFont &font, const Layer &layer)
         font.setPixelSize(std::max(1, (int)std::round(font.pixelSize() * 0.65)));
 }
 
+static QFont font_for_layer(const Layer &layer)
+{
+    const QString family = QString::fromStdString(layer.font_family);
+    const QString style = QString::fromStdString(layer.font_style);
+    QFontDatabase fdb;
+    QFont font = !style.isEmpty()
+        ? fdb.font(family, style, layer.font_size)
+        : QFont(family);
+    font.setFamily(family);
+    font.setPixelSize(layer.font_size);
+    if (!style.isEmpty())
+        font.setStyleName(style);
+    font.setBold(layer.font_bold);
+    font.setItalic(layer.font_italic);
+    font.setKerning(layer.font_kerning);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, layer.char_tracking);
+    font.setStretch(std::clamp((int)std::round(layer.char_scale_x * 100.0f), 1, 4000));
+    apply_text_style_to_font(font, layer);
+    return font;
+}
+
+static QPainterPath apply_vertical_character_scale(const QPainterPath &path, const QRectF &rect,
+                                                   Qt::Alignment alignment, const Layer &layer)
+{
+    double scale_y = std::clamp((double)layer.char_scale_y, 0.1, 5.0);
+    if (std::abs(scale_y - 1.0) < 0.0001)
+        return path;
+
+    QRectF bounds = path.boundingRect();
+    double anchor_y = bounds.top();
+    if (alignment & Qt::AlignVCenter)
+        anchor_y = bounds.center().y();
+    else if (alignment & Qt::AlignBottom)
+        anchor_y = bounds.bottom();
+    else if (!bounds.isEmpty())
+        anchor_y = rect.top();
+
+    QTransform xf;
+    xf.translate(0.0, anchor_y);
+    xf.scale(1.0, scale_y);
+    xf.translate(0.0, -anchor_y);
+    return xf.map(path);
+}
+
 static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
 {
     if (layer.text_style == 3)
@@ -390,7 +434,12 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
         layout.endLayout();
     }
     double total_height = 0.0;
-    for (const auto &line : lines) total_height += line.height;
+    const double leading = std::clamp((double)layer.text_leading, -200.0, 500.0);
+    for (size_t i = 0; i < lines.size(); ++i) {
+        total_height += lines[i].height;
+        if (i + 1 < lines.size())
+            total_height += leading;
+    }
     double y = rect.top();
     if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - total_height) / 2.0;
     else if (alignment & Qt::AlignBottom) y = rect.bottom() - total_height;
@@ -399,7 +448,7 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
         if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line.width) / 2.0;
         else if (alignment & Qt::AlignRight) x = rect.right() - line.width;
         path.addText(QPointF(x, y + line.ascent), font, line.text);
-        y += line.height;
+        y += line.height + leading;
     }
     return path;
 }
@@ -453,7 +502,7 @@ static QPainterPath ticker_text_path(const QFont &font, const QRectF &rect,
 
     const QStringList lines = ticker_lines(text);
     const int line_count = std::max(1, static_cast<int>(lines.size()));
-    const double line_h = std::max(1.0, metrics.lineSpacing());
+    const double line_h = std::max(1.0, metrics.lineSpacing() + std::clamp((double)layer.text_leading, -200.0, 500.0));
     if (layer.ticker_style == 1) {
         const double hold = std::max(0.1, layer.ticker_line_hold);
         int idx = (int)std::floor(now / hold) % line_count;
@@ -805,6 +854,37 @@ static bool any_keyframe_at_time(std::initializer_list<const AnimatedProperty *>
     for (const auto *prop : props)
         if (prop && keyframe_at_time(*prop, time)) return true;
     return false;
+}
+
+static QStringList font_styles_for_family(const QString &family)
+{
+    QFontDatabase fdb;
+    QStringList styles = fdb.styles(family);
+    if (styles.isEmpty()) {
+        styles << QStringLiteral("Regular");
+    } else {
+        styles.removeDuplicates();
+        styles.sort(Qt::CaseInsensitive);
+        int regular = styles.indexOf(QStringLiteral("Regular"));
+        if (regular > 0) {
+            QString item = styles.takeAt(regular);
+            styles.prepend(item);
+        }
+    }
+    return styles;
+}
+
+static void populate_font_style_combo(QComboBox *combo, const QString &family, const QString &preferred)
+{
+    if (!combo) return;
+    QSignalBlocker blocker(combo);
+    combo->clear();
+    QStringList styles = font_styles_for_family(family);
+    for (const QString &style : styles)
+        combo->addItem(style, style);
+    int idx = preferred.isEmpty() ? -1 : combo->findText(preferred);
+    if (idx < 0) idx = combo->findText(QStringLiteral("Regular"));
+    combo->setCurrentIndex(idx >= 0 ? idx : 0);
 }
 
 static void style_color_button(QPushButton *button, uint32_t argb)
@@ -2296,11 +2376,7 @@ void CanvasPreview::render_to_pixmap()
 
         if (layer->type == LayerType::Text || layer->type == LayerType::Clock || layer->type == LayerType::Ticker) {
             QColor tc = color_from_argb(eval_text_color(*layer, lt));
-            QFont f(QString::fromStdString(layer->font_family));
-            f.setPixelSize(layer->font_size);
-            f.setBold(layer->font_bold);
-            f.setItalic(layer->font_italic);
-            apply_text_style_to_font(f, *layer);
+            QFont f = font_for_layer(*layer);
             p.setFont(f);
             QString text = display_text_for_style(*layer);
             QRectF text_box = text_rect_for_style(box, *layer);
@@ -2315,6 +2391,7 @@ void CanvasPreview::render_to_pixmap()
             QPainterPath text_path = layer->type == LayerType::Ticker
                 ? ticker_text_path(f, text_box, ha | va, text, *layer)
                 : text_overflow_path(f, text_box, ha | va, text, *layer);
+            text_path = apply_vertical_character_scale(text_path, text_box, ha | va, *layer);
             if (eval_shadow_enabled(*layer, lt)) {
                 QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
                 sc.setAlphaF(std::clamp((double)sc.alphaF() * eval_shadow_opacity(*layer, lt), 0.0, 1.0));
@@ -3940,10 +4017,17 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     /* Font family combo populated from system */
     cmb_font_ = new QComboBox(inner);
     cmb_font_->setFixedHeight(22);
+    cmb_font_->setEditable(true);
+    cmb_font_->setInsertPolicy(QComboBox::NoInsert);
+    cmb_font_->setMaxVisibleItems(24);
     cmb_font_->setStyleSheet(control_style);
     QFontDatabase fdb;
     for (auto &fam : fdb.families())
         cmb_font_->addItem(fam, fam);
+
+    cmb_font_style_ = new QComboBox(inner);
+    cmb_font_style_->setFixedHeight(22);
+    cmb_font_style_->setStyleSheet(control_style);
 
     spn_size_ = new QSpinBox(inner);
     spn_size_->setRange(6, 500);
@@ -3952,11 +4036,26 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     chk_bold_   = new QCheckBox(obsgs_tr("OBSTitles.Bold"),   inner);
     chk_italic_ = new QCheckBox(obsgs_tr("OBSTitles.Italic"), inner);
+    chk_font_kerning_ = new QCheckBox(obsgs_tr("OBSTitles.Kerning"), inner);
+    chk_font_kerning_->setToolTip(obsgs_tr("OBSTitles.KerningTooltip"));
     chk_expose_text_ = new QCheckBox(obsgs_tr("OBSTitles.ExposeInDock"), inner);
     chk_expose_text_->setToolTip(obsgs_tr("OBSTitles.ExposeInDockTooltip"));
     chk_bold_->setStyleSheet("color:#ccc;");
     chk_italic_->setStyleSheet("color:#ccc;");
+    chk_font_kerning_->setStyleSheet("color:#ccc;");
     chk_expose_text_->setStyleSheet("color:#ccc;");
+    spn_text_leading_ = mk_dspin(-200.0, 500.0, 1.0);
+    spn_text_leading_->setSuffix(" px");
+    spn_text_leading_->setToolTip(obsgs_tr("OBSTitles.LeadingTooltip"));
+    spn_char_tracking_ = mk_dspin(-100.0, 500.0, 1.0);
+    spn_char_tracking_->setSuffix(" px");
+    spn_char_tracking_->setToolTip(obsgs_tr("OBSTitles.TrackingTooltip"));
+    spn_char_scale_x_ = mk_dspin(0.1, 5.0, 0.05);
+    spn_char_scale_x_->setDecimals(2);
+    spn_char_scale_x_->setSuffix(" x");
+    spn_char_scale_y_ = mk_dspin(0.1, 5.0, 0.05);
+    spn_char_scale_y_->setDecimals(2);
+    spn_char_scale_y_->setSuffix(" x");
     cmb_text_style_ = new QComboBox(inner);
     cmb_text_style_->addItem(obsgs_tr("OBSTitles.Normal"), 0);
     cmb_text_style_->addItem(obsgs_tr("OBSTitles.AllCaps"), 1);
@@ -3995,15 +4094,13 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     txfl->addRow(obsgs_tr("OBSTitles.TextLabel"),   txt_content_);
     txfl->addRow(obsgs_tr("OBSTitles.FontLabel"),   cmb_font_);
+    txfl->addRow(obsgs_tr("OBSTitles.FontStyleLabel"), cmb_font_style_);
     txfl->addRow(obsgs_tr("OBSTitles.SizeLabel"),   spn_size_);
-    auto *bi_row = new QHBoxLayout();
-    bi_row->setContentsMargins(0, 0, 0, 0);
-    bi_row->addWidget(chk_bold_);
-    bi_row->addWidget(chk_italic_);
-    bi_row->addStretch();
-    auto *bi_widget = new QWidget(inner);
-    bi_widget->setLayout(bi_row);
-    txfl->addRow(obsgs_tr("OBSTitles.StyleLabel"),  bi_widget);
+    txfl->addRow(obsgs_tr("OBSTitles.KerningLabel"), chk_font_kerning_);
+    txfl->addRow(obsgs_tr("OBSTitles.LeadingLabel"), spn_text_leading_);
+    txfl->addRow(obsgs_tr("OBSTitles.TrackingLabel"), spn_char_tracking_);
+    txfl->addRow(obsgs_tr("OBSTitles.HorizontalScaleLabel"), spn_char_scale_x_);
+    txfl->addRow(obsgs_tr("OBSTitles.VerticalScaleLabel"), spn_char_scale_y_);
     txfl->addRow(obsgs_tr("OBSTitles.TextStyleLabel"), cmb_text_style_);
     txfl->addRow(obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
     txfl->addRow(obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
@@ -4219,7 +4316,24 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             });
     connect(cmb_font_, &QComboBox::currentTextChanged,
             this, [this, can_edit, emit_change](const QString &s){
-                if (can_edit()) { layer_->font_family = s.toStdString(); emit_change(); }
+                if (!can_edit()) return;
+                populate_font_style_combo(cmb_font_style_, s, QString::fromStdString(layer_->font_style));
+                layer_->font_family = s.toStdString();
+                layer_->font_style = cmb_font_style_->currentText().toStdString();
+                QFontDatabase fdb;
+                layer_->font_bold = fdb.bold(s, cmb_font_style_->currentText());
+                layer_->font_italic = fdb.italic(s, cmb_font_style_->currentText());
+                emit_change();
+            });
+    connect(cmb_font_style_, &QComboBox::currentTextChanged,
+            this, [this, can_edit, emit_change](const QString &s){
+                if (!can_edit()) return;
+                layer_->font_style = s.toStdString();
+                QFontDatabase fdb;
+                const QString family = QString::fromStdString(layer_->font_family);
+                layer_->font_bold = fdb.bold(family, s);
+                layer_->font_italic = fdb.italic(family, s);
+                emit_change();
             });
     connect(spn_size_, QOverload<int>::of(&QSpinBox::valueChanged),
             this, [this, can_edit, emit_change](int v){
@@ -4232,6 +4346,26 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     connect(chk_italic_, &QCheckBox::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_italic = v; emit_change(); }
+            });
+    connect(chk_font_kerning_, &QCheckBox::toggled,
+            this, [this, can_edit, emit_change](bool v){
+                if (can_edit()) { layer_->font_kerning = v; emit_change(); }
+            });
+    connect(spn_text_leading_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v){
+                if (can_edit()) { layer_->text_leading = (float)v; emit_change(); }
+            });
+    connect(spn_char_tracking_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v){
+                if (can_edit()) { layer_->char_tracking = (float)v; emit_change(); }
+            });
+    connect(spn_char_scale_x_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v){
+                if (can_edit()) { layer_->char_scale_x = (float)v; emit_change(); }
+            });
+    connect(spn_char_scale_y_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v){
+                if (can_edit()) { layer_->char_scale_y = (float)v; emit_change(); }
             });
     connect(cmb_text_style_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, can_edit, emit_change](int idx) {
@@ -4660,8 +4794,14 @@ void PropertiesPanel::load_values()
         spn_layer_h_->setValue(1.0);
         spn_rect_corner_->setValue(0.0);
         spn_size_->setValue(72);
+        if (cmb_font_style_) populate_font_style_combo(cmb_font_style_, cmb_font_->currentText(), QStringLiteral("Regular"));
         chk_bold_->setChecked(false);
         chk_italic_->setChecked(false);
+        if (chk_font_kerning_) chk_font_kerning_->setChecked(true);
+        if (spn_text_leading_) spn_text_leading_->setValue(0.0);
+        if (spn_char_tracking_) spn_char_tracking_->setValue(0.0);
+        if (spn_char_scale_x_) spn_char_scale_x_->setValue(1.0);
+        if (spn_char_scale_y_) spn_char_scale_y_->setValue(1.0);
         if (cmb_text_style_) cmb_text_style_->setCurrentIndex(0);
         if (cmb_text_overflow_) cmb_text_overflow_->setCurrentIndex(0);
         if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setValue(0.5);
@@ -4843,9 +4983,15 @@ void PropertiesPanel::load_values()
     cmb_ticker_direction_->setCurrentIndex(ticker_direction_idx >= 0 ? ticker_direction_idx : 0);
     int fi = cmb_font_->findText(QString::fromStdString(layer_->font_family));
     if (fi >= 0) cmb_font_->setCurrentIndex(fi);
+    populate_font_style_combo(cmb_font_style_, QString::fromStdString(layer_->font_family), QString::fromStdString(layer_->font_style));
     spn_size_->setValue(layer_->font_size);
     chk_bold_->setChecked(layer_->font_bold);
     chk_italic_->setChecked(layer_->font_italic);
+    if (chk_font_kerning_) chk_font_kerning_->setChecked(layer_->font_kerning);
+    if (spn_text_leading_) spn_text_leading_->setValue(layer_->text_leading);
+    if (spn_char_tracking_) spn_char_tracking_->setValue(layer_->char_tracking);
+    if (spn_char_scale_x_) spn_char_scale_x_->setValue(layer_->char_scale_x);
+    if (spn_char_scale_y_) spn_char_scale_y_->setValue(layer_->char_scale_y);
     int style_idx = cmb_text_style_->findData(layer_->text_style);
     cmb_text_style_->setCurrentIndex(style_idx >= 0 ? style_idx : 0);
     int overflow_idx = cmb_text_overflow_->findData(layer_->text_overflow_mode);
@@ -4859,11 +5005,7 @@ void PropertiesPanel::load_values()
             label->setVisible(is_fit);
     }
     if (lbl_text_fit_scale_) {
-        QFont preview_font(QString::fromStdString(layer_->font_family));
-        preview_font.setPixelSize(layer_->font_size);
-        preview_font.setBold(layer_->font_bold);
-        preview_font.setItalic(layer_->font_italic);
-        apply_text_style_to_font(preview_font, *layer_);
+        QFont preview_font = font_for_layer(*layer_);
         QRectF preview_rect(0, 0, eval_box_width(*layer_, lt), eval_box_height(*layer_, lt));
         double scale = horizontal_fit_scale(preview_font, preview_rect, display_text_for_style(*layer_), *layer_);
         lbl_text_fit_scale_->setText(obsgs_tr("OBSTitles.ScalePercentFormat").arg((int)std::round(scale * 100.0)));

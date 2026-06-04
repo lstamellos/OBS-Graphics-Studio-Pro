@@ -113,9 +113,15 @@ struct Layer {
     std::string clock_format  = "H:i:s";  /* PHP date()-style format for clock layers */
     bool        expose_text    = false;
     std::string font_family   = "Helvetica Neue";
+    std::string font_style    = "Regular";
     int         font_size     = 72;
     bool        font_bold     = false;
     bool        font_italic   = false;
+    bool        font_kerning  = true;
+    float       text_leading  = 0.0f;
+    float       char_tracking = 0.0f;
+    float       char_scale_x  = 1.0f;
+    float       char_scale_y  = 1.0f;
     int         text_style    = 0;  /* 0=normal, 1=all caps, 2=small caps, 3=superscript, 4=subscript */
     int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
     float       text_fit_min_scale = 0.5f;
