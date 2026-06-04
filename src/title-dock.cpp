@@ -236,7 +236,10 @@ void TitleDock::build_ui()
     /* ── template/title section ── */
     auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
     set_bold_label(template_lbl);
-    template_layout->addWidget(template_lbl);
+    template_header->addWidget(template_lbl);
+    template_header->addStretch();
+    template_header->addWidget(toolbar);
+    template_layout->addLayout(template_header);
 
     list_ = new QListWidget(template_section);
     list_->setAlternatingRowColors(true);
