@@ -143,7 +143,7 @@ private:
     QAction         *act_safe_guides_ = nullptr;
     QAction         *act_undo_ = nullptr;
     QAction         *act_redo_ = nullptr;
-    int              alignment_target_ = 2; /* 0=selection, 2=artboard/canvas */
+    int              alignment_target_ = 2; /* 0=selection, 1=title safe guides, 2=artboard/canvas */
     std::vector<std::shared_ptr<Title>> undo_stack_;
     int              undo_index_ = -1;
     bool             restoring_undo_ = false;

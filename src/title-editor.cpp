@@ -165,6 +165,12 @@ static std::string obs_text_std(const char *key)
     return obsgs_tr(key).toStdString();
 }
 
+static std::string obs_text_std(const char *key)
+{
+    return obsgs_tr(key).toStdString();
+}
+
+
 
 
 
@@ -1169,12 +1175,29 @@ void TitleEditor::align_selected_layers(int x_mode, int y_mode)
     if (entries.empty()) return;
     if (alignment_target_ == 0 && entries.size() < 2) return;
 
-    double target_left = alignment_target_ == 2 ? 0.0 : min_left;
-    double target_hcenter = alignment_target_ == 2 ? title_->width / 2.0 : (min_left + max_right) / 2.0;
-    double target_right = alignment_target_ == 2 ? title_->width : max_right;
-    double target_top = alignment_target_ == 2 ? 0.0 : min_top;
-    double target_vcenter = alignment_target_ == 2 ? title_->height / 2.0 : (min_top + max_bottom) / 2.0;
-    double target_bottom = alignment_target_ == 2 ? title_->height : max_bottom;
+    double target_left = min_left;
+    double target_hcenter = (min_left + max_right) / 2.0;
+    double target_right = max_right;
+    double target_top = min_top;
+    double target_vcenter = (min_top + max_bottom) / 2.0;
+    double target_bottom = max_bottom;
+
+    if (alignment_target_ == 1) {
+        constexpr double title_safe_inset = 0.10;
+        target_left = title_->width * title_safe_inset;
+        target_hcenter = title_->width / 2.0;
+        target_right = title_->width * (1.0 - title_safe_inset);
+        target_top = title_->height * title_safe_inset;
+        target_vcenter = title_->height / 2.0;
+        target_bottom = title_->height * (1.0 - title_safe_inset);
+    } else if (alignment_target_ == 2) {
+        target_left = 0.0;
+        target_hcenter = title_->width / 2.0;
+        target_right = title_->width;
+        target_top = 0.0;
+        target_vcenter = title_->height / 2.0;
+        target_bottom = title_->height;
+    }
 
     std::shared_ptr<Layer> last_layer;
     for (const auto &entry : entries) {
@@ -1253,19 +1276,26 @@ void TitleEditor::build_toolbar()
     align_target->setStyleSheet("QToolButton{color:#ddd;background:#3a3a3a;border:1px solid #666;border-radius:2px;padding:3px 8px;} QToolButton::menu-indicator{image:none;}");
     auto *align_menu = new QMenu(align_target);
     QAction *target_selection = align_menu->addAction(obsgs_tr("OBSTitles.AlignToSelection"));
-    QAction *target_key = align_menu->addAction(obsgs_tr("OBSTitles.AlignToKeyObject"));
-    target_key->setEnabled(false);
+    QAction *target_title_safe = align_menu->addAction(obsgs_tr("OBSTitles.AlignToTitleSafeGuides"));
     QAction *target_artboard = align_menu->addAction(obsgs_tr("OBSTitles.AlignToArtboard"));
     target_selection->setCheckable(true);
+    target_title_safe->setCheckable(true);
     target_artboard->setCheckable(true);
     target_artboard->setChecked(true);
-    auto update_alignment_target = [this, align_target, target_selection, target_artboard](int target) {
+    auto update_alignment_target = [this, align_target, target_selection, target_title_safe, target_artboard](int target) {
         alignment_target_ = target;
         target_selection->setChecked(target == 0);
+        target_title_safe->setChecked(target == 1);
         target_artboard->setChecked(target == 2);
-        align_target->setToolTip(target == 0 ? obsgs_tr("OBSTitles.AlignToSelection") : obsgs_tr("OBSTitles.AlignToArtboard"));
+        QString tooltip = obsgs_tr("OBSTitles.AlignToArtboard");
+        if (target == 0)
+            tooltip = obsgs_tr("OBSTitles.AlignToSelection");
+        else if (target == 1)
+            tooltip = obsgs_tr("OBSTitles.AlignToTitleSafeGuides");
+        align_target->setToolTip(tooltip);
     };
     connect(target_selection, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(0); });
+    connect(target_title_safe, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(1); });
     connect(target_artboard, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(2); });
     align_target->setMenu(align_menu);
     toolbar_->addWidget(align_target);
