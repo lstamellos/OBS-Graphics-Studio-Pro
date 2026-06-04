@@ -383,7 +383,6 @@ private:
     QComboBox      *cmb_playback_mode_ = nullptr;
     QComboBox      *cmb_loop_type_ = nullptr;
     QSpinBox       *spn_pause_frame_ = nullptr;
-    QDoubleSpinBox *spn_pause_time_ = nullptr;
     QDoubleSpinBox *spn_duration_ = nullptr;
     QDoubleSpinBox *spn_loop_start_ = nullptr;
     QDoubleSpinBox *spn_loop_end_ = nullptr;

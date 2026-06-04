@@ -3641,7 +3641,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
         if (title_->playback_mode == 2) {
             int pause_x = time_to_x(std::clamp(title_->pause_time, 0.0, dur));
             p.setPen(QPen(QColor(0xff, 0xc8, 0x32), 2));
-            p.drawLine(pause_x, 12, pause_x, H);
+            p.drawLine(pause_x, 12, pause_x, rh);
             p.setBrush(QColor(0xff, 0xc8, 0x32));
             p.setPen(Qt::NoPen);
             QPolygon marker;
@@ -4185,13 +4185,6 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     spn_pause_frame_->setToolTip(obsgs_tr("OBSTitles.PauseFrameTooltip"));
     fl->addRow(obsgs_tr("OBSTitles.PauseFrameLabel"), spn_pause_frame_);
 
-    spn_pause_time_ = new QDoubleSpinBox(this);
-    spn_pause_time_->setRange(0.0, 3600.0);
-    spn_pause_time_->setSingleStep(obs_frame_duration());
-    spn_pause_time_->setDecimals(3);
-    spn_pause_time_->setSuffix(" s");
-    spn_pause_time_->setToolTip(obsgs_tr("OBSTitles.PauseTimecodeTooltip"));
-    fl->addRow(obsgs_tr("OBSTitles.PauseTimecodeLabel"), spn_pause_time_);
 
     spn_duration_ = new QDoubleSpinBox(this);
     spn_duration_->setRange(0.1, 3600.0);
@@ -4241,13 +4234,6 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 emit title_changed();
             });
 
-    connect(spn_pause_time_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this](double v) {
-                if (!title_ || loading_values_) return;
-                title_->pause_time = std::clamp(v, 0.0, title_->duration);
-                load_values();
-                emit title_changed();
-            });
 
     connect(spn_duration_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double v) {
@@ -4306,9 +4292,6 @@ void TitlePropertiesPanel::load_values()
     spn_loop_end_->setMaximum(duration);
     spn_loop_start_->setValue(std::clamp(loop_start, 0.0, duration));
     spn_loop_end_->setValue(std::clamp(loop_end, std::clamp(loop_start, 0.0, duration), duration));
-    spn_pause_time_->setMaximum(duration);
-    spn_pause_time_->setSingleStep(obs_frame_duration());
-    spn_pause_time_->setValue(pause_time);
     spn_pause_frame_->setMaximum(std::max(0, (int)std::round(duration / obs_frame_duration())));
     spn_pause_frame_->setValue((int)std::round(pause_time / obs_frame_duration()));
 
@@ -4323,8 +4306,6 @@ void TitlePropertiesPanel::load_values()
     if (form) if (auto *label = qobject_cast<QWidget *>(form->labelForField(spn_loop_end_))) label->setVisible(show_loop);
     spn_pause_frame_->setVisible(show_pause);
     if (form) if (auto *label = qobject_cast<QWidget *>(form->labelForField(spn_pause_frame_))) label->setVisible(show_pause);
-    spn_pause_time_->setVisible(show_pause);
-    if (form) if (auto *label = qobject_cast<QWidget *>(form->labelForField(spn_pause_time_))) label->setVisible(show_pause);
     loading_values_ = false;
 }
 
