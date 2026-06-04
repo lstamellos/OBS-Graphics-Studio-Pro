@@ -78,7 +78,6 @@ private:
     QToolButton *btn_rename_ = nullptr;
     QToolButton *btn_del_    = nullptr;
     QToolButton *btn_export_ = nullptr;
-    QToolButton *btn_import_ = nullptr;
     QToolButton *btn_edit_   = nullptr;
     QToolButton *btn_scene_  = nullptr;
     QLabel       *status_lbl_ = nullptr;

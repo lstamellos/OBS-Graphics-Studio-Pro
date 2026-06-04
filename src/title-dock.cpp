@@ -420,8 +420,6 @@ void TitleDock::build_ui()
 
     btn_add_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Add"), obs_icon("add.svg"),
                                          obsgs_tr("OBSTitles.AddTooltip"));
-    btn_import_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Import"), obs_icon("import.svg"),
-                                            obsgs_tr("OBSTitles.ImportTooltip"));
     btn_dup_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Duplicate"), obs_icon("duplicate.svg"),
                                          obsgs_tr("OBSTitles.Duplicate"));
     btn_del_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Delete"), obs_icon("delete.svg"),
@@ -436,7 +434,6 @@ void TitleDock::build_ui()
                                            obsgs_tr("OBSTitles.AddToSceneTooltip"));
 
     template_toolbar->addWidget(btn_add_);
-    template_toolbar->addWidget(btn_import_);
     template_toolbar->addSeparator();
     template_toolbar->addWidget(btn_dup_);
     template_toolbar->addWidget(btn_del_);
@@ -531,6 +528,7 @@ void TitleDock::build_ui()
     auto *add_menu = new QMenu(btn_add_);
     add_menu->addAction(obsgs_tr("OBSTitles.AddBlankTitle"), this, &TitleDock::on_add);
     add_menu->addAction(obsgs_tr("OBSTitles.AddFromTemplatesLibrary"), this, &TitleDock::on_add_from_templates_library);
+    add_menu->addAction(obsgs_tr("OBSTitles.Import"), this, &TitleDock::on_import);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
     btn_add_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
@@ -539,7 +537,6 @@ void TitleDock::build_ui()
     connect(btn_rename_, &QToolButton::clicked, this, &TitleDock::on_rename);
     connect(btn_del_,   &QToolButton::clicked, this, &TitleDock::on_delete);
     connect(btn_export_, &QToolButton::clicked, this, &TitleDock::on_export);
-    connect(btn_import_, &QToolButton::clicked, this, &TitleDock::on_import);
     connect(btn_edit_,  &QToolButton::clicked, this, &TitleDock::on_edit);
     connect(btn_scene_, &QToolButton::clicked, this, &TitleDock::on_add_to_scene);
     connect(btn_add_text_row_, &QToolButton::clicked, this, &TitleDock::on_add_live_text_row);
@@ -1220,20 +1217,21 @@ void TitleDock::on_add()
 
 void TitleDock::on_add_from_templates_library()
 {
-    QDialog dialog(this);
-    dialog.setWindowTitle(obsgs_tr("OBSTitles.TemplatesLibrary"));
-    dialog.setModal(true);
-    dialog.resize(520, 360);
+    auto *window = new QDialog(this);
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->setWindowTitle(obsgs_tr("OBSTitles.TemplatesLibrary"));
+    window->setModal(false);
+    window->resize(520, 360);
 
-    auto *layout = new QVBoxLayout(&dialog);
+    auto *layout = new QVBoxLayout(window);
     layout->setContentsMargins(12, 12, 12, 12);
-    layout->setSpacing(obs_layout_spacing(&dialog));
+    layout->setSpacing(obs_layout_spacing(window));
 
-    auto *intro = new QLabel(obsgs_tr("OBSTitles.TemplatesLibraryPrompt"), &dialog);
+    auto *intro = new QLabel(obsgs_tr("OBSTitles.TemplatesLibraryPrompt"), window);
     intro->setWordWrap(true);
     layout->addWidget(intro);
 
-    auto *templates = new QListWidget(&dialog);
+    auto *templates = new QListWidget(window);
     templates->setSelectionMode(QAbstractItemView::SingleSelection);
     for (const auto &entry : template_library_entries) {
         auto *item = new QListWidgetItem(obsgs_tr(entry.name_key));
@@ -1243,7 +1241,7 @@ void TitleDock::on_add_from_templates_library()
     }
     layout->addWidget(templates, 1);
 
-    auto *description = new QLabel(&dialog);
+    auto *description = new QLabel(window);
     description->setWordWrap(true);
     description->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
     description->setMinimumHeight(64);
@@ -1258,32 +1256,36 @@ void TitleDock::on_add_from_templates_library()
         const auto *entry = template_library_entry_by_id(item->data(Qt::UserRole).toInt());
         description->setText(entry ? obsgs_tr(entry->description_key) : QString());
     };
-    QObject::connect(templates, &QListWidget::currentItemChanged, &dialog,
+    QObject::connect(templates, &QListWidget::currentItemChanged, window,
                      [update_description](QListWidgetItem *, QListWidgetItem *) { update_description(); });
-    QObject::connect(templates, &QListWidget::itemDoubleClicked, &dialog,
-                     [&dialog](QListWidgetItem *) { dialog.accept(); });
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, &dialog);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    auto add_selected_template = [this, window, templates]() {
+        auto *selected = templates->currentItem();
+        if (!selected)
+            return;
+
+        const auto *entry = template_library_entry_by_id(selected->data(Qt::UserRole).toInt());
+        if (!entry)
+            return;
+
+        window->close();
+        create_title_from_template(obs_text_std(entry->default_name_key), entry->id);
+    };
+    QObject::connect(templates, &QListWidget::itemDoubleClicked, window,
+                     [add_selected_template](QListWidgetItem *) { add_selected_template(); });
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, window);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, window, add_selected_template);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, window, &QDialog::close);
     layout->addWidget(buttons);
 
     if (templates->count() > 0)
         templates->setCurrentRow(0);
     update_description();
 
-    if (dialog.exec() != QDialog::Accepted)
-        return;
-
-    auto *selected = templates->currentItem();
-    if (!selected)
-        return;
-
-    const auto *entry = template_library_entry_by_id(selected->data(Qt::UserRole).toInt());
-    if (!entry)
-        return;
-
-    create_title_from_template(obs_text_std(entry->default_name_key), entry->id);
+    window->show();
+    window->raise();
+    window->activateWindow();
 }
 
 void TitleDock::on_duplicate()
