@@ -1019,6 +1019,53 @@ static void render_title_frame(TitleSourceData *data,
     data->dirty = false;
 }
 
+QImage render_title_to_image(const Title &title, double t)
+{
+    const int w = std::max(1, title.width);
+    const int h = std::max(1, title.height);
+    QImage image(w, h, QImage::Format_ARGB32_Premultiplied);
+
+    cairo_surface_t *surface = cairo_image_surface_create_for_data(
+        image.bits(), CAIRO_FORMAT_ARGB32, w, h, image.bytesPerLine());
+    cairo_t *cr = cairo_create(surface);
+
+    double br, bg, bb, ba;
+    unpack_color(title.bg_color, br, bg, bb, ba);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_set_source_rgba(cr, br, bg, bb, ba);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+    const double clamped_time = std::clamp(t, 0.0, std::max(0.0, title.duration));
+    for (auto &layer : title.layers) {
+        if (!layer || !layer->visible) continue;
+        if (clamped_time < layer->in_time || clamped_time > layer->out_time) continue;
+        const double lt = clamped_time - layer->in_time;
+
+        switch (layer->type) {
+        case LayerType::Text:
+        case LayerType::Clock:
+        case LayerType::Ticker:
+            render_layer_text(cr, *layer, lt, w, h);
+            break;
+        case LayerType::SolidRect:
+        case LayerType::Shape:
+            render_layer_rect(cr, *layer, lt);
+            break;
+        case LayerType::Image:
+            render_layer_image(cr, *layer, lt);
+            break;
+        default:
+            break;
+        }
+    }
+
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+    cairo_surface_destroy(surface);
+    return image;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  *  OBS source callbacks
  * ══════════════════════════════════════════════════════════════════ */
