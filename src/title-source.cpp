@@ -106,6 +106,7 @@ struct TitleSourceData {
     std::chrono::steady_clock::time_point last_tick;
     std::chrono::steady_clock::time_point last_clock_refresh;
     bool        first_tick   = true;
+    bool        waiting_for_cue = true;
 
     /* GPU texture */
     gs_texture_t *texture    = nullptr;
@@ -1035,6 +1036,11 @@ static void *source_create(obs_data_t *settings, obs_source_t *source)
     data->speed     = (float)obs_data_get_double(settings, PROP_SPEED);
     data->last_tick = std::chrono::steady_clock::now();
     data->last_clock_refresh = data->last_tick;
+    if (auto title = TitleDataStore::instance().get_title(data->title_id))
+        data->seen_cue_revision = title->cue_revision;
+    data->playing = false;
+    data->waiting_for_cue = true;
+    data->dirty = true;
     return data;
 }
 
@@ -1055,7 +1061,13 @@ static void source_update(void *priv, obs_data_t *settings)
     data->speed    = (float)obs_data_get_double(settings, PROP_SPEED);
     data->playhead = 0.0;
     data->playback_reverse = false;
-    data->playing = true;
+    data->cue_phase = TitleSourceData::CuePhase::FreeRun;
+    data->playing = false;
+    data->waiting_for_cue = true;
+    if (auto title = TitleDataStore::instance().get_title(data->title_id))
+        data->seen_cue_revision = title->cue_revision;
+    else
+        data->seen_cue_revision = 0;
     data->last_clock_refresh = std::chrono::steady_clock::now();
     data->dirty    = true;
 }
@@ -1110,6 +1122,7 @@ static void source_video_tick(void *priv, float seconds)
         }
         data->seen_cue_revision = title->cue_revision;
         data->playback_reverse = false;
+        data->waiting_for_cue = false;
         data->playing = true;
         data->dirty = true;
     }
@@ -1200,10 +1213,10 @@ static void source_video_tick(void *priv, float seconds)
     }
 
 
-    if (has_ticker_layer)
+    if (!data->waiting_for_cue && has_ticker_layer)
         data->dirty = true;
 
-    if (static_clock_title || (!data->playing && has_clock_layer)) {
+    if (!data->waiting_for_cue && (static_clock_title || (!data->playing && has_clock_layer))) {
         auto now = std::chrono::steady_clock::now();
         if (now - data->last_clock_refresh >= std::chrono::seconds(1)) {
             data->last_clock_refresh = now;

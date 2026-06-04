@@ -184,13 +184,20 @@ public:
         viewport()->update();
     }
 
+    void set_select_all_visible(bool visible)
+    {
+        if (select_all_visible_ == visible) return;
+        select_all_visible_ = visible;
+        viewport()->update();
+    }
+
     std::function<void(bool)> select_all_toggled;
 
 protected:
     void paintSection(QPainter *painter, const QRect &rect, int logicalIndex) const override
     {
         QHeaderView::paintSection(painter, rect, logicalIndex);
-        if (logicalIndex != 0) return;
+        if (logicalIndex != 0 || !select_all_visible_) return;
 
         QStyleOptionButton option;
         option.state = QStyle::State_Enabled | (select_all_checked_ ? QStyle::State_On : QStyle::State_Off);
@@ -200,7 +207,7 @@ protected:
 
     void mousePressEvent(QMouseEvent *event) override
     {
-        if (event && event->button() == Qt::LeftButton && logicalIndexAt(event->pos()) == 0) {
+        if (select_all_visible_ && event && event->button() == Qt::LeftButton && logicalIndexAt(event->pos()) == 0) {
             const QRect section_rect(sectionViewportPosition(0), 0, sectionSize(0), height());
             if (checkbox_rect(section_rect).contains(event->pos())) {
                 select_all_checked_ = !select_all_checked_;
@@ -226,6 +233,7 @@ private:
     }
 
     bool select_all_checked_ = false;
+    bool select_all_visible_ = true;
 };
 
 static LiveTextCueHeader *live_text_cue_header(QTableWidget *table)
@@ -630,8 +638,11 @@ void TitleDock::populate_exposed_text()
     text_table_->setRowCount(0);
     text_table_->setColumnCount(0);
 
+    auto *header = live_text_cue_header(text_table_);
+
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) {
+        if (header) header->set_select_all_visible(false);
         text_editor_lbl_->setText(obsgs_tr("OBSTitles.LiveTextSelectTitle"));
         text_table_->setEnabled(false);
         if (btn_add_text_row_) btn_add_text_row_->setEnabled(false);
@@ -646,15 +657,43 @@ void TitleDock::populate_exposed_text()
     normalize_live_text_rows(title, exposed);
 
     const bool has_exposed = !exposed.empty();
-    text_table_->setEnabled(has_exposed);
+    text_table_->setEnabled(true);
     if (btn_add_text_row_) btn_add_text_row_->setEnabled(has_exposed);
     if (btn_delete_text_row_) btn_delete_text_row_->setEnabled(has_exposed);
     if (btn_row_up_) btn_row_up_->setEnabled(has_exposed);
     if (btn_row_down_) btn_row_down_->setEnabled(has_exposed);
-    text_editor_lbl_->setText(has_exposed
-        ? obsgs_tr("OBSTitles.LiveTextCues")
-        : obsgs_tr("OBSTitles.LiveTextExposeHint"));
+    text_editor_lbl_->setText(obsgs_tr("OBSTitles.LiveTextCues"));
+    if (header) header->set_select_all_visible(has_exposed);
     if (!has_exposed) {
+        text_table_->setRowCount(1);
+        text_table_->setColumnCount(2);
+        text_table_->setHorizontalHeaderLabels(QStringList()
+                                               << obsgs_tr("OBSTitles.Title")
+                                               << QString());
+        text_table_->horizontalHeader()->setSectionsMovable(false);
+        text_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        text_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        text_table_->setVerticalHeaderItem(0, new QTableWidgetItem(QStringLiteral("1")));
+
+        auto *title_item = new QTableWidgetItem(QString::fromStdString(title->name));
+        title_item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        text_table_->setItem(0, 0, title_item);
+
+        auto *cue = new QPushButton("▶", text_table_);
+        cue->setToolTip(obsgs_tr("OBSTitles.PlayCueTooltip"));
+        cue->setStyleSheet("QPushButton{background:#2a2a2a;color:#ddd;border:none;border-radius:3px;font-weight:bold;}"
+                           "QPushButton:hover{background:#3a3a3a;}");
+        connect(cue, &QPushButton::clicked, this, [this, title]() {
+            updating_exposed_text_ = true;
+            title->current_cue_row = -1;
+            title->pending_cue_row = -1;
+            ++title->cue_revision;
+            TitleDataStore::instance().save();
+            TitleDataStore::instance().notify_change();
+            updating_exposed_text_ = false;
+            populate_exposed_text();
+        });
+        text_table_->setCellWidget(0, 1, cue);
         update_live_text_select_all_state();
         return;
     }
