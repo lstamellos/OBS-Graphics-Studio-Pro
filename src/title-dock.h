@@ -41,9 +41,7 @@ public:
 
 private slots:
     void on_add();
-    void on_add_template_lower_third();
-    void on_add_template_center_title();
-    void on_add_template_ticker();
+    void on_add_from_templates_library();
     void on_duplicate();
     void on_rename();
     void on_delete();
