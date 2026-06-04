@@ -269,7 +269,8 @@ static double horizontal_fit_scale(const QFont &font, const QRectF &rect,
 {
     if (layer.text_overflow_mode != 2) return 1.0;
     QFontMetricsF metrics(font);
-    double natural_width = std::max(1.0, metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    const double text_width = static_cast<double>(metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    double natural_width = std::max(1.0, text_width);
     if (natural_width <= rect.width()) return 1.0;
     return std::clamp(rect.width() / natural_width,
                       std::clamp((double)layer.text_fit_min_scale, 0.05, 1.0),
@@ -390,16 +391,24 @@ static QPointF rotated_scaled_delta(double dx, double dy, double rot_deg, double
 
 static double eval_box_width(const Layer &layer, double t)
 {
-    return std::max(1.0, layer.box_width.is_animated()
-                         ? layer.box_width.evaluate(t)
-                         : (double)layer.rect_width);
+    const double width = layer.box_width.is_animated()
+        ? layer.box_width.evaluate(t)
+        : static_cast<double>(layer.rect_width);
+    return width < 1.0 ? 1.0 : width;
 }
 
 static double eval_box_height(const Layer &layer, double t)
 {
-    return std::max(1.0, layer.box_height.is_animated()
-                         ? layer.box_height.evaluate(t)
-                         : (double)layer.rect_height);
+    const double height = layer.box_height.is_animated()
+        ? layer.box_height.evaluate(t)
+        : static_cast<double>(layer.rect_height);
+    return height < 1.0 ? 1.0 : height;
+}
+
+static int shadow_pass_count(double blur)
+{
+    const int passes = static_cast<int>(std::ceil(blur / 3.0));
+    return passes < 1 ? 1 : passes;
 }
 
 static double eval_origin_x(const Layer &layer, double t)
@@ -2083,7 +2092,7 @@ void CanvasPreview::render_to_pixmap()
                 QPointF off = shadow_offset(*layer, lt);
                 double blur = eval_shadow_blur(*layer, lt);
                 double spread = eval_shadow_spread(*layer, lt);
-                int passes = std::max(1, (int)std::ceil(blur / 3.0));
+                int passes = shadow_pass_count(blur);
                 for (int pass = passes; pass >= 1; --pass) {
                     QColor pass_color = sc;
                     pass_color.setAlphaF(sc.alphaF() / passes);
@@ -2157,7 +2166,7 @@ void CanvasPreview::render_to_pixmap()
                 QPointF off = shadow_offset(*layer, lt);
                 double blur = eval_shadow_blur(*layer, lt);
                 double spread = eval_shadow_spread(*layer, lt);
-                int passes = std::max(1, (int)std::ceil(blur / 3.0));
+                int passes = shadow_pass_count(blur);
                 for (int pass = passes; pass >= 1; --pass) {
                     QColor pass_color = sc;
                     pass_color.setAlphaF(sc.alphaF() / passes);
