@@ -44,6 +44,8 @@
 #include <QPoint>
 #include <QRectF>
 #include <memory>
+#include <string>
+#include <vector>
 
 /* Forward declarations for sub-widgets */
 class CanvasPreview;
@@ -164,12 +166,19 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void set_playhead(double t);
     void set_selected_layer(const std::string &lid);
+    void set_selected_layers(const std::vector<std::string> &ids);
     void set_safe_guides_visible(bool visible);
     void refresh_preview();
+    void set_zoom_percent(int percent);
+    int zoom_percent() const;
+    void fit_canvas(bool up_to_100 = false);
+    void set_checkerboard_pattern(int pattern);
 
 signals:
     void layer_clicked(const std::string &layer_id);
+    void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_geometry_changed();
+    void zoom_percent_changed(int percent);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -180,30 +189,49 @@ protected:
     void resizeEvent(QResizeEvent *ev) override;
 
 private:
-    enum class DragMode { None, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
+    enum class DragMode { None, Marquee, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
 
     void render_to_pixmap();
     std::shared_ptr<Layer> selected_layer() const;
+    std::vector<std::shared_ptr<Layer>> selected_layers() const;
     QRectF layer_local_rect(const Layer &layer) const;
+    double fit_scale() const;
     double view_scale() const;
+    QPointF centered_view_origin() const;
     QPointF view_origin() const;
     QPointF view_to_canvas(const QPointF &view_pt) const;
     QPointF canvas_to_view(const QPointF &canvas_pt) const;
     QPointF canvas_to_layer(const Layer &layer, const QPointF &canvas_pt) const;
     QPointF layer_to_canvas(const Layer &layer, const QPointF &layer_pt) const;
     DragMode hit_test_selected(const QPointF &view_pt) const;
+    QRectF layer_canvas_bounds(const Layer &layer) const;
+    QRectF selected_canvas_bounds() const;
+    void begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
+    void update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
     void apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
 
     std::shared_ptr<Title> title_;
     std::string sel_layer_id_;
+    std::vector<std::string> selected_layer_ids_;
     double playhead_ = 0.0;
-    float  zoom_     = 1.0f;
+    int zoom_percent_ = 100;
+    bool fit_zoom_active_ = true;
+    bool fit_zoom_up_to_100_ = false;
+    QPointF pan_offset_;
+    bool panning_ = false;
+    QPointF pan_start_view_;
+    QPointF pan_start_offset_;
     QPixmap frame_pixmap_;
     bool dirty_ = true;
     bool safe_guides_visible_ = false;
+    int checkerboard_pattern_ = 1;
 
     DragMode drag_mode_ = DragMode::None;
     bool drag_changed_ = false;
+    bool marquee_active_ = false;
+    QPointF drag_start_view_;
+    QPointF drag_current_view_;
+    std::vector<std::string> marquee_base_selection_;
     QPointF drag_start_canvas_;
     double drag_start_x_ = 0.0;
     double drag_start_y_ = 0.0;
@@ -211,6 +239,15 @@ private:
     float drag_start_h_ = 1.0f;
     float drag_start_origin_x_ = 0.5f;
     float drag_start_origin_y_ = 0.5f;
+    QRectF drag_start_selection_bounds_;
+    struct LayerDragState {
+        std::string id;
+        double x = 0.0;
+        double y = 0.0;
+        float w = 1.0f;
+        float h = 1.0f;
+    };
+    std::vector<LayerDragState> drag_layer_states_;
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -225,12 +262,14 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void refresh();
     void set_selected_layer(const std::string &layer_id);
+    void set_selected_layers(const std::vector<std::string> &layer_ids);
     void set_layer_clipboard_available(bool available);
     QScrollBar *vertical_scroll_bar() const;
     std::vector<std::string> selected_ids() const;
 
 signals:
     void layer_selected(const std::string &layer_id);
+    void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_visibility_changed(const std::string &layer_id, bool v);
     void layer_lock_changed(const std::string &layer_id, bool locked);
     void layer_expand_changed(const std::string &layer_id, bool expanded);
@@ -283,6 +322,9 @@ public:
     void set_selected_layer(const std::string &lid);
     void set_playhead(double t);
     void set_vertical_scroll(int scroll_y);
+    void set_zoom_percent(int percent);
+    int zoom_percent() const;
+    void fit_timeline();
 
 signals:
     void playhead_changed(double t);
@@ -292,6 +334,8 @@ signals:
                         const std::string &prop_name, int kf_idx, double new_t);
     void keyframe_easing_changed();
     void vertical_scroll_delta_requested(int delta);
+    void zoom_percent_changed(int percent);
+    void layer_selected(const std::string &layer_id);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -306,18 +350,21 @@ private:
     double x_to_time(int x) const;
     int    time_to_x(double t) const;
     int    ruler_height() const { return 72; }
-    int    row_height()   const { return 24; }
+    int    row_height()   const { return 28; }
     double snap_time(double t) const;
     void   clamp_scroll();
     void   clamp_vertical_scroll();
     int    max_vertical_scroll() const;
     bool   hit_keyframe(const QPoint &pos, std::shared_ptr<Layer> *layer,
                         AnimatedProperty **prop, int *kf_idx, int *row_idx) const;
+    bool   keep_playhead_visible();
+    void   set_pixels_per_sec(double pixels_per_sec, double anchor_time, int anchor_x);
 
     enum class DragMode { None, Playhead, Keyframe, TrimIn, TrimOut, Layer, LoopStart, LoopEnd, PauseMarker };
 
     std::shared_ptr<Title> title_;
     std::string sel_layer_id_;
+    bool fit_on_next_resize_ = false;
     double playhead_  = 0.0;
     DragMode drag_mode_ = DragMode::None;
     std::string drag_layer_id_;
@@ -352,7 +399,6 @@ private:
     QComboBox      *cmb_playback_mode_ = nullptr;
     QComboBox      *cmb_loop_type_ = nullptr;
     QSpinBox       *spn_pause_frame_ = nullptr;
-    QDoubleSpinBox *spn_pause_time_ = nullptr;
     QDoubleSpinBox *spn_duration_ = nullptr;
     QDoubleSpinBox *spn_loop_start_ = nullptr;
     QDoubleSpinBox *spn_loop_end_ = nullptr;
