@@ -787,6 +787,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (!eval_outline_on_front(layer, t)) draw_text_outline();
     draw_text_fill();
     if (eval_outline_on_front(layer, t)) draw_text_outline();
+    painter.setRenderHint(QPainter::TextAntialiasing, previous_text_aa);
+    painter.setRenderHint(QPainter::Antialiasing, previous_shape_aa);
     painter.restore();
     painter.end();
 
