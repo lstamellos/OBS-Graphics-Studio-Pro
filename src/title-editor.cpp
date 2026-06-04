@@ -146,9 +146,23 @@ static const QColor C_RULER    { 0x1e1e1e };
 static const QColor C_KF_DOT   { 0xf0a020 };
 static const QColor C_PLAYHEAD { 0xff4444 };
 
-static QIcon keyframe_diamond_icon(bool active)
+static QIcon keyframe_diamond_icon(bool active, bool outlined = false)
 {
-    return obsgs_icon(active ? "keyframe-active.svg" : "keyframe-inactive.svg");
+    if (active)
+        return obsgs_icon("keyframe-active.svg");
+    if (!outlined)
+        return obsgs_icon("keyframe-inactive.svg");
+
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor(0xff, 0xd2, 0x3f), 2));
+    QPolygon diamond;
+    diamond << QPoint(12, 5) << QPoint(19, 12) << QPoint(12, 19) << QPoint(5, 12);
+    painter.drawPolygon(diamond);
+    return QIcon(pixmap);
 }
 
 
@@ -864,6 +878,13 @@ static bool any_keyframe_at_time(std::initializer_list<const AnimatedProperty *>
 {
     for (const auto *prop : props)
         if (prop && keyframe_at_time(*prop, time)) return true;
+    return false;
+}
+
+static bool any_keyframes(std::initializer_list<const AnimatedProperty *> props)
+{
+    for (const auto *prop : props)
+        if (prop && prop->is_animated()) return true;
     return false;
 }
 
@@ -4618,8 +4639,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         b->setToolTip(tip);
         b->setAccessibleName(tip);
         b->setProperty("active", false);
+        b->setProperty("outlined", false);
         b->setStyleSheet("QPushButton{background:transparent;border:none;border-radius:2px;padding:0;}"
                          "QPushButton:hover{background:#303030;}"
+                         "QPushButton[outlined=\"true\"]{background:#201d12;}"
                          "QPushButton[active=\"true\"]{background:#2b2518;}");
         return b;
     };
@@ -5681,6 +5704,7 @@ void PropertiesPanel::load_values()
             if (!b) continue;
             b->setIcon(keyframe_diamond_icon(false));
             b->setProperty("active", false);
+            b->setProperty("outlined", false);
             b->style()->unpolish(b);
             b->style()->polish(b);
         }
@@ -5798,33 +5822,41 @@ void PropertiesPanel::load_values()
     }
     if (chk_outline_antialias_) chk_outline_antialias_->setChecked(layer_->outline_antialias);
 
-    auto set_kf_icon = [](QPushButton *button, bool active) {
+    auto set_kf_icon = [](QPushButton *button, bool active, bool has_keyframes) {
         if (!button) return;
-        button->setIcon(keyframe_diamond_icon(active));
+        const bool outlined = has_keyframes && !active;
+        button->setIcon(keyframe_diamond_icon(active, outlined));
         button->setProperty("active", active);
+        button->setProperty("outlined", outlined);
         button->style()->unpolish(button);
         button->style()->polish(button);
     };
-    set_kf_icon(btn_kf_pos_x_, keyframe_at_time(layer_->pos_x, lt));
-    set_kf_icon(btn_kf_pos_y_, keyframe_at_time(layer_->pos_y, lt));
-    set_kf_icon(btn_kf_rotation_, keyframe_at_time(layer_->rotation, lt));
-    set_kf_icon(btn_kf_opacity_, keyframe_at_time(layer_->opacity, lt));
-    set_kf_icon(btn_kf_origin_x_, keyframe_at_time(layer_->origin_x_prop, lt));
-    set_kf_icon(btn_kf_origin_y_, keyframe_at_time(layer_->origin_y_prop, lt));
-    set_kf_icon(btn_kf_width_, keyframe_at_time(layer_->box_width, lt));
-    set_kf_icon(btn_kf_height_, keyframe_at_time(layer_->box_height, lt));
-    set_kf_icon(btn_kf_text_color_, any_keyframe_at_time({&layer_->text_color_a, &layer_->text_color_r,
-                                                          &layer_->text_color_g, &layer_->text_color_b}, lt));
-    set_kf_icon(btn_kf_fill_color_, any_keyframe_at_time({&layer_->fill_color_a, &layer_->fill_color_r,
-                                                          &layer_->fill_color_g, &layer_->fill_color_b}, lt));
-    set_kf_icon(btn_kf_shadow_enabled_, keyframe_at_time(layer_->shadow_enabled_prop, lt));
-    set_kf_icon(btn_kf_shadow_opacity_, keyframe_at_time(layer_->shadow_opacity_prop, lt));
-    set_kf_icon(btn_kf_shadow_distance_, keyframe_at_time(layer_->shadow_distance_prop, lt));
-    set_kf_icon(btn_kf_shadow_angle_, keyframe_at_time(layer_->shadow_angle_prop, lt));
-    set_kf_icon(btn_kf_shadow_blur_, keyframe_at_time(layer_->shadow_blur_prop, lt));
-    set_kf_icon(btn_kf_shadow_spread_, keyframe_at_time(layer_->shadow_spread_prop, lt));
-    set_kf_icon(btn_kf_shadow_color_, any_keyframe_at_time({&layer_->shadow_color_a, &layer_->shadow_color_r,
-                                                            &layer_->shadow_color_g, &layer_->shadow_color_b}, lt));
+    auto set_prop_kf_icon = [&](QPushButton *button, const AnimatedProperty &prop) {
+        set_kf_icon(button, keyframe_at_time(prop, lt), prop.is_animated());
+    };
+    auto set_group_kf_icon = [&](QPushButton *button, std::initializer_list<const AnimatedProperty *> props) {
+        set_kf_icon(button, any_keyframe_at_time(props, lt), any_keyframes(props));
+    };
+    set_prop_kf_icon(btn_kf_pos_x_, layer_->pos_x);
+    set_prop_kf_icon(btn_kf_pos_y_, layer_->pos_y);
+    set_prop_kf_icon(btn_kf_rotation_, layer_->rotation);
+    set_prop_kf_icon(btn_kf_opacity_, layer_->opacity);
+    set_prop_kf_icon(btn_kf_origin_x_, layer_->origin_x_prop);
+    set_prop_kf_icon(btn_kf_origin_y_, layer_->origin_y_prop);
+    set_prop_kf_icon(btn_kf_width_, layer_->box_width);
+    set_prop_kf_icon(btn_kf_height_, layer_->box_height);
+    set_group_kf_icon(btn_kf_text_color_, {&layer_->text_color_a, &layer_->text_color_r,
+                                           &layer_->text_color_g, &layer_->text_color_b});
+    set_group_kf_icon(btn_kf_fill_color_, {&layer_->fill_color_a, &layer_->fill_color_r,
+                                           &layer_->fill_color_g, &layer_->fill_color_b});
+    set_prop_kf_icon(btn_kf_shadow_enabled_, layer_->shadow_enabled_prop);
+    set_prop_kf_icon(btn_kf_shadow_opacity_, layer_->shadow_opacity_prop);
+    set_prop_kf_icon(btn_kf_shadow_distance_, layer_->shadow_distance_prop);
+    set_prop_kf_icon(btn_kf_shadow_angle_, layer_->shadow_angle_prop);
+    set_prop_kf_icon(btn_kf_shadow_blur_, layer_->shadow_blur_prop);
+    set_prop_kf_icon(btn_kf_shadow_spread_, layer_->shadow_spread_prop);
+    set_group_kf_icon(btn_kf_shadow_color_, {&layer_->shadow_color_a, &layer_->shadow_color_r,
+                                             &layer_->shadow_color_g, &layer_->shadow_color_b});
 
     txt_content_->setPlainText(QString::fromStdString(is_clock ? layer_->clock_format : layer_->text_content));
     int ticker_style_idx = cmb_ticker_style_->findData(layer_->ticker_style);
