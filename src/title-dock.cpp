@@ -18,6 +18,7 @@
 #include <QDir>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDrag>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -60,6 +61,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <memory>
 #include <algorithm>
 #include <functional>
 #include <numeric>
@@ -270,6 +272,7 @@ public:
         : QListWidget(parent)
     {
         setDragEnabled(true);
+        setAcceptDrops(false);
         setDragDropMode(QAbstractItemView::DragOnly);
         setDefaultDropAction(Qt::MoveAction);
     }
@@ -288,6 +291,27 @@ protected:
         mime->setUrls(urls);
         return mime;
     }
+
+    void startDrag(Qt::DropActions supported_actions) override
+    {
+        (void)supported_actions;
+        const auto items = selectedItems();
+        if (items.empty())
+            return;
+
+        std::unique_ptr<QMimeData> mime(mimeData(items));
+        if (!mime || !mime->hasUrls())
+            return;
+
+        auto *drag = new QDrag(this);
+        drag->setMimeData(mime.release());
+        if (auto *item = currentItem()) {
+            QPixmap pixmap = item->icon().pixmap(iconSize());
+            if (!pixmap.isNull())
+                drag->setPixmap(pixmap);
+        }
+        drag->exec(Qt::MoveAction);
+    }
 };
 
 class TemplateCategoryTree : public QTreeWidget {
@@ -296,9 +320,11 @@ public:
         : QTreeWidget(parent)
     {
         setAcceptDrops(true);
+        viewport()->setAcceptDrops(true);
         setDropIndicatorShown(true);
         setDragDropMode(QAbstractItemView::DropOnly);
         setDefaultDropAction(Qt::MoveAction);
+        setSelectionMode(QAbstractItemView::SingleSelection);
     }
 
     std::function<void()> templates_moved;
@@ -306,17 +332,19 @@ public:
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override
     {
-        if (event && event->mimeData() && event->mimeData()->hasUrls())
-            event->acceptProposedAction();
-        else
+        if (event && event->mimeData() && event->mimeData()->hasUrls()) {
+            event->setDropAction(Qt::MoveAction);
+            event->accept();
+        } else
             QTreeWidget::dragEnterEvent(event);
     }
 
     void dragMoveEvent(QDragMoveEvent *event) override
     {
-        if (event && event->mimeData() && event->mimeData()->hasUrls())
-            event->acceptProposedAction();
-        else
+        if (event && event->mimeData() && event->mimeData()->hasUrls()) {
+            event->setDropAction(Qt::MoveAction);
+            event->accept();
+        } else
             QTreeWidget::dragMoveEvent(event);
     }
 
@@ -364,7 +392,8 @@ protected:
 
         if (moved_any && templates_moved)
             templates_moved();
-        event->acceptProposedAction();
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
     }
 };
 
@@ -1726,6 +1755,7 @@ void TitleDock::on_add_from_templates_library()
         for (const QFileInfo &file : dir.entryInfoList(filters, QDir::Files, QDir::Name)) {
             TemplateFileMetadata metadata = read_template_file_metadata(file.absoluteFilePath());
             auto *item = new QListWidgetItem(metadata.screenshot_icon, metadata.title);
+            item->setFlags(item->flags() | Qt::ItemIsDragEnabled);
             item->setData(Qt::UserRole, file.absoluteFilePath());
             item->setToolTip(metadata.description);
             templates->addItem(item);
