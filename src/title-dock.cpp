@@ -661,21 +661,23 @@ std::shared_ptr<Title> TitleDock::create_template_title(const std::string &name,
     };
 
     switch (template_id) {
-    case 1: /* Lower third */
+    case 1: { /* Lower third */
         title->duration = 8.0;
         add_rect(obs_text_std("OBSTitles.LayerLowerThirdBackplate"), 640, 835, 1120, 155, 0xD0161B24, 18.0f);
         add_rect(obs_text_std("OBSTitles.LayerAccentBar"), 120, 835, 18, 155, 0xFF00A3FF, 9.0f);
         add_text(obs_text_std("OBSTitles.LayerName"), name, 670, 800, 58, 0xFFFFFFFF, true, 0, 1);
         add_text(obs_text_std("OBSTitles.LayerSubtitle"), obs_text_std("OBSTitles.TemplateSubtitleRole"), 670, 872, 34, 0xFFE8E8E8, false, 0, 1);
         break;
-    case 2: /* Center title */
+    }
+    case 2: { /* Center title */
         title->duration = 6.0;
         add_rect(obs_text_std("OBSTitles.LayerSoftPanel"), 960, 540, 1280, 270, 0xB0101018, 28.0f);
         add_rect(obs_text_std("OBSTitles.LayerTopAccent"), 960, 395, 520, 10, 0xFF00A3FF, 5.0f);
         add_text(obs_text_std("OBSTitles.LayerMainTitle"), name, 960, 505, 86, 0xFFFFFFFF, true, 1, 1);
         add_text(obs_text_std("OBSTitles.LayerSubtitle"), obs_text_std("OBSTitles.TemplateEditableSubtitle"), 960, 610, 42, 0xFFE0E0E0, false, 1, 1);
         break;
-    case 3: /* Ticker / strap */
+    }
+    case 3: { /* Ticker / strap */
         title->duration = 12.0;
         add_rect(obs_text_std("OBSTitles.LayerTickerBackground"), 960, 1010, 1920, 110, 0xE0101010, 0.0f);
         add_rect(obs_text_std("OBSTitles.LayerTickerAccent"), 125, 1010, 250, 110, 0xFF0078D4, 0.0f);
@@ -688,9 +690,11 @@ std::shared_ptr<Title> TitleDock::create_template_title(const std::string &name,
         ticker->ticker_direction = 1;
         ticker->ticker_speed = 140.0;
         break;
-    default:
+    }
+    default: {
         add_text(obs_text_std("OBSTitles.TemplateTitleText"), name, 960, 540, 72, 0xFFFFFFFF, true, 1, 1);
         break;
+    }
     }
 
     for (auto &layer : title->layers)

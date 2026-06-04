@@ -272,7 +272,8 @@ static double horizontal_fit_scale(const QFont &font, const QRectF &rect,
 {
     if (layer.text_overflow_mode != 2) return 1.0;
     QFontMetricsF metrics(font);
-    double natural_width = std::max(1.0, metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    const double text_width = static_cast<double>(metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    double natural_width = std::max(1.0, text_width);
     if (natural_width <= rect.width()) return 1.0;
     return std::clamp(rect.width() / natural_width,
                       std::clamp((double)layer.text_fit_min_scale, 0.05, 1.0),
