@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QImage>
+#include <QImageReader>
 #include <QSize>
 #include <QSvgRenderer>
 #include <QMouseEvent>
@@ -98,7 +99,13 @@ static QSize editor_image_intrinsic_size(const QString &path)
         return size;
     }
 
-    QImage image(path);
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    QSize size = reader.size();
+    if (size.isValid() && !size.isEmpty())
+        return size;
+
+    QImage image = reader.read();
     return image.isNull() ? QSize() : image.size();
 }
 
@@ -123,8 +130,11 @@ static QImage editor_load_layer_image(const QString &path, const QSize &fallback
         return image;
     }
 
-    return QImage(path);
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    return reader.read();
 }
+
 static const QColor C_TEXT     { 0xcccccc };
 static const QColor C_RULER    { 0x1e1e1e };
 static const QColor C_KF_DOT   { 0xf0a020 };

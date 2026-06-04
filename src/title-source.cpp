@@ -21,6 +21,7 @@
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
 #include <QImage>
+#include <QImageReader>
 #include <QSize>
 #include <QSvgRenderer>
 #include <QString>
@@ -75,7 +76,9 @@ static QImage load_layer_image(const QString &path, const QSize &fallback_size =
         return image;
     }
 
-    return QImage(path);
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    return reader.read();
 }
 }
 
