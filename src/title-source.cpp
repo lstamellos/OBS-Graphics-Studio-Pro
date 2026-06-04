@@ -32,6 +32,7 @@
 #include <QPainterPath>
 #include <QFont>
 #include <QFontMetrics>
+#include <QFontDatabase>
 #include <QTextLayout>
 #include <QTextOption>
 #include <QDateTime>
@@ -457,6 +458,50 @@ static void apply_text_style_to_font(QFont &font, const Layer &layer)
         font.setPixelSize(std::max(1, (int)std::round(font.pixelSize() * 0.65)));
 }
 
+static QFont font_for_layer(const Layer &layer)
+{
+    const QString family = QString::fromStdString(layer.font_family);
+    const QString style = QString::fromStdString(layer.font_style);
+    QFontDatabase fdb;
+    QFont font = !style.isEmpty()
+        ? fdb.font(family, style, layer.font_size)
+        : QFont(family);
+    font.setFamily(family);
+    font.setPixelSize(layer.font_size);
+    if (!style.isEmpty())
+        font.setStyleName(style);
+    font.setBold(layer.font_bold);
+    font.setItalic(layer.font_italic);
+    font.setKerning(layer.font_kerning);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, layer.char_tracking);
+    font.setStretch(std::clamp((int)std::round(layer.char_scale_x * 100.0f), 1, 4000));
+    apply_text_style_to_font(font, layer);
+    return font;
+}
+
+static QPainterPath apply_vertical_character_scale(const QPainterPath &path, const QRectF &rect,
+                                                   Qt::Alignment alignment, const Layer &layer)
+{
+    double scale_y = std::clamp((double)layer.char_scale_y, 0.1, 5.0);
+    if (std::abs(scale_y - 1.0) < 0.0001)
+        return path;
+
+    QRectF bounds = path.boundingRect();
+    double anchor_y = bounds.top();
+    if (alignment & Qt::AlignVCenter)
+        anchor_y = bounds.center().y();
+    else if (alignment & Qt::AlignBottom)
+        anchor_y = bounds.bottom();
+    else if (!bounds.isEmpty())
+        anchor_y = rect.top();
+
+    QTransform xf;
+    xf.translate(0.0, anchor_y);
+    xf.scale(1.0, scale_y);
+    xf.translate(0.0, -anchor_y);
+    return xf.map(path);
+}
+
 static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
 {
     if (layer.text_style == 3)
@@ -543,7 +588,12 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
         layout.endLayout();
     }
     double total_height = 0.0;
-    for (const auto &line : lines) total_height += line.height;
+    const double leading = std::clamp((double)layer.text_leading, -200.0, 500.0);
+    for (size_t i = 0; i < lines.size(); ++i) {
+        total_height += lines[i].height;
+        if (i + 1 < lines.size())
+            total_height += leading;
+    }
     double y = rect.top();
     if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - total_height) / 2.0;
     else if (alignment & Qt::AlignBottom) y = rect.bottom() - total_height;
@@ -552,7 +602,7 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
         if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line.width) / 2.0;
         else if (alignment & Qt::AlignRight) x = rect.right() - line.width;
         path.addText(QPointF(x, y + line.ascent), font, line.text);
-        y += line.height;
+        y += line.height + leading;
     }
     return path;
 }
@@ -606,7 +656,7 @@ static QPainterPath ticker_text_path(const QFont &font, const QRectF &rect,
 
     const QStringList lines = ticker_lines(text);
     const int line_count = std::max(1, static_cast<int>(lines.size()));
-    const double line_h = std::max(1.0, metrics.lineSpacing());
+    const double line_h = std::max(1.0, metrics.lineSpacing() + std::clamp((double)layer.text_leading, -200.0, 500.0));
     if (layer.ticker_style == 1) {
         const double hold = std::max(0.1, layer.ticker_line_hold);
         int idx = (int)std::floor(now / hold) % line_count;
@@ -677,12 +727,7 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
-    QFont font(QString::fromStdString(layer.font_family));
-    font.setPixelSize(layer.font_size);
-    font.setBold(layer.font_bold);
-    font.setItalic(layer.font_italic);
-    font.setKerning(true);
-    apply_text_style_to_font(font, layer);
+    QFont font = font_for_layer(layer);
     painter.setFont(font);
 
     QRectF text_rect = text_rect_for_style(QRectF(pad, pad, box_w, box_h), layer);
@@ -697,6 +742,7 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     QPainterPath text_path = layer.type == LayerType::Ticker
         ? ticker_text_path(font, text_rect, align, text, layer)
         : text_overflow_path(font, text_rect, align, text, layer);
+    text_path = apply_vertical_character_scale(text_path, text_rect, align, layer);
 
     if (eval_shadow_enabled(layer, t)) {
         QColor shadow = color_from_argb(eval_shadow_color(layer, t));
