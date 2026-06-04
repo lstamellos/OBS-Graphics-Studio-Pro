@@ -54,8 +54,10 @@ class TitlePropertiesPanel;
 class QEvent;
 class QKeyEvent;
 class QContextMenuEvent;
+class QResizeEvent;
 class QAction;
 class QToolButton;
+class QScrollBar;
 
 /* ══════════════════════════════════════════════════════════════════
  *  TitleEditor  – main editor window
@@ -224,6 +226,7 @@ public:
     void refresh();
     void set_selected_layer(const std::string &layer_id);
     void set_layer_clipboard_available(bool available);
+    QScrollBar *vertical_scroll_bar() const;
     std::vector<std::string> selected_ids() const;
 
 signals:
@@ -278,6 +281,7 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void set_selected_layer(const std::string &lid);
     void set_playhead(double t);
+    void set_vertical_scroll(int scroll_y);
 
 signals:
     void playhead_changed(double t);
@@ -286,6 +290,7 @@ signals:
     void keyframe_moved(const std::string &layer_id,
                         const std::string &prop_name, int kf_idx, double new_t);
     void keyframe_easing_changed();
+    void vertical_scroll_delta_requested(int delta);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -294,6 +299,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *ev) override;
     void contextMenuEvent(QContextMenuEvent *ev) override;
     void wheelEvent(QWheelEvent *ev) override;
+    void resizeEvent(QResizeEvent *ev) override;
 
 private:
     double x_to_time(int x) const;
@@ -302,6 +308,8 @@ private:
     int    row_height()   const { return 24; }
     double snap_time(double t) const;
     void   clamp_scroll();
+    void   clamp_vertical_scroll();
+    int    max_vertical_scroll() const;
     bool   hit_keyframe(const QPoint &pos, std::shared_ptr<Layer> *layer,
                         AnimatedProperty **prop, int *kf_idx, int *row_idx) const;
 
@@ -319,6 +327,7 @@ private:
     double drag_start_out_ = 0.0;
     double pixels_per_sec_ = 80.0;
     int    scroll_x_       = 0;
+    int    scroll_y_       = 0;
 };
 
 /* ══════════════════════════════════════════════════════════════════

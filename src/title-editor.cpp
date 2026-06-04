@@ -20,6 +20,7 @@
 #include <QImage>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QResizeEvent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -910,6 +911,11 @@ void TitleEditor::build_ui()
     timeline_ = new TimelineWidget(lower_split);
     timeline_->setMinimumHeight(140);
     lower_split->addWidget(timeline_);
+    if (auto *scroll_bar = layers_->vertical_scroll_bar()) {
+        connect(scroll_bar, &QScrollBar::valueChanged, timeline_, &TimelineWidget::set_vertical_scroll);
+        connect(timeline_, &TimelineWidget::vertical_scroll_delta_requested, this,
+                [scroll_bar](int delta) { scroll_bar->setValue(scroll_bar->value() + delta); });
+    }
     lower_split->setStretchFactor(0, 1);
     lower_split->setStretchFactor(1, 3);
     lower_split->setCollapsible(0, false);
@@ -2391,6 +2397,7 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
     list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     list_->setAlternatingRowColors(false);
     list_->setUniformItemSizes(false);
+    list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     list_->setStyleSheet(
         "QListWidget{background:#1a1a1a;border:none;color:#ccc;}"
         "QListWidget::item{border-bottom:1px solid #2a2a2a;}"
@@ -2478,6 +2485,11 @@ void LayerStack::refresh() { populate(); }
 void LayerStack::set_layer_clipboard_available(bool available)
 {
     layer_clipboard_available_ = available;
+}
+
+QScrollBar *LayerStack::vertical_scroll_bar() const
+{
+    return list_ ? list_->verticalScrollBar() : nullptr;
 }
 
 void LayerStack::sync_order_from_list()
@@ -2808,6 +2820,7 @@ void TimelineWidget::set_title(std::shared_ptr<Title> t)
 {
     title_ = t;
     clamp_scroll();
+    clamp_vertical_scroll();
     update();
 }
 
@@ -2825,6 +2838,13 @@ void TimelineWidget::set_playhead(double t)
         if (phx > width() - 24) scroll_x_ = std::max(0, (int)(playhead_ * pixels_per_sec_) - width() + 24);
         clamp_scroll();
     }
+    update();
+}
+
+void TimelineWidget::set_vertical_scroll(int scroll_y)
+{
+    scroll_y_ = scroll_y;
+    clamp_vertical_scroll();
     update();
 }
 
@@ -2848,6 +2868,18 @@ void TimelineWidget::clamp_scroll()
     double dur = title_ ? title_->duration : 10.0;
     int max_scroll = std::max(0, (int)std::ceil(dur * pixels_per_sec_) - width() + 40);
     scroll_x_ = std::clamp(scroll_x_, 0, max_scroll);
+}
+
+int TimelineWidget::max_vertical_scroll() const
+{
+    int content_height = (int)timeline_rows(title_).size() * row_height();
+    int viewport_height = std::max(0, height() - ruler_height());
+    return std::max(0, content_height - viewport_height);
+}
+
+void TimelineWidget::clamp_vertical_scroll()
+{
+    scroll_y_ = std::clamp(scroll_y_, 0, max_vertical_scroll());
 }
 
 void TimelineWidget::paintEvent(QPaintEvent *)
@@ -2927,8 +2959,9 @@ void TimelineWidget::paintEvent(QPaintEvent *)
     for (int row = 0; row < (int)rows.size(); ++row) {
         auto &entry = rows[row];
         auto &layer = entry.layer;
-        int y = rh + row * rowh;
+        int y = rh + row * rowh - scroll_y_;
         if (y > H) break;
+        if (y + rowh < rh) continue;
         bool sel = (layer->id == sel_layer_id_);
 
         p.fillRect(0, y, W, rowh,
@@ -3008,7 +3041,7 @@ bool TimelineWidget::hit_keyframe(const QPoint &pos, std::shared_ptr<Layer> *hit
 {
     if (!title_ || pos.y() < ruler_height()) return false;
     auto rows = timeline_rows(title_);
-    int row = (pos.y() - ruler_height()) / row_height();
+    int row = (pos.y() - ruler_height() + scroll_y_) / row_height();
     if (row < 0 || row >= (int)rows.size()) return false;
 
     auto &entry = rows[row];
@@ -3017,7 +3050,7 @@ bool TimelineWidget::hit_keyframe(const QPoint &pos, std::shared_ptr<Layer> *hit
         for (int i = 0; i < (int)prop->keyframes.size(); ++i) {
             const auto &kf = prop->keyframes[i];
             int kx = time_to_x(entry.layer->in_time + kf.time);
-            int ky = ruler_height() + row * row_height() + row_height() / 2;
+            int ky = ruler_height() + row * row_height() - scroll_y_ + row_height() / 2;
             if (std::abs(pos.x() - kx) <= kHitRadius &&
                 std::abs(pos.y() - ky) <= kHitRadius) {
                 if (hit_layer) *hit_layer = entry.layer;
@@ -3172,6 +3205,15 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
         return;
     }
 
+    if (!(ev->modifiers() & Qt::ControlModifier)) {
+        int delta = angle.y() != 0 ? -angle.y() : -angle.x();
+        if (delta != 0) {
+            emit vertical_scroll_delta_requested(delta);
+            ev->accept();
+            return;
+        }
+    }
+
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     int cursor_x = (int)std::round(ev->position().x());
 #else
@@ -3187,6 +3229,13 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
     clamp_scroll();
     update();
     ev->accept();
+}
+
+void TimelineWidget::resizeEvent(QResizeEvent *ev)
+{
+    QWidget::resizeEvent(ev);
+    clamp_scroll();
+    clamp_vertical_scroll();
 }
 
 void TimelineWidget::mousePressEvent(QMouseEvent *ev)
@@ -3247,7 +3296,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
     }
 
     auto rows = timeline_rows(title_);
-    int row = (ev->pos().y() - ruler_height()) / row_height();
+    int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
     if (row >= 0 && row < (int)rows.size() && !rows[row].is_property) {
         auto layer = rows[row].layer;
         int x0 = time_to_x(layer->in_time);
@@ -3345,7 +3394,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
     }
 
     auto rows = timeline_rows(title_);
-    int row = (ev->pos().y() - ruler_height()) / row_height();
+    int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
     if (row >= 0 && row < (int)rows.size() && !rows[row].is_property) {
         int x0 = time_to_x(rows[row].layer->in_time);
         int x1 = time_to_x(rows[row].layer->out_time);

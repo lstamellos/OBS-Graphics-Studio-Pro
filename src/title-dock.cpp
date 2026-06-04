@@ -234,9 +234,6 @@ void TitleDock::build_ui()
     toolbar->addWidget(btn_scene_);
 
     /* ── template/title section ── */
-    auto *template_header = new QHBoxLayout();
-    template_header->setContentsMargins(0, 0, 0, 0);
-    template_header->setSpacing(0);
     auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
     set_bold_label(template_lbl);
     template_header->addWidget(template_lbl);
@@ -276,7 +273,6 @@ void TitleDock::build_ui()
 
     live_header->addWidget(text_editor_lbl_);
     live_header->addStretch();
-    live_header->addWidget(live_toolbar);
     live_layout->addLayout(live_header);
 
     text_table_ = new QTableWidget(live_section);
@@ -290,6 +286,7 @@ void TitleDock::build_ui()
     text_table_->setSelectionMode(QAbstractItemView::SingleSelection);
     text_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     live_layout->addWidget(text_table_, 1);
+    live_layout->addWidget(live_toolbar);
 
     sections->addWidget(template_section);
     sections->addWidget(live_section);
@@ -303,6 +300,7 @@ void TitleDock::build_ui()
     sf.setPointSize(std::max(1, sf.pointSize() - 1));
     status_lbl_->setFont(sf);
     template_layout->addWidget(status_lbl_);
+    template_layout->addWidget(toolbar);
 
     setWidget(container_);
 
