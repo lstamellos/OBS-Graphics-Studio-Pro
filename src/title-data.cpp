@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <stdexcept>
 #include <cstdio>
+#include <limits>
 
 using json = nlohmann::json;
 
@@ -48,6 +49,53 @@ static std::string bounded_string(const json &j, const char *key,
     if (value.size() > max_len)
         value.resize(max_len);
     return value;
+}
+
+static const json *object_member(const json &j, const char *key)
+{
+    if (!j.is_object())
+        return nullptr;
+    auto it = j.find(key);
+    return it == j.end() ? nullptr : &*it;
+}
+
+static bool json_bool(const json &j, const char *key, bool fallback)
+{
+    const json *value = object_member(j, key);
+    return value && value->is_boolean() ? value->get<bool>() : fallback;
+}
+
+static int json_int(const json &j, const char *key, int fallback)
+{
+    const json *value = object_member(j, key);
+    if (!value || !value->is_number_integer())
+        return fallback;
+    const int64_t parsed = value->get<int64_t>();
+    if (parsed < std::numeric_limits<int>::min() || parsed > std::numeric_limits<int>::max())
+        return fallback;
+    return (int)parsed;
+}
+
+static double json_double(const json &j, const char *key, double fallback)
+{
+    const json *value = object_member(j, key);
+    return value && value->is_number() ? finite_or(value->get<double>(), fallback) : fallback;
+}
+
+static uint32_t json_color(const json &j, const char *key, uint32_t fallback)
+{
+    const json *value = object_member(j, key);
+    if (!value)
+        return fallback;
+    if (value->is_number_unsigned()) {
+        const uint64_t parsed = value->get<uint64_t>();
+        return parsed <= UINT32_MAX ? (uint32_t)parsed : fallback;
+    }
+    if (value->is_number_integer()) {
+        const int64_t parsed = value->get<int64_t>();
+        return parsed >= 0 && parsed <= UINT32_MAX ? (uint32_t)parsed : fallback;
+    }
+    return fallback;
 }
 
 static bool read_json_file(const std::string &path, json &out, std::string *error)
@@ -359,13 +407,13 @@ static Keyframe keyframe_from_json(const json &j)
     Keyframe k;
     if (!j.is_object())
         return k;
-    k.time = std::clamp(finite_or(j.value("time", 0.0), 0.0), 0.0, kMaxDuration);
-    k.value = std::clamp(finite_or(j.value("value", 0.0), 0.0), -kMaxPropertyValue, kMaxPropertyValue);
-    k.easing = (EasingType)std::clamp(j.value("easing", 0), 0, (int)EasingType::Hold);
-    k.cx1 = std::clamp(finite_or(j.value("cx1", 0.333f), 0.333), 0.0, 1.0);
-    k.cy1 = std::clamp(finite_or(j.value("cy1", 0.0f), 0.0), 0.0, 1.0);
-    k.cx2 = std::clamp(finite_or(j.value("cx2", 0.667f), 0.667), 0.0, 1.0);
-    k.cy2 = std::clamp(finite_or(j.value("cy2", 1.0f), 1.0), 0.0, 1.0);
+    k.time = std::clamp(finite_or(json_double(j, "time", 0.0), 0.0), 0.0, kMaxDuration);
+    k.value = std::clamp(finite_or(json_double(j, "value", 0.0), 0.0), -kMaxPropertyValue, kMaxPropertyValue);
+    k.easing = (EasingType)std::clamp(json_int(j, "easing", 0), 0, (int)EasingType::Hold);
+    k.cx1 = std::clamp(finite_or(json_double(j, "cx1", 0.333), 0.333), 0.0, 1.0);
+    k.cy1 = std::clamp(finite_or(json_double(j, "cy1", 0.0), 0.0), 0.0, 1.0);
+    k.cx2 = std::clamp(finite_or(json_double(j, "cx2", 0.667), 0.667), 0.0, 1.0);
+    k.cy2 = std::clamp(finite_or(json_double(j, "cy2", 1.0), 1.0), 0.0, 1.0);
     return k;
 }
 
@@ -385,7 +433,7 @@ static AnimatedProperty aprop_from_json(const json &j, const std::string &name)
     if (!j.is_object())
         return p;
 
-    p.static_value = std::clamp(finite_or(j.value("static_value", 0.0), 0.0),
+    p.static_value = std::clamp(finite_or(json_double(j, "static_value", 0.0), 0.0),
                                 -kMaxPropertyValue, kMaxPropertyValue);
     if (j.contains("keyframes") && j["keyframes"].is_array()) {
         const size_t count = std::min(j["keyframes"].size(), kMaxKeyframesPerProperty);
@@ -507,13 +555,13 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
 
     l->id       = bounded_string(j, "id", "", kMaxNameLength);
     l->name     = bounded_string(j, "name", "Layer", kMaxNameLength);
-    l->type     = (LayerType)std::clamp(j.value("type", 0), 0, (int)LayerType::Ticker);
-    l->visible  = j.value("visible",  true);
-    l->locked   = j.value("locked",   false);
-    l->properties_expanded = j.value("properties_expanded", false);
+    l->type     = (LayerType)std::clamp(json_int(j, "type", 0), 0, (int)LayerType::Clock);
+    l->visible  = json_bool(j, "visible", true);
+    l->locked   = json_bool(j, "locked", false);
+    l->properties_expanded = json_bool(j, "properties_expanded", false);
     l->parent_id = bounded_string(j, "parent_id", "", kMaxNameLength);
-    l->in_time  = std::clamp(finite_or(j.value("in_time",  0.0), 0.0), 0.0, kMaxDuration);
-    l->out_time = std::clamp(finite_or(j.value("out_time", 5.0), 5.0), l->in_time, kMaxDuration);
+    l->in_time  = std::clamp(finite_or(json_double(j, "in_time", 0.0), 0.0), 0.0, kMaxDuration);
+    l->out_time = std::clamp(finite_or(json_double(j, "out_time", 5.0), 5.0), l->in_time, kMaxDuration);
 
     if (j.contains("pos_x"))    l->pos_x    = aprop_from_json(j["pos_x"],    "pos_x");
     if (j.contains("pos_y"))    l->pos_y    = aprop_from_json(j["pos_y"],    "pos_y");
@@ -527,70 +575,50 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
 
     l->text_content  = bounded_string(j, "text_content", "Title", kMaxTextLength);
     l->clock_format  = bounded_string(j, "clock_format", "H:i:s", kMaxNameLength);
-    l->expose_text   = j.value("expose_text",   false);
+    l->expose_text   = json_bool(j, "expose_text", false);
     l->font_family   = bounded_string(j, "font_family", "Helvetica Neue", kMaxNameLength);
-    l->font_style    = bounded_string(j, "font_style", "Regular", kMaxNameLength);
-    l->font_size     = std::clamp(j.value("font_size", 72), 1, 512);
-    l->font_bold     = j.value("font_bold",     false);
-    l->font_italic   = j.value("font_italic",   false);
-    l->font_kerning  = j.value("font_kerning",  true);
-    l->kerning_mode  = std::clamp(j.value("kerning_mode", 0), 0, 2);
-    l->manual_kerning = std::clamp(finite_or(j.value("manual_kerning", 0.0f), 0.0), -100.0, 500.0);
-    l->text_leading  = std::clamp(finite_or(j.value("text_leading", 0.0f), 0.0), -200.0, 500.0);
-    l->char_tracking = std::clamp(finite_or(j.value("char_tracking", 0.0f), 0.0), -100.0, 500.0);
-    l->char_scale_x  = std::clamp(finite_or(j.value("char_scale_x", 1.0f), 1.0), 0.1, 5.0);
-    l->char_scale_y  = std::clamp(finite_or(j.value("char_scale_y", 1.0f), 1.0), 0.1, 5.0);
-    l->baseline_shift = std::clamp(finite_or(j.value("baseline_shift", 0.0f), 0.0), -500.0, 500.0);
-    l->text_style    = std::clamp(j.value("text_style", 0), 0, 4);
-    l->text_underline = j.value("text_underline", false);
-    l->text_strikethrough = j.value("text_strikethrough", false);
-    l->text_ligatures = j.value("text_ligatures", true);
-    l->text_stylistic_alternates = j.value("text_stylistic_alternates", false);
-    l->text_fractions = j.value("text_fractions", false);
-    l->text_opentype_features = j.value("text_opentype_features", false);
-    l->text_language = bounded_string(j, "text_language", "English", kMaxNameLength);
-    l->text_overflow_mode = std::clamp(j.value("text_overflow_mode", 0), 0, 2);
-    l->text_fit_min_scale = std::clamp(finite_or(j.value("text_fit_min_scale", 0.5f), 0.5), 0.05, 1.0);
-    l->ticker_style = std::clamp(j.value("ticker_style", 0), 0, 2);
-    l->ticker_speed = std::clamp(finite_or(j.value("ticker_speed", 120.0), 120.0), 1.0, 5000.0);
-    l->ticker_line_hold = std::clamp(finite_or(j.value("ticker_line_hold", 2.0), 2.0), 0.1, 60.0);
-    l->ticker_direction = std::clamp(j.value("ticker_direction", 1), 0, 1);
-    l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
-    l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
-    l->stroke_width  = std::clamp(finite_or(j.value("stroke_width",  0.0f), 0.0), 0.0, 512.0);
-    l->outline_enabled = j.value("outline_enabled", l->stroke_width > 0.0f);
-    l->outline_opacity = std::clamp(finite_or(j.value("outline_opacity", 1.0f), 1.0), 0.0, 1.0);
-    l->outline_join_style = std::clamp(j.value("outline_join_style", 1), 0, 2);
-    l->outline_on_front = j.value("outline_on_front", true);
-    l->outline_antialias = j.value("outline_antialias", true);
-    l->align_h       = std::clamp(j.value("align_h", 1), 0, 2);
-    l->align_v       = std::clamp(j.value("align_v", 1), 0, 2);
+    l->font_size     = std::clamp(json_int(j, "font_size", 72), 1, 512);
+    l->font_bold     = json_bool(j, "font_bold", false);
+    l->font_italic   = json_bool(j, "font_italic", false);
+    l->text_style    = std::clamp(json_int(j, "text_style", 0), 0, 4);
+    l->text_overflow_mode = std::clamp(json_int(j, "text_overflow_mode", 0), 0, 2);
+    l->text_fit_min_scale = std::clamp(finite_or(json_double(j, "text_fit_min_scale", 0.5), 0.5), 0.05, 1.0);
+    l->text_color    = json_color(j, "text_color", (uint32_t)0xFFFFFFFF);
+    l->stroke_color  = json_color(j, "stroke_color", (uint32_t)0xFF000000);
+    l->stroke_width  = std::clamp(finite_or(json_double(j, "stroke_width", 0.0), 0.0), 0.0, 512.0);
+    l->outline_enabled = json_bool(j, "outline_enabled", l->stroke_width > 0.0f);
+    l->outline_opacity = std::clamp(finite_or(json_double(j, "outline_opacity", 1.0), 1.0), 0.0, 1.0);
+    l->outline_join_style = std::clamp(json_int(j, "outline_join_style", 1), 0, 2);
+    l->outline_on_front = json_bool(j, "outline_on_front", true);
+    l->outline_antialias = json_bool(j, "outline_antialias", true);
+    l->align_h       = std::clamp(json_int(j, "align_h", 1), 0, 2);
+    l->align_v       = std::clamp(json_int(j, "align_v", 1), 0, 2);
 
-    l->fill_color    = j.value("fill_color",    (uint32_t)0xFF222222);
-    l->rect_width    = std::clamp(finite_or(j.value("rect_width", 1920.0f), 1920.0), 1.0, (double)kMaxCanvasDimension);
-    l->rect_height   = std::clamp(finite_or(j.value("rect_height", 100.0f), 100.0), 1.0, (double)kMaxCanvasDimension);
-    l->corner_radius = std::clamp(finite_or(j.value("corner_radius", 0.0f), 0.0), 0.0, (double)kMaxCanvasDimension);
+    l->fill_color    = json_color(j, "fill_color", (uint32_t)0xFF222222);
+    l->rect_width    = std::clamp(finite_or(json_double(j, "rect_width", 1920.0), 1920.0), 1.0, (double)kMaxCanvasDimension);
+    l->rect_height   = std::clamp(finite_or(json_double(j, "rect_height", 100.0), 100.0), 1.0, (double)kMaxCanvasDimension);
+    l->corner_radius = std::clamp(finite_or(json_double(j, "corner_radius", 0.0), 0.0), 0.0, (double)kMaxCanvasDimension);
     l->box_width.static_value = l->rect_width;
     l->box_height.static_value = l->rect_height;
     if (j.contains("box_width"))  l->box_width  = aprop_from_json(j["box_width"],  "box_width");
     if (j.contains("box_height")) l->box_height = aprop_from_json(j["box_height"], "box_height");
     l->box_width.static_value = std::clamp(l->box_width.static_value, 1.0, (double)kMaxCanvasDimension);
     l->box_height.static_value = std::clamp(l->box_height.static_value, 1.0, (double)kMaxCanvasDimension);
-    l->origin_x      = std::clamp(finite_or(j.value("origin_x", 0.5f), 0.5), 0.0, 1.0);
-    l->origin_y      = std::clamp(finite_or(j.value("origin_y", 0.5f), 0.5), 0.0, 1.0);
+    l->origin_x      = std::clamp(finite_or(json_double(j, "origin_x", 0.5), 0.5), 0.0, 1.0);
+    l->origin_y      = std::clamp(finite_or(json_double(j, "origin_y", 0.5), 0.5), 0.0, 1.0);
     l->origin_x_prop.static_value = l->origin_x;
     l->origin_y_prop.static_value = l->origin_y;
     if (j.contains("origin_x_prop")) l->origin_x_prop = aprop_from_json(j["origin_x_prop"], "origin_x");
     if (j.contains("origin_y_prop")) l->origin_y_prop = aprop_from_json(j["origin_y_prop"], "origin_y");
     l->origin_x_prop.static_value = std::clamp(l->origin_x_prop.static_value, 0.0, 1.0);
     l->origin_y_prop.static_value = std::clamp(l->origin_y_prop.static_value, 0.0, 1.0);
-    l->shadow_enabled = j.value("shadow_enabled", false);
-    l->shadow_color = j.value("shadow_color", (uint32_t)0x99000000);
-    l->shadow_opacity = std::clamp(finite_or(j.value("shadow_opacity", 0.6f), 0.6), 0.0, 1.0);
-    l->shadow_distance = std::clamp(finite_or(j.value("shadow_distance", 8.0f), 8.0), 0.0, 4096.0);
-    l->shadow_angle = finite_or(j.value("shadow_angle", 135.0f), 135.0);
-    l->shadow_blur = std::clamp(finite_or(j.value("shadow_blur", 4.0f), 4.0), 0.0, 512.0);
-    l->shadow_spread = std::clamp(finite_or(j.value("shadow_spread", 0.0f), 0.0), 0.0, 512.0);
+    l->shadow_enabled = json_bool(j, "shadow_enabled", false);
+    l->shadow_color = json_color(j, "shadow_color", (uint32_t)0x99000000);
+    l->shadow_opacity = std::clamp(finite_or(json_double(j, "shadow_opacity", 0.6), 0.6), 0.0, 1.0);
+    l->shadow_distance = std::clamp(finite_or(json_double(j, "shadow_distance", 8.0), 8.0), 0.0, 4096.0);
+    l->shadow_angle = finite_or(json_double(j, "shadow_angle", 135.0), 135.0);
+    l->shadow_blur = std::clamp(finite_or(json_double(j, "shadow_blur", 4.0), 4.0), 0.0, 512.0);
+    l->shadow_spread = std::clamp(finite_or(json_double(j, "shadow_spread", 0.0), 0.0), 0.0, 512.0);
     l->shadow_enabled_prop.static_value = l->shadow_enabled ? 1.0 : 0.0;
     l->shadow_opacity_prop.static_value = l->shadow_opacity;
     l->shadow_distance_prop.static_value = l->shadow_distance;
@@ -622,7 +650,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     if (j.contains("fill_color_g")) l->fill_color_g = aprop_from_json(j["fill_color_g"], "fill_color_g");
     if (j.contains("fill_color_b")) l->fill_color_b = aprop_from_json(j["fill_color_b"], "fill_color_b");
     l->image_path    = bounded_string(j, "image_path", "", 4096);
-    l->lock_aspect_ratio = j.value("lock_aspect_ratio", true);
+    l->lock_aspect_ratio = json_bool(j, "lock_aspect_ratio", true);
     return l;
 }
 
@@ -659,15 +687,15 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
 
     t->id       = bounded_string(jt, "id", TitleDataStore::make_uuid(), kMaxNameLength);
     t->name     = bounded_string(jt, "name", "Untitled", kMaxNameLength);
-    t->duration = std::clamp(finite_or(jt.value("duration", 5.0), 5.0), 0.1, kMaxDuration);
-    t->loop_start = std::clamp(finite_or(jt.value("loop_start", std::min(1.0, t->duration)), 0.0), 0.0, t->duration);
-    t->loop_end = std::clamp(finite_or(jt.value("loop_end", std::max(t->loop_start, t->duration - 1.0)), t->duration), t->loop_start, t->duration);
-    t->playback_mode = std::clamp(jt.value("playback_mode", 0), 0, 2);
-    t->loop_type = std::clamp(jt.value("loop_type", 0), 0, 1);
-    t->pause_time = std::clamp(finite_or(jt.value("pause_time", 0.0), 0.0), 0.0, t->duration);
-    t->bg_color = jt.value("bg_color", (uint32_t)0x00000000);
-    t->width    = std::clamp(jt.value("width", 1920), 1, kMaxCanvasDimension);
-    t->height   = std::clamp(jt.value("height", 1080), 1, kMaxCanvasDimension);
+    t->duration = std::clamp(finite_or(json_double(jt, "duration", 5.0), 5.0), 0.1, kMaxDuration);
+    t->loop_start = std::clamp(finite_or(json_double(jt, "loop_start", std::min(1.0, t->duration)), 0.0), 0.0, t->duration);
+    t->loop_end = std::clamp(finite_or(json_double(jt, "loop_end", std::max(t->loop_start, t->duration - 1.0)), t->duration), t->loop_start, t->duration);
+    t->playback_mode = std::clamp(json_int(jt, "playback_mode", 0), 0, 2);
+    t->loop_type = std::clamp(json_int(jt, "loop_type", 0), 0, 1);
+    t->pause_time = std::clamp(finite_or(json_double(jt, "pause_time", 0.0), 0.0), 0.0, t->duration);
+    t->bg_color = json_color(jt, "bg_color", (uint32_t)0x00000000);
+    t->width    = std::clamp(json_int(jt, "width", 1920), 1, kMaxCanvasDimension);
+    t->height   = std::clamp(json_int(jt, "height", 1080), 1, kMaxCanvasDimension);
     if (jt.contains("layers") && jt["layers"].is_array()) {
         const size_t count = std::min(jt["layers"].size(), kMaxLayersPerTitle);
         t->layers.reserve(count);
