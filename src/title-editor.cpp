@@ -2355,7 +2355,11 @@ void CanvasPreview::update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers
     view_rect = view_rect.normalized();
     QRectF canvas_rect(view_to_canvas(view_rect.topLeft()), view_to_canvas(view_rect.bottomRight()));
     canvas_rect = canvas_rect.normalized();
-    const bool contains_mode = drag_current_view_.x() >= drag_start_view_.x();
+    auto intersects_or_touches = [](const QRectF &a, const QRectF &b) {
+        if (!a.isValid() || !b.isValid()) return false;
+        return a.left() <= b.right() && a.right() >= b.left() &&
+               a.top() <= b.bottom() && a.bottom() >= b.top();
+    };
 
     std::set<std::string> selected;
     if (modifiers & (Qt::ShiftModifier | Qt::ControlModifier))
@@ -2366,8 +2370,8 @@ void CanvasPreview::update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers
         if (!layer || !layer->visible || layer->locked) continue;
         if (playhead_ < layer->in_time || playhead_ > layer->out_time) continue;
         QRectF bounds = layer_canvas_bounds(*layer);
-        bool hit = contains_mode ? canvas_rect.contains(bounds) : canvas_rect.intersects(bounds);
-        if (hit) hits.push_back(layer->id);
+        if (intersects_or_touches(canvas_rect, bounds))
+            hits.push_back(layer->id);
     }
 
     if (modifiers & Qt::ControlModifier) {
