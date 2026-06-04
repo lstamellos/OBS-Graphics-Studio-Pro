@@ -332,20 +332,16 @@ public:
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override
     {
-        if (event && event->mimeData() && event->mimeData()->hasUrls()) {
-            event->setDropAction(Qt::MoveAction);
-            event->accept();
-        } else
-            QTreeWidget::dragEnterEvent(event);
+        if (accept_template_drag(event))
+            return;
+        QTreeWidget::dragEnterEvent(event);
     }
 
     void dragMoveEvent(QDragMoveEvent *event) override
     {
-        if (event && event->mimeData() && event->mimeData()->hasUrls()) {
-            event->setDropAction(Qt::MoveAction);
-            event->accept();
-        } else
-            QTreeWidget::dragMoveEvent(event);
+        if (accept_template_drag(event))
+            return;
+        QTreeWidget::dragMoveEvent(event);
     }
 
     void dropEvent(QDropEvent *event) override
@@ -386,14 +382,44 @@ protected:
                 } while (QFileInfo::exists(dest_path));
             }
 
-            if (QFile::rename(source_path, dest_path))
+            if (move_template_file(source_path, dest_path))
                 moved_any = true;
         }
 
         if (moved_any && templates_moved)
             templates_moved();
-        event->setDropAction(Qt::MoveAction);
-        event->accept();
+        accept_template_drag(event);
+    }
+
+private:
+    template <typename DragEvent>
+    bool accept_template_drag(DragEvent *event)
+    {
+        if (!event || !event->mimeData() || !event->mimeData()->hasUrls())
+            return false;
+
+        if (event->possibleActions() & Qt::MoveAction) {
+            event->setDropAction(Qt::MoveAction);
+            event->accept();
+        } else {
+            event->acceptProposedAction();
+        }
+        return true;
+    }
+
+    static bool move_template_file(const QString &source_path, const QString &dest_path)
+    {
+        if (QFile::rename(source_path, dest_path))
+            return true;
+
+        if (!QFile::copy(source_path, dest_path))
+            return false;
+
+        if (QFile::remove(source_path))
+            return true;
+
+        QFile::remove(dest_path);
+        return false;
     }
 };
 
@@ -683,10 +709,14 @@ static QTreeWidgetItem *add_template_category_item(QTreeWidget *tree, QTreeWidge
 {
     auto *item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(tree);
     item->setText(0, dir_info.fileName());
-    item->setText(1, QStringLiteral("×"));
+    item->setIcon(1, obs_icon("edit.svg"));
     item->setTextAlignment(1, Qt::AlignCenter);
-    item->setToolTip(1, obsgs_tr("OBSTitles.DeleteCategory"));
+    item->setToolTip(1, obsgs_tr("OBSTitles.RenameCategory"));
+    item->setText(2, QStringLiteral("×"));
+    item->setTextAlignment(2, Qt::AlignCenter);
+    item->setToolTip(2, obsgs_tr("OBSTitles.DeleteCategory"));
     item->setData(0, Qt::UserRole, dir_info.absoluteFilePath());
+    item->setFlags(item->flags() | Qt::ItemIsDropEnabled);
 
     QDir dir(dir_info.absoluteFilePath());
     const auto children = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
@@ -698,9 +728,10 @@ static QTreeWidgetItem *add_template_category_item(QTreeWidget *tree, QTreeWidge
 static void populate_template_categories(QTreeWidget *tree, const QString &root_path)
 {
     tree->clear();
-    tree->setColumnCount(2);
-    tree->setHeaderLabels(QStringList{obsgs_tr("OBSTitles.TemplateCategories"), QString()});
+    tree->setColumnCount(3);
+    tree->setHeaderLabels(QStringList{obsgs_tr("OBSTitles.TemplateCategories"), QString(), QString()});
     tree->setColumnWidth(1, 28);
+    tree->setColumnWidth(2, 28);
     for (const char *folder : template_library_category_folders)
         QDir(root_path).mkpath(QString::fromUtf8(folder));
 
@@ -760,6 +791,41 @@ static QString sanitized_template_category_path(QString category)
             safe_parts << part;
     }
     return safe_parts.join(QStringLiteral("/"));
+}
+
+static bool rename_template_category(QWidget *parent, QTreeWidgetItem *item)
+{
+    if (!item) return false;
+
+    const QString category_path = item->data(0, Qt::UserRole).toString();
+    if (category_path.isEmpty()) return false;
+
+    QFileInfo category_info(category_path);
+    bool ok = false;
+    QString name = QInputDialog::getText(
+        parent, obsgs_tr("OBSTitles.RenameCategory"), obsgs_tr("OBSTitles.CategoryNamePrompt"),
+        QLineEdit::Normal, category_info.fileName(), &ok);
+    if (!ok) return false;
+
+    name = sanitized_template_category_path(name);
+    if (name.isEmpty() || name.contains('/')) {
+        QMessageBox::warning(parent, obsgs_tr("OBSTitles.RenameCategory"),
+                             obsgs_tr("OBSTitles.TemplateLibraryCategoryRequired"));
+        return false;
+    }
+
+    const QString parent_path = category_info.dir().absolutePath();
+    const QString new_path = QDir(parent_path).filePath(name);
+    if (QDir::cleanPath(new_path) == QDir::cleanPath(category_path))
+        return false;
+
+    if (QFileInfo::exists(new_path) || !QDir(parent_path).rename(category_info.fileName(), name)) {
+        QMessageBox::warning(parent, obsgs_tr("OBSTitles.RenameCategory"),
+                             obsgs_tr("OBSTitles.RenameCategoryFailed"));
+        return false;
+    }
+
+    return true;
 }
 
 static bool prompt_template_library_category(QWidget *parent, QString &category)
@@ -1800,10 +1866,20 @@ void TitleDock::on_add_from_templates_library()
     });
     QObject::connect(categories, &QTreeWidget::itemClicked, window,
                      [window, categories, root_path, reload_current_category](QTreeWidgetItem *item, int column) {
-        if (!item || column != 1) return;
+        if (!item || column == 0) return;
         const QString category_path = item->data(0, Qt::UserRole).toString();
         if (category_path.isEmpty()) return;
         if (QDir::cleanPath(category_path) == QDir::cleanPath(root_path)) return;
+
+        if (column == 1) {
+            if (rename_template_category(window, item)) {
+                populate_template_categories(categories, root_path);
+                reload_current_category();
+            }
+            return;
+        }
+
+        if (column != 2) return;
         const auto reply = QMessageBox::question(
             window, obsgs_tr("OBSTitles.DeleteCategory"),
             obsgs_tr("OBSTitles.DeleteCategoryQuestionFormat").arg(item->text(0)),
