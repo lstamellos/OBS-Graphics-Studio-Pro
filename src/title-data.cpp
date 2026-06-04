@@ -442,7 +442,6 @@ static json layer_to_json(const Layer &l)
     j["text_fractions"] = l.text_fractions;
     j["text_opentype_features"] = l.text_opentype_features;
     j["text_language"] = l.text_language;
-    j["text_antialias"] = l.text_antialias;
     j["text_overflow_mode"] = l.text_overflow_mode;
     j["text_fit_min_scale"] = l.text_fit_min_scale;
     j["ticker_style"] = l.ticker_style;
@@ -550,7 +549,6 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     l->text_fractions = j.value("text_fractions", false);
     l->text_opentype_features = j.value("text_opentype_features", false);
     l->text_language = bounded_string(j, "text_language", "English", kMaxNameLength);
-    l->text_antialias = std::clamp(j.value("text_antialias", 0), 0, 3);
     l->text_overflow_mode = std::clamp(j.value("text_overflow_mode", 0), 0, 2);
     l->text_fit_min_scale = std::clamp(finite_or(j.value("text_fit_min_scale", 0.5f), 0.5), 0.05, 1.0);
     l->ticker_style = std::clamp(j.value("ticker_style", 0), 0, 2);

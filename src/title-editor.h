@@ -169,11 +169,16 @@ public:
     void set_selected_layers(const std::vector<std::string> &ids);
     void set_safe_guides_visible(bool visible);
     void refresh_preview();
+    void set_zoom_percent(int percent);
+    int zoom_percent() const;
+    void fit_canvas(bool up_to_100 = false);
+    void set_checkerboard_pattern(int pattern);
 
 signals:
     void layer_clicked(const std::string &layer_id);
     void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_geometry_changed();
+    void zoom_percent_changed(int percent);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -190,7 +195,9 @@ private:
     std::shared_ptr<Layer> selected_layer() const;
     std::vector<std::shared_ptr<Layer>> selected_layers() const;
     QRectF layer_local_rect(const Layer &layer) const;
+    double fit_scale() const;
     double view_scale() const;
+    QPointF centered_view_origin() const;
     QPointF view_origin() const;
     QPointF view_to_canvas(const QPointF &view_pt) const;
     QPointF canvas_to_view(const QPointF &canvas_pt) const;
@@ -207,10 +214,17 @@ private:
     std::string sel_layer_id_;
     std::vector<std::string> selected_layer_ids_;
     double playhead_ = 0.0;
-    float  zoom_     = 1.0f;
+    int zoom_percent_ = 100;
+    bool fit_zoom_active_ = true;
+    bool fit_zoom_up_to_100_ = false;
+    QPointF pan_offset_;
+    bool panning_ = false;
+    QPointF pan_start_view_;
+    QPointF pan_start_offset_;
     QPixmap frame_pixmap_;
     bool dirty_ = true;
     bool safe_guides_visible_ = false;
+    int checkerboard_pattern_ = 1;
 
     DragMode drag_mode_ = DragMode::None;
     bool drag_changed_ = false;
@@ -433,9 +447,9 @@ private:
     QComboBox       *cmb_font_     = nullptr;
     QComboBox       *cmb_font_style_ = nullptr;
     QSpinBox        *spn_size_     = nullptr;
-    QCheckBox       *chk_bold_     = nullptr;
-    QCheckBox       *chk_italic_   = nullptr;
-    QCheckBox       *chk_font_kerning_ = nullptr;
+    QToolButton     *chk_bold_     = nullptr;
+    QToolButton     *chk_italic_   = nullptr;
+    QToolButton     *chk_font_kerning_ = nullptr;
     QComboBox       *cmb_kerning_mode_ = nullptr;
     QDoubleSpinBox  *spn_kerning_value_ = nullptr;
     QDoubleSpinBox  *spn_text_leading_ = nullptr;
@@ -444,7 +458,6 @@ private:
     QDoubleSpinBox  *spn_char_scale_y_ = nullptr;
     QDoubleSpinBox  *spn_baseline_shift_ = nullptr;
     QComboBox       *cmb_language_ = nullptr;
-    QComboBox       *cmb_antialias_ = nullptr;
     QComboBox       *cmb_text_style_ = nullptr;
     QToolButton     *btn_all_caps_ = nullptr;
     QToolButton     *btn_small_caps_ = nullptr;
