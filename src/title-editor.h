@@ -308,6 +308,9 @@ public:
     void set_selected_layer(const std::string &lid);
     void set_playhead(double t);
     void set_vertical_scroll(int scroll_y);
+    void set_zoom_percent(int percent);
+    int zoom_percent() const;
+    void fit_timeline();
 
 signals:
     void playhead_changed(double t);
@@ -317,6 +320,7 @@ signals:
                         const std::string &prop_name, int kf_idx, double new_t);
     void keyframe_easing_changed();
     void vertical_scroll_delta_requested(int delta);
+    void zoom_percent_changed(int percent);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -331,13 +335,15 @@ private:
     double x_to_time(int x) const;
     int    time_to_x(double t) const;
     int    ruler_height() const { return 72; }
-    int    row_height()   const { return 24; }
+    int    row_height()   const { return 28; }
     double snap_time(double t) const;
     void   clamp_scroll();
     void   clamp_vertical_scroll();
     int    max_vertical_scroll() const;
     bool   hit_keyframe(const QPoint &pos, std::shared_ptr<Layer> *layer,
                         AnimatedProperty **prop, int *kf_idx, int *row_idx) const;
+    bool   keep_playhead_visible();
+    void   set_pixels_per_sec(double pixels_per_sec, double anchor_time, int anchor_x);
 
     enum class DragMode { None, Playhead, Keyframe, TrimIn, TrimOut, Layer, LoopStart, LoopEnd, PauseMarker };
 
@@ -377,7 +383,6 @@ private:
     QComboBox      *cmb_playback_mode_ = nullptr;
     QComboBox      *cmb_loop_type_ = nullptr;
     QSpinBox       *spn_pause_frame_ = nullptr;
-    QDoubleSpinBox *spn_pause_time_ = nullptr;
     QDoubleSpinBox *spn_duration_ = nullptr;
     QDoubleSpinBox *spn_loop_start_ = nullptr;
     QDoubleSpinBox *spn_loop_end_ = nullptr;
