@@ -12,11 +12,18 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
+#include <QBuffer>
+#include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QInputDialog>
+#include <QIODevice>
 #include <QItemSelectionModel>
 #include <QMenu>
+#include <QTextEdit>
 #include <QMessageBox>
 #include <QVBoxLayout>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QStyle>
@@ -24,7 +31,9 @@
 #include <QToolButton>
 #include <QToolBar>
 #include <QPushButton>
+#include <QListWidget>
 #include <QFont>
+#include <QFrame>
 #include <QSizePolicy>
 #include <QString>
 #include <QStringList>
@@ -32,6 +41,7 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPixmap>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTableWidgetItem>
@@ -41,6 +51,7 @@
 #include <algorithm>
 #include <functional>
 #include <numeric>
+#include <array>
 
 namespace {
 
@@ -241,6 +252,115 @@ static LiveTextCueHeader *live_text_cue_header(QTableWidget *table)
     return table ? dynamic_cast<LiveTextCueHeader *>(table->horizontalHeader()) : nullptr;
 }
 
+static double title_export_screenshot_time(const Title &title)
+{
+    const double source_time = title.playback_mode == 2 ? title.pause_time : title.duration * 0.5;
+    return std::clamp(source_time, 0.0, std::max(0.0, title.duration));
+}
+
+static QImage title_screenshot_image(const Title &title)
+{
+    return render_title_to_image(title, title_export_screenshot_time(title));
+}
+
+static QString title_screenshot_png_base64(const QImage &screenshot)
+{
+    if (screenshot.isNull())
+        return QString();
+
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    if (!screenshot.save(&buffer, "PNG"))
+        return QString();
+    return QString::fromLatin1(png.toBase64());
+}
+
+static bool prompt_template_export_metadata(QWidget *parent, const Title &title,
+                                            const QImage &screenshot,
+                                            TitleTemplateExportMetadata &metadata)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(obsgs_tr("OBSTitles.ExportTemplateDetails"));
+    dialog.setModal(true);
+    dialog.resize(560, 460);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(obs_layout_spacing(&dialog));
+
+    auto *preview_label = new QLabel(obsgs_tr("OBSTitles.TemplateScreenshotPreviewLabel"), &dialog);
+    set_bold_label(preview_label);
+    layout->addWidget(preview_label);
+
+    auto *preview = new QLabel(&dialog);
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    preview->setMinimumHeight(160);
+    if (!screenshot.isNull()) {
+        preview->setPixmap(QPixmap::fromImage(screenshot).scaled(
+            QSize(480, 180), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    } else {
+        preview->setText(obsgs_tr("OBSTitles.TemplateScreenshotFailed"));
+    }
+    layout->addWidget(preview);
+
+    auto *form = new QFormLayout();
+    auto *title_edit = new QLineEdit(QString::fromStdString(title.name), &dialog);
+    auto *description_edit = new QTextEdit(&dialog);
+    description_edit->setAcceptRichText(false);
+    description_edit->setMinimumHeight(96);
+    auto *creator_edit = new QLineEdit(&dialog);
+
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportTitleLabel"), title_edit);
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportDescriptionLabel"), description_edit);
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportCreatorLabel"), creator_edit);
+    layout->addLayout(form);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        if (title_edit->text().trimmed().isEmpty()) {
+            QMessageBox::warning(&dialog, obsgs_tr("OBSTitles.ExportTemplateDetails"),
+                                 obsgs_tr("OBSTitles.TemplateExportTitleRequired"));
+            return;
+        }
+        dialog.accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    metadata.title = title_edit->text().trimmed().toStdString();
+    metadata.description = description_edit->toPlainText().trimmed().toStdString();
+    metadata.creator = creator_edit->text().trimmed().toStdString();
+    metadata.creation_date = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+    return true;
+}
+
+struct TemplateLibraryEntry {
+    int id;
+    const char *name_key;
+    const char *description_key;
+    const char *default_name_key;
+};
+
+static const std::array<TemplateLibraryEntry, 3> template_library_entries{{
+    {1, "OBSTitles.TemplateLowerThird", "OBSTitles.TemplateLowerThirdDescription", "OBSTitles.TemplateSpeakerName"},
+    {2, "OBSTitles.TemplateCenteredTitle", "OBSTitles.TemplateCenteredTitleDescription", "OBSTitles.TemplateProgramTitle"},
+    {3, "OBSTitles.TemplateTickerStrap", "OBSTitles.TemplateTickerStrapDescription", "OBSTitles.TemplateBreakingNews"},
+}};
+
+static const TemplateLibraryEntry *template_library_entry_by_id(int id)
+{
+    for (const auto &entry : template_library_entries) {
+        if (entry.id == id)
+            return &entry;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 /* ══════════════════════════════════════════════════════════════════
@@ -300,8 +420,6 @@ void TitleDock::build_ui()
 
     btn_add_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Add"), obs_icon("add.svg"),
                                          obsgs_tr("OBSTitles.AddTooltip"));
-    btn_import_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Import"), obs_icon("import.svg"),
-                                            obsgs_tr("OBSTitles.ImportTooltip"));
     btn_dup_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Duplicate"), obs_icon("duplicate.svg"),
                                          obsgs_tr("OBSTitles.Duplicate"));
     btn_del_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Delete"), obs_icon("delete.svg"),
@@ -316,7 +434,6 @@ void TitleDock::build_ui()
                                            obsgs_tr("OBSTitles.AddToSceneTooltip"));
 
     template_toolbar->addWidget(btn_add_);
-    template_toolbar->addWidget(btn_import_);
     template_toolbar->addSeparator();
     template_toolbar->addWidget(btn_dup_);
     template_toolbar->addWidget(btn_del_);
@@ -410,10 +527,8 @@ void TitleDock::build_ui()
     /* ── connections ── */
     auto *add_menu = new QMenu(btn_add_);
     add_menu->addAction(obsgs_tr("OBSTitles.AddBlankTitle"), this, &TitleDock::on_add);
-    add_menu->addSeparator();
-    add_menu->addAction(obsgs_tr("OBSTitles.TemplateLowerThird"), this, &TitleDock::on_add_template_lower_third);
-    add_menu->addAction(obsgs_tr("OBSTitles.TemplateCenteredTitle"), this, &TitleDock::on_add_template_center_title);
-    add_menu->addAction(obsgs_tr("OBSTitles.TemplateTickerStrap"), this, &TitleDock::on_add_template_ticker);
+    add_menu->addAction(obsgs_tr("OBSTitles.AddFromTemplatesLibrary"), this, &TitleDock::on_add_from_templates_library);
+    add_menu->addAction(obsgs_tr("OBSTitles.Import"), this, &TitleDock::on_import);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
     btn_add_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
@@ -422,7 +537,6 @@ void TitleDock::build_ui()
     connect(btn_rename_, &QToolButton::clicked, this, &TitleDock::on_rename);
     connect(btn_del_,   &QToolButton::clicked, this, &TitleDock::on_delete);
     connect(btn_export_, &QToolButton::clicked, this, &TitleDock::on_export);
-    connect(btn_import_, &QToolButton::clicked, this, &TitleDock::on_import);
     connect(btn_edit_,  &QToolButton::clicked, this, &TitleDock::on_edit);
     connect(btn_scene_, &QToolButton::clicked, this, &TitleDock::on_add_to_scene);
     connect(btn_add_text_row_, &QToolButton::clicked, this, &TitleDock::on_add_live_text_row);
@@ -1100,19 +1214,78 @@ void TitleDock::on_add()
     on_edit();
 }
 
-void TitleDock::on_add_template_lower_third()
-{
-    create_title_from_template(obs_text_std("OBSTitles.TemplateSpeakerName"), 1);
-}
 
-void TitleDock::on_add_template_center_title()
+void TitleDock::on_add_from_templates_library()
 {
-    create_title_from_template(obs_text_std("OBSTitles.TemplateProgramTitle"), 2);
-}
+    auto *window = new QDialog(this);
+    window->setAttribute(Qt::WA_DeleteOnClose);
+    window->setWindowTitle(obsgs_tr("OBSTitles.TemplatesLibrary"));
+    window->setModal(false);
+    window->resize(520, 360);
 
-void TitleDock::on_add_template_ticker()
-{
-    create_title_from_template(obs_text_std("OBSTitles.TemplateBreakingNews"), 3);
+    auto *layout = new QVBoxLayout(window);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(obs_layout_spacing(window));
+
+    auto *intro = new QLabel(obsgs_tr("OBSTitles.TemplatesLibraryPrompt"), window);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    auto *templates = new QListWidget(window);
+    templates->setSelectionMode(QAbstractItemView::SingleSelection);
+    for (const auto &entry : template_library_entries) {
+        auto *item = new QListWidgetItem(obsgs_tr(entry.name_key));
+        item->setData(Qt::UserRole, entry.id);
+        item->setToolTip(obsgs_tr(entry.description_key));
+        templates->addItem(item);
+    }
+    layout->addWidget(templates, 1);
+
+    auto *description = new QLabel(window);
+    description->setWordWrap(true);
+    description->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    description->setMinimumHeight(64);
+    layout->addWidget(description);
+
+    auto update_description = [templates, description]() {
+        auto *item = templates->currentItem();
+        if (!item) {
+            description->clear();
+            return;
+        }
+        const auto *entry = template_library_entry_by_id(item->data(Qt::UserRole).toInt());
+        description->setText(entry ? obsgs_tr(entry->description_key) : QString());
+    };
+    QObject::connect(templates, &QListWidget::currentItemChanged, window,
+                     [update_description](QListWidgetItem *, QListWidgetItem *) { update_description(); });
+
+    auto add_selected_template = [this, window, templates]() {
+        auto *selected = templates->currentItem();
+        if (!selected)
+            return;
+
+        const auto *entry = template_library_entry_by_id(selected->data(Qt::UserRole).toInt());
+        if (!entry)
+            return;
+
+        window->close();
+        create_title_from_template(obs_text_std(entry->default_name_key), entry->id);
+    };
+    QObject::connect(templates, &QListWidget::itemDoubleClicked, window,
+                     [add_selected_template](QListWidgetItem *) { add_selected_template(); });
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, window);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, window, add_selected_template);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, window, &QDialog::close);
+    layout->addWidget(buttons);
+
+    if (templates->count() > 0)
+        templates->setCurrentRow(0);
+    update_description();
+
+    window->show();
+    window->raise();
+    window->activateWindow();
 }
 
 void TitleDock::on_duplicate()
@@ -1161,7 +1334,20 @@ void TitleDock::on_export()
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) return;
 
-    QString safe_name = QString::fromStdString(title->name).trimmed();
+    QImage screenshot = title_screenshot_image(*title);
+    QString screenshot_base64 = title_screenshot_png_base64(screenshot);
+    if (screenshot_base64.isEmpty()) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
+                             obsgs_tr("OBSTitles.TemplateScreenshotFailed"));
+        return;
+    }
+
+    TitleTemplateExportMetadata metadata;
+    metadata.screenshot_png_base64 = screenshot_base64.toStdString();
+    if (!prompt_template_export_metadata(this, *title, screenshot, metadata))
+        return;
+
+    QString safe_name = QString::fromStdString(metadata.title).trimmed();
     if (safe_name.isEmpty()) safe_name = obsgs_tr("OBSTitles.TemplateFileDialogTitle");
     safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
 
@@ -1174,7 +1360,7 @@ void TitleDock::on_export()
         path += QStringLiteral(".ogspt");
 
     std::string error;
-    if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), &error)) {
+    if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), metadata, &error)) {
         QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
                              QString::fromStdString(error));
         return;
