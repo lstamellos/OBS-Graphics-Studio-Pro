@@ -10,9 +10,13 @@
 
 #include <obs-module.h>
 #include <string>
+#include <QImage>
+
+struct Title;
 
 /* Registers the source type with OBS. Call once from obs_module_load(). */
 void title_source_register();
+QImage render_title_to_image(const Title &title, double t);
 
 /* Source settings keys */
 #define PROP_TITLE_ID      "title_id"
