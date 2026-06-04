@@ -234,11 +234,15 @@ void TitleDock::build_ui()
     template_toolbar->addWidget(btn_scene_);
 
     /* ── template/title section ── */
+    auto *template_header = new QHBoxLayout();
+    template_header->setContentsMargins(0, 0, 0, 0);
+    template_header->setSpacing(0);
+
     auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
     set_bold_label(template_lbl);
     template_header->addWidget(template_lbl);
     template_header->addStretch();
-    template_header->addWidget(toolbar);
+    template_header->addWidget(template_toolbar);
     template_layout->addLayout(template_header);
 
     list_ = new QListWidget(template_section);
@@ -300,7 +304,6 @@ void TitleDock::build_ui()
     sf.setPointSize(std::max(1, sf.pointSize() - 1));
     status_lbl_->setFont(sf);
     template_layout->addWidget(status_lbl_);
-    template_layout->addWidget(template_toolbar);
 
     setWidget(container_);
 
