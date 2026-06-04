@@ -12,6 +12,8 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QMenu>
@@ -24,7 +26,9 @@
 #include <QToolButton>
 #include <QToolBar>
 #include <QPushButton>
+#include <QListWidget>
 #include <QFont>
+#include <QFrame>
 #include <QSizePolicy>
 #include <QString>
 #include <QStringList>
@@ -41,6 +45,7 @@
 #include <algorithm>
 #include <functional>
 #include <numeric>
+#include <array>
 
 namespace {
 
@@ -241,6 +246,28 @@ static LiveTextCueHeader *live_text_cue_header(QTableWidget *table)
     return table ? dynamic_cast<LiveTextCueHeader *>(table->horizontalHeader()) : nullptr;
 }
 
+struct TemplateLibraryEntry {
+    int id;
+    const char *name_key;
+    const char *description_key;
+    const char *default_name_key;
+};
+
+static const std::array<TemplateLibraryEntry, 3> template_library_entries{{
+    {1, "OBSTitles.TemplateLowerThird", "OBSTitles.TemplateLowerThirdDescription", "OBSTitles.TemplateSpeakerName"},
+    {2, "OBSTitles.TemplateCenteredTitle", "OBSTitles.TemplateCenteredTitleDescription", "OBSTitles.TemplateProgramTitle"},
+    {3, "OBSTitles.TemplateTickerStrap", "OBSTitles.TemplateTickerStrapDescription", "OBSTitles.TemplateBreakingNews"},
+}};
+
+static const TemplateLibraryEntry *template_library_entry_by_id(int id)
+{
+    for (const auto &entry : template_library_entries) {
+        if (entry.id == id)
+            return &entry;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 /* ══════════════════════════════════════════════════════════════════
@@ -410,6 +437,7 @@ void TitleDock::build_ui()
     /* ── connections ── */
     auto *add_menu = new QMenu(btn_add_);
     add_menu->addAction(obsgs_tr("OBSTitles.AddBlankTitle"), this, &TitleDock::on_add);
+    add_menu->addAction(obsgs_tr("OBSTitles.AddFromTemplatesLibrary"), this, &TitleDock::on_add_from_templates_library);
     add_menu->addSeparator();
     add_menu->addAction(obsgs_tr("OBSTitles.TemplateLowerThird"), this, &TitleDock::on_add_template_lower_third);
     add_menu->addAction(obsgs_tr("OBSTitles.TemplateCenteredTitle"), this, &TitleDock::on_add_template_center_title);
@@ -1098,6 +1126,75 @@ void TitleDock::on_add()
     TitleDataStore::instance().notify_change();
     select_title(title->id);
     on_edit();
+}
+
+
+void TitleDock::on_add_from_templates_library()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(obsgs_tr("OBSTitles.TemplatesLibrary"));
+    dialog.setModal(true);
+    dialog.resize(520, 360);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(obs_layout_spacing(&dialog));
+
+    auto *intro = new QLabel(obsgs_tr("OBSTitles.TemplatesLibraryPrompt"), &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+
+    auto *templates = new QListWidget(&dialog);
+    templates->setSelectionMode(QAbstractItemView::SingleSelection);
+    for (const auto &entry : template_library_entries) {
+        auto *item = new QListWidgetItem(obsgs_tr(entry.name_key));
+        item->setData(Qt::UserRole, entry.id);
+        item->setToolTip(obsgs_tr(entry.description_key));
+        templates->addItem(item);
+    }
+    layout->addWidget(templates, 1);
+
+    auto *description = new QLabel(&dialog);
+    description->setWordWrap(true);
+    description->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    description->setMinimumHeight(64);
+    layout->addWidget(description);
+
+    auto update_description = [templates, description]() {
+        auto *item = templates->currentItem();
+        if (!item) {
+            description->clear();
+            return;
+        }
+        const auto *entry = template_library_entry_by_id(item->data(Qt::UserRole).toInt());
+        description->setText(entry ? obsgs_tr(entry->description_key) : QString());
+    };
+    QObject::connect(templates, &QListWidget::currentItemChanged, &dialog,
+                     [update_description](QListWidgetItem *, QListWidgetItem *) { update_description(); });
+    QObject::connect(templates, &QListWidget::itemDoubleClicked, &dialog,
+                     [&dialog](QListWidgetItem *) { dialog.accept(); });
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (templates->count() > 0)
+        templates->setCurrentRow(0);
+    update_description();
+
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    auto *selected = templates->currentItem();
+    if (!selected)
+        return;
+
+    const auto *entry = template_library_entry_by_id(selected->data(Qt::UserRole).toInt());
+    if (!entry)
+        return;
+
+    create_title_from_template(obs_text_std(entry->default_name_key), entry->id);
 }
 
 void TitleDock::on_add_template_lower_third()
