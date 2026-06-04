@@ -46,9 +46,16 @@
 #include <chrono>
 #include <vector>
 #include <algorithm>
+#include <mutex>
 
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
+constexpr uint32_t kMaxSourceDimension = 16384;
+
+static uint32_t clamped_source_dimension(int value)
+{
+    return static_cast<uint32_t>(std::clamp(value, 1, static_cast<int>(kMaxSourceDimension)));
+}
 
 static bool image_path_is_svg(const QString &path)
 {
@@ -109,6 +116,7 @@ struct TitleSourceData {
     bool        waiting_for_cue = true;
 
     /* GPU texture */
+    std::mutex    texture_mutex;
     gs_texture_t *texture    = nullptr;
     uint32_t      tex_w      = 0;
     uint32_t      tex_h      = 0;
@@ -186,6 +194,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
+        if (!layer) continue;
         if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
@@ -948,19 +957,32 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
 static void render_title_frame(TitleSourceData *data,
                                 const Title &title, double t)
 {
-    uint32_t w = (uint32_t)title.width;
-    uint32_t h = (uint32_t)title.height;
+    uint32_t w = clamped_source_dimension(title.width);
+    uint32_t h = clamped_source_dimension(title.height);
 
     /* (Re)allocate buffer & texture if size changed */
     if (data->tex_w != w || data->tex_h != h) {
-        obs_enter_graphics();
-        if (data->texture) gs_texture_destroy(data->texture);
-        data->texture = gs_texture_create(w, h, GS_BGRA, 1, nullptr, GS_DYNAMIC);
-        obs_leave_graphics();
+        bool texture_created = false;
+        {
+            std::lock_guard<std::mutex> lock(data->texture_mutex);
+            obs_enter_graphics();
+            if (data->texture) gs_texture_destroy(data->texture);
+            data->texture = gs_texture_create(w, h, GS_BGRA, 1, nullptr, GS_DYNAMIC);
+            texture_created = data->texture != nullptr;
+            obs_leave_graphics();
+        }
+
+        if (!texture_created) {
+            data->tex_w = 0;
+            data->tex_h = 0;
+            data->pixel_buf.clear();
+            data->dirty = false;
+            return;
+        }
 
         data->tex_w = w;
         data->tex_h = h;
-        data->pixel_buf.resize(w * h * 4, 0);
+        data->pixel_buf.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4, 0);
     }
 
     /* Cairo surface over our buffer */
@@ -970,8 +992,19 @@ static void render_title_frame(TitleSourceData *data,
             CAIRO_FORMAT_ARGB32,  /* == BGRA on LE – matches GS_BGRA */
             (int)w, (int)h,
             (int)w * 4);
+    if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(surface);
+        data->dirty = false;
+        return;
+    }
 
     cairo_t *cr = cairo_create(surface);
+    if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+        data->dirty = false;
+        return;
+    }
 
     /* Clear with background */
     double br, bg, bb, ba;
@@ -983,7 +1016,7 @@ static void render_title_frame(TitleSourceData *data,
 
     /* Render layers bottom → top */
     for (auto &layer : title.layers) {
-        if (!layer->visible) continue;
+        if (!layer || !layer->visible) continue;
         if (t < layer->in_time || t > layer->out_time) continue;
         double lt = t - layer->in_time;  /* local layer time */
 
@@ -1010,11 +1043,16 @@ static void render_title_frame(TitleSourceData *data,
     cairo_surface_destroy(surface);
 
     /* Upload to GPU */
-    obs_enter_graphics();
-    const uint8_t *ptr = data->pixel_buf.data();
-    uint32_t linesize  = w * 4;
-    gs_texture_set_image(data->texture, ptr, linesize, false);
-    obs_leave_graphics();
+    {
+        std::lock_guard<std::mutex> lock(data->texture_mutex);
+        if (data->texture) {
+            obs_enter_graphics();
+            const uint8_t *ptr = data->pixel_buf.data();
+            uint32_t linesize  = w * 4;
+            gs_texture_set_image(data->texture, ptr, linesize, false);
+            obs_leave_graphics();
+        }
+    }
 
     data->dirty = false;
 }
@@ -1094,9 +1132,15 @@ static void *source_create(obs_data_t *settings, obs_source_t *source)
 static void source_destroy(void *priv)
 {
     auto *data = static_cast<TitleSourceData *>(priv);
-    obs_enter_graphics();
-    if (data->texture) gs_texture_destroy(data->texture);
-    obs_leave_graphics();
+    {
+        std::lock_guard<std::mutex> lock(data->texture_mutex);
+        obs_enter_graphics();
+        if (data->texture) gs_texture_destroy(data->texture);
+        obs_leave_graphics();
+        data->texture = nullptr;
+        data->tex_w = 0;
+        data->tex_h = 0;
+    }
     delete data;
 }
 
@@ -1123,14 +1167,14 @@ static uint32_t source_get_width(void *priv)
 {
     auto *data = static_cast<TitleSourceData *>(priv);
     auto title = TitleDataStore::instance().get_title(data->title_id);
-    return title ? (uint32_t)title->width : 1920;
+    return title ? clamped_source_dimension(title->width) : 1920;
 }
 
 static uint32_t source_get_height(void *priv)
 {
     auto *data = static_cast<TitleSourceData *>(priv);
     auto title = TitleDataStore::instance().get_title(data->title_id);
-    return title ? (uint32_t)title->height : 1080;
+    return title ? clamped_source_dimension(title->height) : 1080;
 }
 
 static void source_video_tick(void *priv, float seconds)
@@ -1284,10 +1328,15 @@ static void source_video_tick(void *priv, float seconds)
 static void source_video_render(void *priv, gs_effect_t * /*effect*/)
 {
     auto *data = static_cast<TitleSourceData *>(priv);
+    std::lock_guard<std::mutex> lock(data->texture_mutex);
     if (!data->texture) return;
 
     gs_effect_t *eff = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+    if (!eff) return;
+
     gs_eparam_t *image = gs_effect_get_param_by_name(eff, "image");
+    if (!image) return;
+
     gs_effect_set_texture(image, data->texture);
 
     while (gs_effect_loop(eff, "Draw"))
