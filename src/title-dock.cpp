@@ -438,10 +438,6 @@ void TitleDock::build_ui()
     auto *add_menu = new QMenu(btn_add_);
     add_menu->addAction(obsgs_tr("OBSTitles.AddBlankTitle"), this, &TitleDock::on_add);
     add_menu->addAction(obsgs_tr("OBSTitles.AddFromTemplatesLibrary"), this, &TitleDock::on_add_from_templates_library);
-    add_menu->addSeparator();
-    add_menu->addAction(obsgs_tr("OBSTitles.TemplateLowerThird"), this, &TitleDock::on_add_template_lower_third);
-    add_menu->addAction(obsgs_tr("OBSTitles.TemplateCenteredTitle"), this, &TitleDock::on_add_template_center_title);
-    add_menu->addAction(obsgs_tr("OBSTitles.TemplateTickerStrap"), this, &TitleDock::on_add_template_ticker);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
     btn_add_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
@@ -1195,21 +1191,6 @@ void TitleDock::on_add_from_templates_library()
         return;
 
     create_title_from_template(obs_text_std(entry->default_name_key), entry->id);
-}
-
-void TitleDock::on_add_template_lower_third()
-{
-    create_title_from_template(obs_text_std("OBSTitles.TemplateSpeakerName"), 1);
-}
-
-void TitleDock::on_add_template_center_title()
-{
-    create_title_from_template(obs_text_std("OBSTitles.TemplateProgramTitle"), 2);
-}
-
-void TitleDock::on_add_template_ticker()
-{
-    create_title_from_template(obs_text_std("OBSTitles.TemplateBreakingNews"), 3);
 }
 
 void TitleDock::on_duplicate()
