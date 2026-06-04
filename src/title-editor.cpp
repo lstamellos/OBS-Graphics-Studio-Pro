@@ -4748,14 +4748,6 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_size_->setFixedHeight(22);
     spn_size_->setStyleSheet(control_style);
 
-    chk_bold_   = new QCheckBox(obsgs_tr("OBSTitles.Bold"),   inner);
-    chk_italic_ = new QCheckBox(obsgs_tr("OBSTitles.Italic"), inner);
-    chk_font_kerning_ = new QCheckBox(obsgs_tr("OBSTitles.Kerning"), inner);
-    chk_font_kerning_->setToolTip(obsgs_tr("OBSTitles.KerningTooltip"));
-    chk_bold_->setStyleSheet("color:#ccc;");
-    chk_italic_->setStyleSheet("color:#ccc;");
-    chk_font_kerning_->setStyleSheet("color:#ccc;");
-
     cmb_kerning_mode_ = mk_combo({"Metrics", "Optical", "Manual"}, {0, 1, 2});
     spn_kerning_value_ = mk_dspin(-100.0, 500.0, 1.0);
     spn_kerning_value_->setSuffix(" px");
@@ -4794,15 +4786,6 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     add_grid_field(char_grid, 6, 0, "Fill", with_kf(btn_text_color_, btn_kf_text_color_));
     add_grid_field(char_grid, 6, 1, "Language", cmb_language_);
     add_grid_field(char_grid, 7, 0, "AA", cmb_antialias_);
-    auto *style_checks = new QWidget(inner);
-    auto *style_checks_layout = new QHBoxLayout(style_checks);
-    style_checks_layout->setContentsMargins(0, 0, 0, 0);
-    style_checks_layout->setSpacing(8);
-    style_checks_layout->addWidget(chk_bold_);
-    style_checks_layout->addWidget(chk_italic_);
-    style_checks_layout->addWidget(chk_font_kerning_);
-    style_checks_layout->addStretch(1);
-    char_grid->addWidget(style_checks, 7, 2, 1, 2);
     vl->addWidget(text_box_);
     make_collapsible(text_box_);
 
@@ -4813,6 +4796,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     type_grid->setContentsMargins(6, 5, 6, 6);
     type_grid->setHorizontalSpacing(4);
     type_grid->setVerticalSpacing(4);
+    chk_bold_ = mk_type_button("B", obsgs_tr("OBSTitles.Bold"));
+    chk_italic_ = mk_type_button("I", obsgs_tr("OBSTitles.Italic"));
+    chk_font_kerning_ = mk_type_button("K", obsgs_tr("OBSTitles.Kerning"));
+    chk_font_kerning_->setToolTip(obsgs_tr("OBSTitles.KerningTooltip"));
     btn_all_caps_ = mk_type_button("TT", "All Caps");
     btn_small_caps_ = mk_type_button("Tᴛ", "Small Caps");
     btn_superscript_ = mk_type_button("x²", "Superscript");
@@ -4823,8 +4810,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_stylistic_alternates_ = mk_type_button("Sw", "Stylistic Alternates");
     btn_fractions_ = mk_type_button("½", "Fractions");
     btn_opentype_features_ = mk_type_button("OT", "OpenType Features");
-    QList<QToolButton *> type_buttons{btn_all_caps_, btn_small_caps_, btn_superscript_, btn_subscript_, btn_underline_,
-                                      btn_strikethrough_, btn_ligatures_, btn_stylistic_alternates_, btn_fractions_, btn_opentype_features_};
+    QList<QToolButton *> type_buttons{chk_bold_, chk_italic_, btn_all_caps_, btn_small_caps_, btn_superscript_,
+                                      btn_subscript_, btn_underline_, btn_strikethrough_, btn_ligatures_, btn_stylistic_alternates_,
+                                      btn_fractions_, btn_opentype_features_, chk_font_kerning_};
     for (int i = 0; i < type_buttons.size(); ++i) type_grid->addWidget(type_buttons[i], i / 5, i % 5);
     type_grid->setColumnStretch(5, 1);
     vl->addWidget(type_options_box_);
@@ -5137,15 +5125,15 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, emit_change](int v){
                 if (can_edit()) { layer_->font_size = v; emit_change(); }
             });
-    connect(chk_bold_, &QCheckBox::toggled,
+    connect(chk_bold_, &QToolButton::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_bold = v; emit_change(); }
             });
-    connect(chk_italic_, &QCheckBox::toggled,
+    connect(chk_italic_, &QToolButton::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_italic = v; emit_change(); }
             });
-    connect(chk_font_kerning_, &QCheckBox::toggled,
+    connect(chk_font_kerning_, &QToolButton::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_kerning = v; emit_change(); }
             });

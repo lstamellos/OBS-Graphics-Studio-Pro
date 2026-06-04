@@ -444,9 +444,9 @@ private:
     QComboBox       *cmb_font_     = nullptr;
     QComboBox       *cmb_font_style_ = nullptr;
     QSpinBox        *spn_size_     = nullptr;
-    QCheckBox       *chk_bold_     = nullptr;
-    QCheckBox       *chk_italic_   = nullptr;
-    QCheckBox       *chk_font_kerning_ = nullptr;
+    QToolButton     *chk_bold_     = nullptr;
+    QToolButton     *chk_italic_   = nullptr;
+    QToolButton     *chk_font_kerning_ = nullptr;
     QComboBox       *cmb_kerning_mode_ = nullptr;
     QDoubleSpinBox  *spn_kerning_value_ = nullptr;
     QDoubleSpinBox  *spn_text_leading_ = nullptr;
