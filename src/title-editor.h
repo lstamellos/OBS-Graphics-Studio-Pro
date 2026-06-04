@@ -92,6 +92,7 @@ protected:
 
 private slots:
     void tick();
+    void show_about();
 
 private:
     void build_ui();

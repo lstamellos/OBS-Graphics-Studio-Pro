@@ -9,6 +9,7 @@
 #include "title-data.h"
 #include "title-assets.h"
 #include "title-localization.h"
+#include "plugin-main.h"
 
 #include <obs-module.h>
 
@@ -59,6 +60,8 @@
 #include <QTransform>
 #include <QToolButton>
 #include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
 #include <QContextMenuEvent>
 #include <cmath>
 #include <algorithm>
@@ -822,6 +825,15 @@ void TitleEditor::build_ui()
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
+    auto *menu_bar = new QMenuBar(this);
+    auto *file_menu = menu_bar->addMenu(obsgs_tr("OBSTitles.FileMenu"));
+    QAction *exit_action = file_menu->addAction(obs_icon("file-exit.svg"), obsgs_tr("OBSTitles.Exit"));
+    connect(exit_action, &QAction::triggered, this, &TitleEditor::close);
+    auto *help_menu = menu_bar->addMenu(obsgs_tr("OBSTitles.HelpMenu"));
+    QAction *about_action = help_menu->addAction(obs_icon("about.svg"), obsgs_tr("OBSTitles.About"));
+    connect(about_action, &QAction::triggered, this, &TitleEditor::show_about);
+    root->setMenuBar(menu_bar);
+
     /* ── Toolbar ── */
     build_toolbar();
     root->addWidget(toolbar_);
@@ -887,7 +899,7 @@ void TitleEditor::build_ui()
     layer_transport->addAction(act_prev_kf_);
     layer_transport->addAction(act_play_);
     layer_transport->addAction(act_full_loop_);
-    layer_transport->addAction("▶|", this, &TitleEditor::step_forward);
+    layer_transport->addAction(obs_icon("step-forward.svg"), obsgs_tr("OBSTitles.StepForward"), this, &TitleEditor::step_forward);
     layer_transport->addAction(act_next_kf_);
     layers_layout->addWidget(layer_transport);
 
@@ -1234,7 +1246,8 @@ void TitleEditor::build_toolbar()
 
     toolbar_->addSeparator();
     auto *align_target = new QToolButton(toolbar_);
-    align_target->setText("▣⌄");
+    align_target->setIcon(obs_icon("alignment-target.svg"));
+    align_target->setText(obsgs_tr("OBSTitles.AlignmentTargetShort"));
     align_target->setToolTip(obsgs_tr("OBSTitles.AlignmentTarget"));
     align_target->setPopupMode(QToolButton::InstantPopup);
     align_target->setStyleSheet("QToolButton{color:#ddd;background:#3a3a3a;border:1px solid #666;border-radius:2px;padding:3px 8px;} QToolButton::menu-indicator{image:none;}");
@@ -1257,21 +1270,21 @@ void TitleEditor::build_toolbar()
     align_target->setMenu(align_menu);
     toolbar_->addWidget(align_target);
 
-    auto add_align_action = [this](const QString &text, const QString &tip, int x_mode, int y_mode) {
-        QAction *action = toolbar_->addAction(text);
+    auto add_align_action = [this](const char *icon_name, const QString &tip, int x_mode, int y_mode) {
+        QAction *action = toolbar_->addAction(obs_icon(icon_name), tip);
         action->setToolTip(tip);
         connect(action, &QAction::triggered, this, [this, x_mode, y_mode]() {
             align_selected_layers(x_mode, y_mode);
         });
         return action;
     };
-    add_align_action("|◧", obsgs_tr("OBSTitles.AlignLeft"), 0, -1);
-    add_align_action("↔", obsgs_tr("OBSTitles.AlignHorizontalCenter"), 1, -1);
-    add_align_action("◨|", obsgs_tr("OBSTitles.AlignRight"), 2, -1);
-    add_align_action("▔", obsgs_tr("OBSTitles.AlignTop"), -1, 0);
-    add_align_action("↕", obsgs_tr("OBSTitles.AlignVerticalCenter"), -1, 1);
-    add_align_action("▁", obsgs_tr("OBSTitles.AlignBottom"), -1, 2);
-    add_align_action("▦", obsgs_tr("OBSTitles.AlignCenterToArtboard"), 1, 1);
+    add_align_action("align-left.svg", obsgs_tr("OBSTitles.AlignLeft"), 0, -1);
+    add_align_action("align-horizontal-center.svg", obsgs_tr("OBSTitles.AlignHorizontalCenter"), 1, -1);
+    add_align_action("align-right.svg", obsgs_tr("OBSTitles.AlignRight"), 2, -1);
+    add_align_action("align-top.svg", obsgs_tr("OBSTitles.AlignTop"), -1, 0);
+    add_align_action("align-vertical-center.svg", obsgs_tr("OBSTitles.AlignVerticalCenter"), -1, 1);
+    add_align_action("align-bottom.svg", obsgs_tr("OBSTitles.AlignBottom"), -1, 2);
+    add_align_action("align-center-artboard.svg", obsgs_tr("OBSTitles.AlignCenterToArtboard"), 1, 1);
 
     act_safe_guides_ = toolbar_->addAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"));
     act_safe_guides_->setCheckable(true);
@@ -1670,6 +1683,15 @@ static bool editor_focus_accepts_text(QWidget *widget)
            qobject_cast<QAbstractSpinBox *>(widget) ||
            qobject_cast<QComboBox *>(widget);
 }
+
+void TitleEditor::show_about()
+{
+    QMessageBox::about(
+        this,
+        obsgs_tr("OBSTitles.AboutTitle"),
+        obsgs_tr("OBSTitles.AboutTextFormat").arg(QStringLiteral(PLUGIN_VERSION)));
+}
+
 
 bool TitleEditor::eventFilter(QObject *watched, QEvent *event)
 {
@@ -2477,27 +2499,28 @@ void LayerStack::populate()
         hl->setContentsMargins(4, 0, 4, 0);
         hl->setSpacing(4);
 
-        auto make_toggle = [&](const QString &on, const QString &off, bool checked,
+        auto make_toggle = [&](const char *on_icon, const char *off_icon, bool checked,
                                const QString &tip) {
             auto *btn = new QToolButton(row_widget);
             btn->setCheckable(true);
             btn->setChecked(checked);
-            btn->setText(checked ? on : off);
+            btn->setIcon(obs_icon(checked ? on_icon : off_icon));
             btn->setToolTip(tip);
             btn->setFixedSize(20, 20);
+            btn->setIconSize(QSize(14, 14));
             btn->setAutoRaise(true);
             btn->setStyleSheet("QToolButton{color:#bcbcbc;background:transparent;border:none;}"
                                "QToolButton:hover{background:#353535;border-radius:2px;}"
                                "QToolButton:checked{color:#eeeeee;}");
-            connect(btn, &QToolButton::toggled, btn, [btn, on, off](bool state) {
-                btn->setText(state ? on : off);
+            connect(btn, &QToolButton::toggled, btn, [btn, on_icon, off_icon](bool state) {
+                btn->setIcon(obs_icon(state ? on_icon : off_icon));
             });
             hl->addWidget(btn);
             return btn;
         };
 
-        QToolButton *vis = make_toggle("●", "○", l->visible, obsgs_tr("OBSTitles.LayerVisibilityTooltip"));
-        QToolButton *lock = make_toggle("🔒", "", l->locked, obsgs_tr("OBSTitles.LockLayerTooltip"));
+        QToolButton *vis = make_toggle("layer-visible.svg", "layer-hidden.svg", l->visible, obsgs_tr("OBSTitles.LayerVisibilityTooltip"));
+        QToolButton *lock = make_toggle("layer-lock.svg", "layer-unlock.svg", l->locked, obsgs_tr("OBSTitles.LockLayerTooltip"));
         connect(vis, &QToolButton::toggled, this, [this, id = l->id, item](bool checked) {
             list_->setCurrentItem(item);
             emit layer_visibility_changed(id, checked);
@@ -2510,13 +2533,15 @@ void LayerStack::populate()
         QToolButton *expand = new QToolButton(row_widget);
         expand->setCheckable(true);
         expand->setChecked(l->properties_expanded);
-        expand->setText(l->properties_expanded ? "▾" : "▸");
+        expand->setIcon(obs_icon(l->properties_expanded ? "keyframes-expand.svg" : "keyframes-collapse.svg"));
         expand->setToolTip(obsgs_tr("OBSTitles.ShowKeyframedPropertiesTooltip"));
         expand->setFixedSize(16, 20);
+        expand->setIconSize(QSize(12, 12));
         expand->setAutoRaise(true);
         expand->setStyleSheet("QToolButton{color:#aaa;background:transparent;border:none;}"
                               "QToolButton:hover{background:#353535;border-radius:2px;}");
-        connect(expand, &QToolButton::toggled, this, [this, id = l->id](bool checked) {
+        connect(expand, &QToolButton::toggled, this, [this, expand, id = l->id](bool checked) {
+            expand->setIcon(obs_icon(checked ? "keyframes-expand.svg" : "keyframes-collapse.svg"));
             emit layer_expand_changed(id, checked);
         });
         hl->addWidget(expand);
