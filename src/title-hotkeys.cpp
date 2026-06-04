@@ -1,9 +1,11 @@
 #include "title-hotkeys.h"
 #include "title-data.h"
+#include "title-source.h"
 #include <obs-module.h>
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -30,6 +32,14 @@ struct HotkeyRegistration {
     HotkeyDescriptor descriptor;
 };
 
+struct HotkeySection {
+    std::string title_id;
+    std::string display_name;
+    /* Private title source used only as the OBS hotkey settings section. */
+    obs_source_t *source = nullptr;
+};
+
+std::vector<HotkeySection> g_sections;
 std::vector<HotkeyRegistration> g_hotkeys;
 std::string g_hotkey_signature;
 bool g_hotkeys_active = false;
@@ -89,9 +99,23 @@ static std::string title_display_name(const std::shared_ptr<Title> &title)
     return title && !title->name.empty() ? title->name : std::string("Untitled");
 }
 
-static std::string cue_description(const std::shared_ptr<Title> &title, int cue_number)
+static std::string title_section_name(const std::shared_ptr<Title> &title,
+                                      const std::map<std::string, int> &name_counts)
 {
-    return title_display_name(title) + " — " + obs_module_text("OBSTitles.Cue") + " " + std::to_string(cue_number);
+    std::string name = title_display_name(title);
+    auto it = name_counts.find(name);
+    if (it == name_counts.end() || it->second <= 1)
+        return name;
+
+    std::string suffix = title && !title->id.empty()
+        ? title->id.substr(0, std::min<size_t>(8, title->id.size()))
+        : hotkey_safe_id(name).substr(0, 8);
+    return name + " [" + suffix + "]";
+}
+
+static std::string cue_description(int cue_number)
+{
+    return std::string(obs_module_text("OBSTitles.Cue")) + " " + std::to_string(cue_number);
 }
 
 static void cue_title_row(const std::shared_ptr<Title> &title, int row)
@@ -164,21 +188,30 @@ static void hotkey_callback(void *data, obs_hotkey_id, obs_hotkey_t *, bool pres
     }
 }
 
-static std::vector<HotkeyDescriptor> build_descriptors()
+static std::vector<HotkeyDescriptor> build_descriptors(std::vector<HotkeySection> &sections)
 {
     std::vector<HotkeyDescriptor> descriptors;
+    std::map<std::string, int> name_counts;
+
+    for (const auto &title : TitleDataStore::instance().titles()) {
+        if (title)
+            ++name_counts[title_display_name(title)];
+    }
 
     for (const auto &title : TitleDataStore::instance().titles()) {
         if (!title) continue;
 
         const std::string safe_title_id = hotkey_safe_id(title->id);
+        const std::string section_name = title_section_name(title, name_counts);
+        sections.push_back({title->id, section_name, nullptr});
+
         auto exposed = exposed_text_layers(title);
         normalize_live_text_rows(title, exposed);
 
         if (exposed.empty()) {
             descriptors.push_back({
                 "obs_graphics_studio_pro." + safe_title_id + ".cue.title",
-                title_display_name(title) + " — " + obs_module_text("OBSTitles.Cue"),
+                obs_module_text("OBSTitles.Cue"),
                 title->id,
                 HotkeyAction::CueRow,
                 -1,
@@ -188,14 +221,14 @@ static std::vector<HotkeyDescriptor> build_descriptors()
 
         descriptors.push_back({
             "obs_graphics_studio_pro." + safe_title_id + ".cue.next",
-            title_display_name(title) + " — " + obs_module_text("OBSTitles.NextCue"),
+            obs_module_text("OBSTitles.NextCue"),
             title->id,
             HotkeyAction::NextCue,
             -1,
         });
         descriptors.push_back({
             "obs_graphics_studio_pro." + safe_title_id + ".cue.previous",
-            title_display_name(title) + " — " + obs_module_text("OBSTitles.PreviousCue"),
+            obs_module_text("OBSTitles.PreviousCue"),
             title->id,
             HotkeyAction::PreviousCue,
             -1,
@@ -204,7 +237,7 @@ static std::vector<HotkeyDescriptor> build_descriptors()
         for (int row = 0; row < (int)title->live_text_rows.size(); ++row) {
             descriptors.push_back({
                 "obs_graphics_studio_pro." + safe_title_id + ".cue." + std::to_string(row + 1),
-                cue_description(title, row + 1),
+                cue_description(row + 1),
                 title->id,
                 HotkeyAction::CueRow,
                 row,
@@ -215,9 +248,15 @@ static std::vector<HotkeyDescriptor> build_descriptors()
     return descriptors;
 }
 
-static std::string descriptor_signature(const std::vector<HotkeyDescriptor> &descriptors)
+static std::string descriptor_signature(const std::vector<HotkeyDescriptor> &descriptors,
+                                        const std::vector<HotkeySection> &sections)
 {
     std::ostringstream out;
+    for (const auto &section : sections) {
+        out << "section" << '\t'
+            << section.title_id << '\t'
+            << section.display_name << '\n';
+    }
     for (const auto &descriptor : descriptors) {
         out << descriptor.name << '\t'
             << descriptor.description << '\t'
@@ -235,6 +274,11 @@ static void unregister_all_hotkeys()
             obs_hotkey_unregister(hotkey.id);
     }
     g_hotkeys.clear();
+    for (auto &section : g_sections) {
+        if (section.source)
+            obs_source_release(section.source);
+    }
+    g_sections.clear();
     g_hotkey_signature.clear();
 }
 
@@ -242,16 +286,36 @@ static void refresh_hotkeys()
 {
     if (!g_hotkeys_active) return;
 
-    auto descriptors = build_descriptors();
-    std::string signature = descriptor_signature(descriptors);
+    std::vector<HotkeySection> sections;
+    auto descriptors = build_descriptors(sections);
+    std::string signature = descriptor_signature(descriptors, sections);
     if (signature == g_hotkey_signature) return;
 
     unregister_all_hotkeys();
+    g_sections = std::move(sections);
+
+    std::map<std::string, obs_source_t *> section_sources;
+    for (auto &section : g_sections) {
+        obs_data_t *settings = obs_data_create();
+        obs_data_set_string(settings, PROP_TITLE_ID, section.title_id.c_str());
+        section.source = obs_source_create_private("obs_graphics_studio_pro_source",
+                                                   section.display_name.c_str(),
+                                                   settings);
+        obs_data_release(settings);
+        if (section.source)
+            section_sources[section.title_id] = section.source;
+    }
+
     g_hotkeys.reserve(descriptors.size());
     for (auto &descriptor : descriptors) {
+        auto source_it = section_sources.find(descriptor.title_id);
+        if (source_it == section_sources.end() || !source_it->second)
+            continue;
+
         g_hotkeys.push_back({OBS_INVALID_HOTKEY_ID, std::move(descriptor)});
         auto &registration = g_hotkeys.back();
-        registration.id = obs_hotkey_register_frontend(
+        registration.id = obs_hotkey_register_source(
+            source_it->second,
             registration.descriptor.name.c_str(),
             registration.descriptor.description.c_str(),
             hotkey_callback,
