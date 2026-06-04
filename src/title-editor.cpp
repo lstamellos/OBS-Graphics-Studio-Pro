@@ -18,6 +18,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QImage>
+#include <QImageReader>
+#include <QSize>
+#include <QSvgRenderer>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QResizeEvent>
@@ -78,6 +81,60 @@ static const QColor C_BG_DARK  { 0x1a1a1a };
 static const QColor C_BG_MID   { 0x252525 };
 static const QColor C_BG_LIGHT { 0x2e2e2e };
 static const QColor C_ACCENT   { 0x0078d4 };
+
+static bool editor_image_path_is_svg(const QString &path)
+{
+    return path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive) ||
+           path.endsWith(QStringLiteral(".svgz"), Qt::CaseInsensitive);
+}
+
+static QSize editor_image_intrinsic_size(const QString &path)
+{
+    if (editor_image_path_is_svg(path)) {
+        QSvgRenderer renderer(path);
+        if (!renderer.isValid()) return QSize();
+        QSize size = renderer.defaultSize();
+        if (!size.isValid() || size.isEmpty())
+            size = renderer.viewBox().size();
+        return size;
+    }
+
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    QSize size = reader.size();
+    if (size.isValid() && !size.isEmpty())
+        return size;
+
+    QImage image = reader.read();
+    return image.isNull() ? QSize() : image.size();
+}
+
+static QImage editor_load_layer_image(const QString &path, const QSize &fallback_size = QSize())
+{
+    if (editor_image_path_is_svg(path)) {
+        QSvgRenderer renderer(path);
+        if (!renderer.isValid()) return QImage();
+
+        QSize size = fallback_size.isValid() && !fallback_size.isEmpty()
+            ? fallback_size
+            : renderer.defaultSize();
+        if (!size.isValid() || size.isEmpty())
+            size = renderer.viewBox().size();
+        if (!size.isValid() || size.isEmpty())
+            size = QSize(256, 256);
+
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        renderer.render(&painter);
+        return image;
+    }
+
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    return reader.read();
+}
+
 static const QColor C_TEXT     { 0xcccccc };
 static const QColor C_RULER    { 0x1e1e1e };
 static const QColor C_KF_DOT   { 0xf0a020 };
@@ -1065,10 +1122,10 @@ void TitleEditor::build_ui()
                         obsgs_tr("OBSTitles.ImageFileFilter"));
                     if (path.isEmpty()) return;
                     l->image_path = path.toStdString();
-                    QImage img(path);
-                    if (!img.isNull()) {
-                        l->rect_width = (float)img.width();
-                        l->rect_height = (float)img.height();
+                    QSize image_size = editor_image_intrinsic_size(path);
+                    if (image_size.isValid() && !image_size.isEmpty()) {
+                        l->rect_width = (float)image_size.width();
+                        l->rect_height = (float)image_size.height();
                         l->box_width.static_value = l->rect_width;
                         l->box_height.static_value = l->rect_height;
                     }
@@ -2225,7 +2282,8 @@ void CanvasPreview::render_to_pixmap()
         }
 
         if (layer->type == LayerType::Image) {
-            QImage image(QString::fromStdString(layer->image_path));
+            QImage image = editor_load_layer_image(QString::fromStdString(layer->image_path),
+                                                   box.size().toSize());
             if (!image.isNull()) {
                 p.drawImage(box, image);
             } else {
@@ -4403,11 +4461,11 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                     obsgs_tr("OBSTitles.ImageFileFilter"));
                 if (path.isEmpty()) return;
                 layer_->image_path = path.toStdString();
-                QImage img(path);
-                if (!img.isNull()) {
+                QSize image_size = editor_image_intrinsic_size(path);
+                if (image_size.isValid() && !image_size.isEmpty()) {
                     double t = local_time();
-                    layer_->rect_width = (float)img.width();
-                    layer_->rect_height = (float)img.height();
+                    layer_->rect_width = (float)image_size.width();
+                    layer_->rect_height = (float)image_size.height();
                     set_animated_value(layer_->box_width, t, layer_->rect_width);
                     set_animated_value(layer_->box_height, t, layer_->rect_height);
                 }
