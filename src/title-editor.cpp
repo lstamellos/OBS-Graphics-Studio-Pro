@@ -395,7 +395,7 @@ static QPainterPath ticker_text_path(const QFont &font, const QRectF &rect,
     }
 
     const QStringList lines = ticker_lines(text);
-    const int line_count = std::max(1, lines.size());
+    const int line_count = std::max(1, static_cast<int>(lines.size()));
     const double line_h = std::max(1.0, metrics.lineSpacing());
     if (layer.ticker_style == 1) {
         const double hold = std::max(0.1, layer.ticker_line_hold);
