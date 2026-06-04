@@ -1,6 +1,5 @@
 #include "title-hotkeys.h"
 #include "title-data.h"
-#include "title-source.h"
 #include <obs-module.h>
 
 #include <algorithm>
@@ -35,7 +34,7 @@ struct HotkeyRegistration {
 struct HotkeySection {
     std::string title_id;
     std::string display_name;
-    /* Title source used only as the OBS Hotkeys settings section. */
+    /* Lightweight source used only as the OBS Hotkeys settings section. */
     obs_source_t *source = nullptr;
 };
 
@@ -44,6 +43,9 @@ std::vector<HotkeyRegistration> g_hotkeys;
 std::string g_hotkey_signature;
 bool g_hotkeys_active = false;
 bool g_change_callback_registered = false;
+bool g_hotkey_section_source_registered = false;
+
+constexpr const char *kHotkeySectionSourceId = "obs_graphics_studio_pro_hotkey_section";
 
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
@@ -124,6 +126,25 @@ static std::string title_section_name(const std::shared_ptr<Title> &title,
 static std::string cue_description(int cue_number)
 {
     return std::string(obs_module_text("OBSTitles.Cue")) + " " + std::to_string(cue_number);
+}
+
+static const char *hotkey_section_source_get_name(void *)
+{
+    return obs_module_text("OBSTitles.DockName");
+}
+
+static void register_hotkey_section_source_type()
+{
+    if (g_hotkey_section_source_registered) return;
+
+    static obs_source_info si = {};
+    si.id = kHotkeySectionSourceId;
+    si.type = OBS_SOURCE_TYPE_INPUT;
+    si.output_flags = 0;
+    si.get_name = hotkey_section_source_get_name;
+
+    obs_register_source(&si);
+    g_hotkey_section_source_registered = true;
 }
 
 static void cue_title_row(const std::shared_ptr<Title> &title, int row)
@@ -306,15 +327,14 @@ static void refresh_hotkeys()
 
     std::map<std::string, obs_source_t *> section_sources;
     for (auto &section : g_sections) {
-        obs_data_t *settings = obs_data_create();
-        obs_data_set_string(settings, PROP_TITLE_ID, section.title_id.c_str());
-        section.source = obs_source_create("obs_graphics_studio_pro_source",
+        section.source = obs_source_create(kHotkeySectionSourceId,
                                            section.display_name.c_str(),
-                                           settings,
+                                           nullptr,
                                            nullptr);
-        obs_data_release(settings);
-        if (section.source)
+        if (section.source) {
+            obs_source_set_hidden(section.source, true);
             section_sources[section.title_id] = section.source;
+        }
     }
 
     g_hotkeys.reserve(descriptors.size());
@@ -340,6 +360,7 @@ static void refresh_hotkeys()
 void title_hotkeys_register()
 {
     if (g_hotkeys_active) return;
+    register_hotkey_section_source_type();
     g_hotkeys_active = true;
     refresh_hotkeys();
     if (!g_change_callback_registered) {
