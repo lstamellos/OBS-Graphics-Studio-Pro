@@ -1095,6 +1095,7 @@ void TitleDock::on_add()
 
     auto title = TitleDataStore::instance().create_title(name.trimmed().toStdString());
     TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
     select_title(title->id);
     on_edit();
 }
@@ -1151,6 +1152,7 @@ void TitleDock::on_rename()
 
     TitleDataStore::instance().rename_title(title->id, name.toStdString());
     TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
     select_title(title->id);
 }
 
@@ -1216,6 +1218,7 @@ void TitleDock::on_delete()
     if (reply == QMessageBox::Yes) {
         TitleDataStore::instance().delete_title(id);
         TitleDataStore::instance().save();
+        TitleDataStore::instance().notify_change();
     }
 }
 
