@@ -6,6 +6,8 @@
 #include "title-editor.h"
 #include "title-data.h"
 #include "title-source.h"
+#include "title-assets.h"
+#include "title-localization.h"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -48,11 +50,11 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
 
 static QString live_text_layer_header(const std::shared_ptr<Layer> &layer)
 {
-    if (!layer) return QStringLiteral("Text");
+    if (!layer) return obsgs_tr("OBSTitles.Text");
     QString name = QString::fromStdString(layer->name).trimmed();
     if (!name.isEmpty()) return name;
     name = QString::fromStdString(layer->text_content).trimmed();
-    return name.isEmpty() ? QStringLiteral("Text") : name;
+    return name.isEmpty() ? obsgs_tr("OBSTitles.Text") : name;
 }
 
 static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
@@ -80,13 +82,14 @@ static void move_live_row_marker(int &marker, int from, int to)
 }
 
 
-static QIcon obs_icon(QWidget *widget, const QStringList &names, QStyle::StandardPixmap fallback)
+static QIcon obs_icon(const char *file_name)
 {
-    for (const QString &name : names) {
-        QIcon icon = QIcon::fromTheme(name);
-        if (!icon.isNull()) return icon;
-    }
-    return widget ? widget->style()->standardIcon(fallback) : QIcon();
+    return obsgs_icon(file_name);
+}
+
+static std::string obs_text_std(const char *key)
+{
+    return obsgs_tr(key).toStdString();
 }
 
 static int obs_toolbar_icon_extent(QWidget *widget)
@@ -151,7 +154,7 @@ static void set_bold_label(QLabel *label)
  *  Constructor
  * ══════════════════════════════════════════════════════════════════ */
 TitleDock::TitleDock(QWidget *parent)
-    : QDockWidget("OBS Graphics Studio Pro", parent)
+    : QDockWidget(obsgs_tr("OBSTitles.DockName"), parent)
 {
     setFeatures(QDockWidget::DockWidgetMovable |
                 QDockWidget::DockWidgetFloatable);
@@ -202,22 +205,22 @@ void TitleDock::build_ui()
     /* ── header toolbar ── */
     auto *toolbar = make_obs_dock_toolbar(template_section);
 
-    btn_add_ = make_obs_dock_tool_button(toolbar, "Add", obs_icon(toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
-                                         "Add a blank title or create one from a template");
-    btn_import_ = make_obs_dock_tool_button(toolbar, "Import", obs_icon(toolbar, {"document-open", "go-down"}, QStyle::SP_DialogOpenButton),
-                                            "Import a title template file");
-    btn_dup_ = make_obs_dock_tool_button(toolbar, "Duplicate", obs_icon(toolbar, {"edit-copy"}, QStyle::SP_FileDialogDetailedView),
-                                         "Duplicate");
-    btn_del_ = make_obs_dock_tool_button(toolbar, "Delete", obs_icon(toolbar, {"edit-delete", "user-trash"}, QStyle::SP_TrashIcon),
-                                         "Delete");
-    btn_rename_ = make_obs_dock_tool_button(toolbar, "Rename", obs_icon(toolbar, {"edit-rename", "document-edit"}, QStyle::SP_FileDialogInfoView),
-                                            "Rename selected title template");
-    btn_export_ = make_obs_dock_tool_button(toolbar, "Export", obs_icon(toolbar, {"document-save", "go-up"}, QStyle::SP_DialogSaveButton),
-                                            "Export selected title template to a file");
-    btn_edit_ = make_obs_dock_tool_button(toolbar, "Edit", obs_icon(toolbar, {"document-edit"}, QStyle::SP_FileDialogDetailedView),
-                                          "Open title editor");
-    btn_scene_ = make_obs_dock_tool_button(toolbar, "Add to Scene", obs_icon(toolbar, {"media-playback-start", "list-add"}, QStyle::SP_MediaPlay),
-                                           "Add selected title to current scene");
+    btn_add_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Add"), obs_icon("add.svg"),
+                                         obsgs_tr("OBSTitles.AddTooltip"));
+    btn_import_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Import"), obs_icon("import.svg"),
+                                            obsgs_tr("OBSTitles.ImportTooltip"));
+    btn_dup_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Duplicate"), obs_icon("duplicate.svg"),
+                                         obsgs_tr("OBSTitles.Duplicate"));
+    btn_del_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Delete"), obs_icon("delete.svg"),
+                                         obsgs_tr("OBSTitles.Delete"));
+    btn_rename_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Rename"), obs_icon("rename.svg"),
+                                            obsgs_tr("OBSTitles.RenameTooltip"));
+    btn_export_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Export"), obs_icon("export.svg"),
+                                            obsgs_tr("OBSTitles.ExportTooltip"));
+    btn_edit_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Edit"), obs_icon("edit.svg"),
+                                          obsgs_tr("OBSTitles.EditTooltip"));
+    btn_scene_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.AddToScene"), obs_icon("add-to-scene.svg"),
+                                           obsgs_tr("OBSTitles.AddToSceneTooltip"));
 
     toolbar->addWidget(btn_add_);
     toolbar->addWidget(btn_import_);
@@ -229,12 +232,17 @@ void TitleDock::build_ui()
     toolbar->addWidget(btn_export_);
     toolbar->addWidget(btn_edit_);
     toolbar->addWidget(btn_scene_);
-    template_layout->addWidget(toolbar);
 
     /* ── template/title section ── */
-    auto *template_lbl = new QLabel("Title templates", template_section);
+    auto *template_header = new QHBoxLayout();
+    template_header->setContentsMargins(0, 0, 0, 0);
+    template_header->setSpacing(0);
+    auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
     set_bold_label(template_lbl);
-    template_layout->addWidget(template_lbl);
+    template_header->addWidget(template_lbl);
+    template_header->addStretch();
+    template_header->addWidget(toolbar);
+    template_layout->addLayout(template_header);
 
     list_ = new QListWidget(template_section);
     list_->setAlternatingRowColors(true);
@@ -252,16 +260,16 @@ void TitleDock::build_ui()
     live_header->setSpacing(0);
 
     /* ── exposed text section ── */
-    text_editor_lbl_ = new QLabel("Live text", live_section);
+    text_editor_lbl_ = new QLabel(obsgs_tr("OBSTitles.LiveText"), live_section);
     set_bold_label(text_editor_lbl_);
 
     auto *live_toolbar = make_obs_dock_toolbar(live_section);
-    btn_row_up_ = make_obs_dock_tool_button(live_toolbar, "Move Up", obs_icon(live_toolbar, {"go-up", "arrow-up"}, QStyle::SP_ArrowUp),
-                                            "Move selected cue row up");
-    btn_row_down_ = make_obs_dock_tool_button(live_toolbar, "Move Down", obs_icon(live_toolbar, {"go-down", "arrow-down"}, QStyle::SP_ArrowDown),
-                                              "Move selected cue row down");
-    btn_add_text_row_ = make_obs_dock_tool_button(live_toolbar, "Add Row", obs_icon(live_toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
-                                                  "Add another live text cue row");
+    btn_row_up_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.MoveUp"), obs_icon("move-up.svg"),
+                                            obsgs_tr("OBSTitles.MoveCueUpTooltip"));
+    btn_row_down_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.MoveDown"), obs_icon("move-down.svg"),
+                                              obsgs_tr("OBSTitles.MoveCueDownTooltip"));
+    btn_add_text_row_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.AddRow"), obs_icon("add.svg"),
+                                                  obsgs_tr("OBSTitles.AddCueRowTooltip"));
     live_toolbar->addWidget(btn_row_up_);
     live_toolbar->addWidget(btn_row_down_);
     live_toolbar->addWidget(btn_add_text_row_);
@@ -289,7 +297,7 @@ void TitleDock::build_ui()
     sections->setStretchFactor(1, 1);
 
     /* ── status ── */
-    status_lbl_ = new QLabel("No title selected", container_);
+    status_lbl_ = new QLabel(obsgs_tr("OBSTitles.NoTitleSelected"), container_);
     status_lbl_->setAlignment(Qt::AlignCenter);
     QFont sf = status_lbl_->font();
     sf.setPointSize(std::max(1, sf.pointSize() - 1));
@@ -300,13 +308,14 @@ void TitleDock::build_ui()
 
     /* ── connections ── */
     auto *add_menu = new QMenu(btn_add_);
-    add_menu->addAction("Add Blank Title", this, &TitleDock::on_add);
+    add_menu->addAction(obsgs_tr("OBSTitles.AddBlankTitle"), this, &TitleDock::on_add);
     add_menu->addSeparator();
-    add_menu->addAction("Lower Third", this, &TitleDock::on_add_template_lower_third);
-    add_menu->addAction("Centered Title", this, &TitleDock::on_add_template_center_title);
-    add_menu->addAction("Ticker / Strap", this, &TitleDock::on_add_template_ticker);
+    add_menu->addAction(obsgs_tr("OBSTitles.TemplateLowerThird"), this, &TitleDock::on_add_template_lower_third);
+    add_menu->addAction(obsgs_tr("OBSTitles.TemplateCenteredTitle"), this, &TitleDock::on_add_template_center_title);
+    add_menu->addAction(obsgs_tr("OBSTitles.TemplateTickerStrap"), this, &TitleDock::on_add_template_ticker);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
+    btn_add_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
 
     connect(btn_dup_,   &QToolButton::clicked, this, &TitleDock::on_duplicate);
     connect(btn_rename_, &QToolButton::clicked, this, &TitleDock::on_rename);
@@ -340,7 +349,7 @@ void TitleDock::populate_list()
         item->setData(Qt::UserRole, QString::fromStdString(t->id));
         // Layer count hint as tooltip
         item->setToolTip(
-            QString("%1 layer(s)  |  %.1fs").arg(t->layers.size()).arg(t->duration));
+            obsgs_tr("OBSTitles.LayerCountTooltipFormat").arg(t->layers.size()).arg(t->duration));
         list_->addItem(item);
     }
 
@@ -386,13 +395,13 @@ void TitleDock::on_selection_changed()
         auto t = TitleDataStore::instance().get_title(selected_id());
         if (t)
             status_lbl_->setText(
-                QString("%1 layers  ·  %2s")
+                obsgs_tr("OBSTitles.StatusLayerCountFormat")
                     .arg(t->layers.size())
                     .arg(t->duration, 0, 'f', 1));
     } else {
         status_lbl_->setText(list_->count() == 0
-            ? "Use Add to create a blank title or template"
-            : "No title selected");
+            ? obsgs_tr("OBSTitles.UseAddHint")
+            : obsgs_tr("OBSTitles.NoTitleSelected"));
     }
     populate_exposed_text();
 }
@@ -407,7 +416,7 @@ void TitleDock::populate_exposed_text()
 
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) {
-        text_editor_lbl_->setText("Live text — select a title");
+        text_editor_lbl_->setText(obsgs_tr("OBSTitles.LiveTextSelectTitle"));
         text_table_->setEnabled(false);
         if (btn_add_text_row_) btn_add_text_row_->setEnabled(false);
         if (btn_row_up_) btn_row_up_->setEnabled(false);
@@ -424,8 +433,8 @@ void TitleDock::populate_exposed_text()
     if (btn_row_up_) btn_row_up_->setEnabled(has_exposed);
     if (btn_row_down_) btn_row_down_->setEnabled(has_exposed);
     text_editor_lbl_->setText(has_exposed
-        ? "Live text cues"
-        : "Live text — expose text layers in the editor");
+        ? obsgs_tr("OBSTitles.LiveTextCues")
+        : obsgs_tr("OBSTitles.LiveTextExposeHint"));
     if (!has_exposed) return;
 
     text_table_->setRowCount((int)title->live_text_rows.size());
@@ -465,7 +474,7 @@ void TitleDock::populate_exposed_text()
         }
 
         auto *cue = new QPushButton("▶", text_table_);
-        cue->setToolTip("Play this row and run the intro/loop/outro animation");
+        cue->setToolTip(obsgs_tr("OBSTitles.PlayCueTooltip"));
         QString cue_style;
         if (row == title->current_cue_row) {
             cue_style = "QPushButton{background:#b02020;color:white;border:none;border-radius:3px;font-weight:bold;}"
@@ -503,7 +512,7 @@ void TitleDock::populate_exposed_text()
         text_table_->setCellWidget(row, (int)exposed.size(), cue);
 
         auto *del = new QPushButton("✕", text_table_);
-        del->setToolTip("Delete this live text row");
+        del->setToolTip(obsgs_tr("OBSTitles.DeleteCueTooltip"));
         connect(del, &QPushButton::clicked, this, [this, title, row]() {
             if (row < 0 || row >= (int)title->live_text_rows.size()) return;
             updating_exposed_text_ = true;
@@ -653,27 +662,27 @@ std::shared_ptr<Title> TitleDock::create_template_title(const std::string &name,
     switch (template_id) {
     case 1: /* Lower third */
         title->duration = 8.0;
-        add_rect("Lower Third Backplate", 640, 835, 1120, 155, 0xD0161B24, 18.0f);
-        add_rect("Accent Bar", 120, 835, 18, 155, 0xFF00A3FF, 9.0f);
-        add_text("Name", name, 670, 800, 58, 0xFFFFFFFF, true, 0, 1);
-        add_text("Subtitle", "Subtitle / role", 670, 872, 34, 0xFFE8E8E8, false, 0, 1);
+        add_rect(obs_text_std("OBSTitles.LayerLowerThirdBackplate"), 640, 835, 1120, 155, 0xD0161B24, 18.0f);
+        add_rect(obs_text_std("OBSTitles.LayerAccentBar"), 120, 835, 18, 155, 0xFF00A3FF, 9.0f);
+        add_text(obs_text_std("OBSTitles.LayerName"), name, 670, 800, 58, 0xFFFFFFFF, true, 0, 1);
+        add_text(obs_text_std("OBSTitles.LayerSubtitle"), obs_text_std("OBSTitles.TemplateSubtitleRole"), 670, 872, 34, 0xFFE8E8E8, false, 0, 1);
         break;
     case 2: /* Center title */
         title->duration = 6.0;
-        add_rect("Soft Panel", 960, 540, 1280, 270, 0xB0101018, 28.0f);
-        add_rect("Top Accent", 960, 395, 520, 10, 0xFF00A3FF, 5.0f);
-        add_text("Main Title", name, 960, 505, 86, 0xFFFFFFFF, true, 1, 1);
-        add_text("Subtitle", "Editable subtitle", 960, 610, 42, 0xFFE0E0E0, false, 1, 1);
+        add_rect(obs_text_std("OBSTitles.LayerSoftPanel"), 960, 540, 1280, 270, 0xB0101018, 28.0f);
+        add_rect(obs_text_std("OBSTitles.LayerTopAccent"), 960, 395, 520, 10, 0xFF00A3FF, 5.0f);
+        add_text(obs_text_std("OBSTitles.LayerMainTitle"), name, 960, 505, 86, 0xFFFFFFFF, true, 1, 1);
+        add_text(obs_text_std("OBSTitles.LayerSubtitle"), obs_text_std("OBSTitles.TemplateEditableSubtitle"), 960, 610, 42, 0xFFE0E0E0, false, 1, 1);
         break;
     case 3: /* Ticker / strap */
         title->duration = 12.0;
-        add_rect("Ticker Background", 960, 1010, 1920, 110, 0xE0101010, 0.0f);
-        add_rect("Ticker Accent", 125, 1010, 250, 110, 0xFF0078D4, 0.0f);
-        add_text("Ticker Label", "LIVE", 125, 1010, 44, 0xFFFFFFFF, true, 1, 1);
-        add_text("Ticker Text", name, 1030, 1010, 44, 0xFFFFFFFF, false, 0, 1);
+        add_rect(obs_text_std("OBSTitles.LayerTickerBackground"), 960, 1010, 1920, 110, 0xE0101010, 0.0f);
+        add_rect(obs_text_std("OBSTitles.LayerTickerAccent"), 125, 1010, 250, 110, 0xFF0078D4, 0.0f);
+        add_text(obs_text_std("OBSTitles.LayerTickerLabel"), obs_text_std("OBSTitles.TemplateLive"), 125, 1010, 44, 0xFFFFFFFF, true, 1, 1);
+        add_text(obs_text_std("OBSTitles.LayerTickerText"), name, 1030, 1010, 44, 0xFFFFFFFF, false, 0, 1);
         break;
     default:
-        add_text("Title Text", name, 960, 540, 72, 0xFFFFFFFF, true, 1, 1);
+        add_text(obs_text_std("OBSTitles.TemplateTitleText"), name, 960, 540, 72, 0xFFFFFFFF, true, 1, 1);
         break;
     }
 
@@ -690,7 +699,7 @@ void TitleDock::create_title_from_template(const std::string &default_name,
 {
     bool ok = false;
     QString name = QInputDialog::getText(
-        this, "New Template Title", "Title text:", QLineEdit::Normal,
+        this, obsgs_tr("OBSTitles.NewTemplateTitle"), obsgs_tr("OBSTitles.TitleTextPrompt"), QLineEdit::Normal,
         QString::fromStdString(default_name), &ok);
     if (!ok || name.trimmed().isEmpty()) return;
 
@@ -706,7 +715,7 @@ void TitleDock::on_add()
 {
     bool ok;
     QString name = QInputDialog::getText(
-        this, "New Title", "Title name:", QLineEdit::Normal, "New Title", &ok);
+        this, obsgs_tr("OBSTitles.NewTitle"), obsgs_tr("OBSTitles.TitleNamePrompt"), QLineEdit::Normal, obsgs_tr("OBSTitles.NewTitle"), &ok);
     if (!ok || name.trimmed().isEmpty()) return;
 
     auto title = TitleDataStore::instance().create_title(name.trimmed().toStdString());
@@ -717,17 +726,17 @@ void TitleDock::on_add()
 
 void TitleDock::on_add_template_lower_third()
 {
-    create_title_from_template("Speaker Name", 1);
+    create_title_from_template(obs_text_std("OBSTitles.TemplateSpeakerName"), 1);
 }
 
 void TitleDock::on_add_template_center_title()
 {
-    create_title_from_template("Program Title", 2);
+    create_title_from_template(obs_text_std("OBSTitles.TemplateProgramTitle"), 2);
 }
 
 void TitleDock::on_add_template_ticker()
 {
-    create_title_from_template("Breaking news headline goes here", 3);
+    create_title_from_template(obs_text_std("OBSTitles.TemplateBreakingNews"), 3);
 }
 
 void TitleDock::on_duplicate()
@@ -736,7 +745,7 @@ void TitleDock::on_duplicate()
     if (!src) return;
 
     /* Deep copy by round-tripping through data store */
-    auto dup = TitleDataStore::instance().create_title(src->name + " (copy)");
+    auto dup = TitleDataStore::instance().create_title(src->name + obs_text_std("OBSTitles.CopySuffix"));
     dup->duration  = src->duration;
     dup->bg_color  = src->bg_color;
     dup->width     = src->width;
@@ -760,7 +769,7 @@ void TitleDock::on_rename()
 
     bool ok = false;
     QString name = QInputDialog::getText(
-        this, "Rename Title Template", "Template name:", QLineEdit::Normal,
+        this, obsgs_tr("OBSTitles.RenameTitleTemplate"), obsgs_tr("OBSTitles.TemplateNamePrompt"), QLineEdit::Normal,
         QString::fromStdString(title->name), &ok);
     name = name.trimmed();
     if (!ok || name.isEmpty()) return;
@@ -776,12 +785,12 @@ void TitleDock::on_export()
     if (!title) return;
 
     QString safe_name = QString::fromStdString(title->name).trimmed();
-    if (safe_name.isEmpty()) safe_name = QStringLiteral("OBS Graphics Studio Pro Template");
+    if (safe_name.isEmpty()) safe_name = obsgs_tr("OBSTitles.TemplateFileDialogTitle");
     safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
 
     QString path = QFileDialog::getSaveFileName(
-        this, "Export Title Template", safe_name + QStringLiteral(".ogspt"),
-        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        this, obsgs_tr("OBSTitles.ExportTitleTemplate"), safe_name + QStringLiteral(".ogspt"),
+        obsgs_tr("OBSTitles.TemplateFileFilter"));
     if (path.isEmpty()) return;
 
     if (QFileInfo(path).suffix().isEmpty())
@@ -789,31 +798,31 @@ void TitleDock::on_export()
 
     std::string error;
     if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), &error)) {
-        QMessageBox::warning(this, "Export Title Template",
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
                              QString::fromStdString(error));
         return;
     }
 
-    status_lbl_->setText(QString("Exported %1").arg(QFileInfo(path).fileName()));
+    status_lbl_->setText(obsgs_tr("OBSTitles.ExportedStatusFormat").arg(QFileInfo(path).fileName()));
 }
 
 void TitleDock::on_import()
 {
     QString path = QFileDialog::getOpenFileName(
-        this, "Import Title Template", QString(),
-        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        this, obsgs_tr("OBSTitles.ImportTitleTemplate"), QString(),
+        obsgs_tr("OBSTitles.TemplateFileFilter"));
     if (path.isEmpty()) return;
 
     std::string error;
     auto imported = TitleDataStore::instance().import_title(path.toStdString(), &error);
     if (!imported) {
-        QMessageBox::warning(this, "Import Title Template",
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportTitleTemplate"),
                              QString::fromStdString(error));
         return;
     }
 
     select_title(imported->id);
-    status_lbl_->setText(QString("Imported %1").arg(QString::fromStdString(imported->name)));
+    status_lbl_->setText(obsgs_tr("OBSTitles.ImportedStatusFormat").arg(QString::fromStdString(imported->name)));
 }
 
 void TitleDock::on_delete()
@@ -825,8 +834,8 @@ void TitleDock::on_delete()
     if (!t) return;
 
     auto reply = QMessageBox::question(
-        this, "Delete Title",
-        QString("Delete \"%1\"?").arg(QString::fromStdString(t->name)),
+        this, obsgs_tr("OBSTitles.DeleteTitle"),
+        obsgs_tr("OBSTitles.DeleteTitleQuestionFormat").arg(QString::fromStdString(t->name)),
         QMessageBox::Yes | QMessageBox::No);
 
     if (reply == QMessageBox::Yes) {
@@ -866,8 +875,8 @@ void TitleDock::on_add_to_scene()
 
     obs_source_t *scene_source = obs_frontend_get_current_scene();
     if (!scene_source) {
-        QMessageBox::warning(this, "No Scene",
-                             "There is no active scene to add the title to.");
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.NoScene"),
+                             obsgs_tr("OBSTitles.NoActiveScene"));
         return;
     }
 
@@ -897,10 +906,10 @@ void TitleDock::on_add_to_scene()
             obs_sceneitem_set_visible(item, true);
         }
         obs_source_release(source);
-        status_lbl_->setText("Added to scene");
+        status_lbl_->setText(obsgs_tr("OBSTitles.AddedToScene"));
     } else {
-        QMessageBox::warning(this, "Add Title Source",
-                             "OBS could not create the Title source.");
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.AddTitleSource"),
+                             obsgs_tr("OBSTitles.CreateSourceFailed"));
     }
 
     obs_data_release(settings);
