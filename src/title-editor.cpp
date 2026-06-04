@@ -165,8 +165,6 @@ static std::string editor_text_std(const char *key)
     return obsgs_tr(key).toStdString();
 }
 
-
-
 static QLocale locale_for_text_transform(const QString &text)
 {
     QLocale locale;
@@ -1175,15 +1173,15 @@ void TitleEditor::align_selected_layers(int x_mode, int y_mode)
     double target_vcenter = (min_top + max_bottom) / 2.0;
     double target_bottom = max_bottom;
 
-    if (alignment_target_ == 1) {
-        constexpr double title_safe_inset = 0.10;
-        target_left = title_->width * title_safe_inset;
+    if (alignment_target_ == 1 || alignment_target_ == 2) {
+        const double safe_inset = alignment_target_ == 1 ? 0.10 : 0.05;
+        target_left = title_->width * safe_inset;
         target_hcenter = title_->width / 2.0;
-        target_right = title_->width * (1.0 - title_safe_inset);
-        target_top = title_->height * title_safe_inset;
+        target_right = title_->width * (1.0 - safe_inset);
+        target_top = title_->height * safe_inset;
         target_vcenter = title_->height / 2.0;
-        target_bottom = title_->height * (1.0 - title_safe_inset);
-    } else if (alignment_target_ == 2) {
+        target_bottom = title_->height * (1.0 - safe_inset);
+    } else if (alignment_target_ == 3) {
         target_left = 0.0;
         target_hcenter = title_->width / 2.0;
         target_right = title_->width;
@@ -1270,26 +1268,32 @@ void TitleEditor::build_toolbar()
     auto *align_menu = new QMenu(align_target);
     QAction *target_selection = align_menu->addAction(obsgs_tr("OBSTitles.AlignToSelection"));
     QAction *target_title_safe = align_menu->addAction(obsgs_tr("OBSTitles.AlignToTitleSafeGuides"));
+    QAction *target_action_safe = align_menu->addAction(obsgs_tr("OBSTitles.AlignToActionSafeGuides"));
     QAction *target_artboard = align_menu->addAction(obsgs_tr("OBSTitles.AlignToArtboard"));
     target_selection->setCheckable(true);
     target_title_safe->setCheckable(true);
+    target_action_safe->setCheckable(true);
     target_artboard->setCheckable(true);
     target_artboard->setChecked(true);
-    auto update_alignment_target = [this, align_target, target_selection, target_title_safe, target_artboard](int target) {
+    auto update_alignment_target = [this, align_target, target_selection, target_title_safe, target_action_safe, target_artboard](int target) {
         alignment_target_ = target;
         target_selection->setChecked(target == 0);
         target_title_safe->setChecked(target == 1);
-        target_artboard->setChecked(target == 2);
+        target_action_safe->setChecked(target == 2);
+        target_artboard->setChecked(target == 3);
         QString tooltip = obsgs_tr("OBSTitles.AlignToArtboard");
         if (target == 0)
             tooltip = obsgs_tr("OBSTitles.AlignToSelection");
         else if (target == 1)
             tooltip = obsgs_tr("OBSTitles.AlignToTitleSafeGuides");
+        else if (target == 2)
+            tooltip = obsgs_tr("OBSTitles.AlignToActionSafeGuides");
         align_target->setToolTip(tooltip);
     };
     connect(target_selection, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(0); });
     connect(target_title_safe, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(1); });
-    connect(target_artboard, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(2); });
+    connect(target_action_safe, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(2); });
+    connect(target_artboard, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(3); });
     align_target->setMenu(align_menu);
     toolbar_->addWidget(align_target);
 
@@ -2430,6 +2434,7 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
                         obsgs_tr("OBSTitles.Image"), this, &LayerStack::on_add_image);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
+    btn_add_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
 
     btn_move_up_ = make_layer_tool(obsgs_tr("OBSTitles.MoveLayerUp"),
                                    obs_icon("move-up.svg"),

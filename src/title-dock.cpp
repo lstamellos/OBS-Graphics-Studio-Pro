@@ -232,12 +232,17 @@ void TitleDock::build_ui()
     toolbar->addWidget(btn_export_);
     toolbar->addWidget(btn_edit_);
     toolbar->addWidget(btn_scene_);
-    template_layout->addWidget(toolbar);
 
     /* ── template/title section ── */
+    auto *template_header = new QHBoxLayout();
+    template_header->setContentsMargins(0, 0, 0, 0);
+    template_header->setSpacing(0);
     auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
     set_bold_label(template_lbl);
-    template_layout->addWidget(template_lbl);
+    template_header->addWidget(template_lbl);
+    template_header->addStretch();
+    template_header->addWidget(toolbar);
+    template_layout->addLayout(template_header);
 
     list_ = new QListWidget(template_section);
     list_->setAlternatingRowColors(true);
@@ -310,6 +315,7 @@ void TitleDock::build_ui()
     add_menu->addAction(obsgs_tr("OBSTitles.TemplateTickerStrap"), this, &TitleDock::on_add_template_ticker);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
+    btn_add_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
 
     connect(btn_dup_,   &QToolButton::clicked, this, &TitleDock::on_duplicate);
     connect(btn_rename_, &QToolButton::clicked, this, &TitleDock::on_rename);
