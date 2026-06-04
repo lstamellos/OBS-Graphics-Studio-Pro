@@ -727,6 +727,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     text_image.fill(Qt::transparent);
 
     QPainter painter(&text_image);
+    const bool previous_shape_aa = painter.testRenderHint(QPainter::Antialiasing);
+    const bool previous_text_aa = painter.testRenderHint(QPainter::TextAntialiasing);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
