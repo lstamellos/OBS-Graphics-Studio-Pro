@@ -41,6 +41,7 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPixmap>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTableWidgetItem>
@@ -251,10 +252,19 @@ static LiveTextCueHeader *live_text_cue_header(QTableWidget *table)
     return table ? dynamic_cast<LiveTextCueHeader *>(table->horizontalHeader()) : nullptr;
 }
 
-static QString title_screenshot_png_base64(const Title &title)
+static double title_export_screenshot_time(const Title &title)
 {
-    const double midpoint = std::max(0.0, title.duration * 0.5);
-    QImage screenshot = render_title_to_image(title, midpoint);
+    const double source_time = title.playback_mode == 2 ? title.pause_time : title.duration * 0.5;
+    return std::clamp(source_time, 0.0, std::max(0.0, title.duration));
+}
+
+static QImage title_screenshot_image(const Title &title)
+{
+    return render_title_to_image(title, title_export_screenshot_time(title));
+}
+
+static QString title_screenshot_png_base64(const QImage &screenshot)
+{
     if (screenshot.isNull())
         return QString();
 
@@ -267,16 +277,33 @@ static QString title_screenshot_png_base64(const Title &title)
 }
 
 static bool prompt_template_export_metadata(QWidget *parent, const Title &title,
+                                            const QImage &screenshot,
                                             TitleTemplateExportMetadata &metadata)
 {
     QDialog dialog(parent);
     dialog.setWindowTitle(obsgs_tr("OBSTitles.ExportTemplateDetails"));
     dialog.setModal(true);
-    dialog.resize(520, 320);
+    dialog.resize(560, 460);
 
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(12, 12, 12, 12);
     layout->setSpacing(obs_layout_spacing(&dialog));
+
+    auto *preview_label = new QLabel(obsgs_tr("OBSTitles.TemplateScreenshotPreviewLabel"), &dialog);
+    set_bold_label(preview_label);
+    layout->addWidget(preview_label);
+
+    auto *preview = new QLabel(&dialog);
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    preview->setMinimumHeight(160);
+    if (!screenshot.isNull()) {
+        preview->setPixmap(QPixmap::fromImage(screenshot).scaled(
+            QSize(480, 180), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    } else {
+        preview->setText(obsgs_tr("OBSTitles.TemplateScreenshotFailed"));
+    }
+    layout->addWidget(preview);
 
     auto *form = new QFormLayout();
     auto *title_edit = new QLineEdit(QString::fromStdString(title.name), &dialog);
@@ -309,7 +336,6 @@ static bool prompt_template_export_metadata(QWidget *parent, const Title &title,
     metadata.description = description_edit->toPlainText().trimmed().toStdString();
     metadata.creator = creator_edit->text().trimmed().toStdString();
     metadata.creation_date = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
-    metadata.screenshot_png_base64 = title_screenshot_png_base64(title).toStdString();
     return true;
 }
 
@@ -1306,15 +1332,18 @@ void TitleDock::on_export()
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) return;
 
-    TitleTemplateExportMetadata metadata;
-    if (!prompt_template_export_metadata(this, *title, metadata))
-        return;
-
-    if (metadata.screenshot_png_base64.empty()) {
+    QImage screenshot = title_screenshot_image(*title);
+    QString screenshot_base64 = title_screenshot_png_base64(screenshot);
+    if (screenshot_base64.isEmpty()) {
         QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
                              obsgs_tr("OBSTitles.TemplateScreenshotFailed"));
         return;
     }
+
+    TitleTemplateExportMetadata metadata;
+    metadata.screenshot_png_base64 = screenshot_base64.toStdString();
+    if (!prompt_template_export_metadata(this, *title, screenshot, metadata))
+        return;
 
     QString safe_name = QString::fromStdString(metadata.title).trimmed();
     if (safe_name.isEmpty()) safe_name = obsgs_tr("OBSTitles.TemplateFileDialogTitle");
