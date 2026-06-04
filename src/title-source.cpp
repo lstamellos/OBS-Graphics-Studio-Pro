@@ -178,16 +178,24 @@ static void unpack_color(uint32_t c,
 
 static double eval_box_width(const Layer &layer, double t)
 {
-    return std::max(1.0, layer.box_width.is_animated()
-                         ? layer.box_width.evaluate(t)
-                         : (double)layer.rect_width);
+    const double width = layer.box_width.is_animated()
+        ? layer.box_width.evaluate(t)
+        : static_cast<double>(layer.rect_width);
+    return width < 1.0 ? 1.0 : width;
 }
 
 static double eval_box_height(const Layer &layer, double t)
 {
-    return std::max(1.0, layer.box_height.is_animated()
-                         ? layer.box_height.evaluate(t)
-                         : (double)layer.rect_height);
+    const double height = layer.box_height.is_animated()
+        ? layer.box_height.evaluate(t)
+        : static_cast<double>(layer.rect_height);
+    return height < 1.0 ? 1.0 : height;
+}
+
+static int shadow_pass_count(double blur)
+{
+    const int passes = static_cast<int>(std::ceil(blur / 3.0));
+    return passes < 1 ? 1 : passes;
 }
 
 static double eval_origin_x(const Layer &layer, double t)
@@ -658,7 +666,7 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (eval_shadow_enabled(layer, t)) {
         QColor shadow = color_from_argb(eval_shadow_color(layer, t));
         shadow.setAlphaF(std::clamp((double)shadow.alphaF() * eval_shadow_opacity(layer, t), 0.0, 1.0));
-        int passes = std::max(1, (int)std::ceil(blur / 3.0));
+        int passes = shadow_pass_count(blur);
         for (int pass = passes; pass >= 1; --pass) {
             QColor pass_color = shadow;
             pass_color.setAlphaF(shadow.alphaF() / passes);
@@ -741,7 +749,7 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
     if (eval_shadow_enabled(layer, t)) {
         double sr, sg, sb, sa;
         unpack_color(eval_shadow_color(layer, t), sr, sg, sb, sa);
-        int passes = std::max(1, (int)std::ceil(blur / 3.0));
+        int passes = shadow_pass_count(blur);
         for (int pass = passes; pass >= 1; --pass) {
             double radius = blur * pass / passes;
             double grow = spread + radius;
