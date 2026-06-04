@@ -134,6 +134,8 @@ static QColor layer_color(const Layer &layer, int row)
         return QColor(0xb4, 0x5a, 0xa0);
     if (layer.type == LayerType::Clock)
         return QColor(0x4b, 0x9a, 0xc8);
+    if (layer.type == LayerType::Ticker)
+        return QColor(0xd8, 0x8a, 0x30);
     if (layer.type == LayerType::SolidRect || layer.type == LayerType::Shape)
         return QColor(0x4f, 0x8f, 0x58);
     if (layer.type == LayerType::Image)
@@ -149,6 +151,7 @@ static QString layer_type_short(LayerType type)
     switch (type) {
     case LayerType::Text: return "T";
     case LayerType::Clock: return "⏱";
+    case LayerType::Ticker: return "↔";
     case LayerType::SolidRect: return "■";
     case LayerType::Image: return "▧";
     case LayerType::Shape: return "◆";
@@ -341,6 +344,96 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
         y += line.height;
     }
     return path;
+}
+
+
+static double ticker_time_seconds()
+{
+    return QDateTime::currentMSecsSinceEpoch() / 1000.0;
+}
+
+static QStringList ticker_lines(const QString &text)
+{
+    QString normalized = text;
+    normalized.replace('\r', '\n');
+    QStringList raw_lines = normalized.split('\n');
+    QStringList lines;
+    for (const QString &line : raw_lines) {
+        if (!line.trimmed().isEmpty())
+            lines << line;
+    }
+    if (lines.isEmpty()) lines << QString();
+    return lines;
+}
+
+static QPainterPath ticker_text_path(const QFont &font, const QRectF &rect,
+                                     Qt::Alignment alignment, const QString &text,
+                                     const Layer &layer)
+{
+    QPainterPath path;
+    QFontMetricsF metrics(font);
+    const double speed = std::max(1.0, layer.ticker_speed);
+    const double now = ticker_time_seconds();
+
+    if (layer.ticker_style == 0) {
+        QString single = text;
+        single.replace('\r', ' ');
+        single.replace('\n', QStringLiteral("     •     "));
+        QRectF bounds = metrics.boundingRect(single);
+        const double text_w = std::max(1.0, bounds.width());
+        const double travel = rect.width() + text_w;
+        const double progress = std::fmod(now * speed, travel);
+        const double x = layer.ticker_direction == 0
+            ? rect.left() - text_w + progress
+            : rect.right() - progress;
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(x, y), font, single);
+        return path;
+    }
+
+    const QStringList lines = ticker_lines(text);
+    const int line_count = std::max(1, lines.size());
+    const double line_h = std::max(1.0, metrics.lineSpacing());
+    if (layer.ticker_style == 1) {
+        const double hold = std::max(0.1, layer.ticker_line_hold);
+        int idx = (int)std::floor(now / hold) % line_count;
+        if (layer.ticker_direction == 0) idx = line_count - 1 - idx;
+        QString line = lines.at(idx);
+        double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        QRectF bounds = metrics.boundingRect(line);
+        double y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        path.addText(QPointF(x, y), font, line);
+        return path;
+    }
+
+    const double content_h = line_count * line_h;
+    const double travel = rect.height() + content_h;
+    const double progress = std::fmod(now * speed, travel);
+    double y = layer.ticker_direction == 0
+        ? rect.top() - content_h + progress
+        : rect.bottom() - progress;
+    for (const QString &line : lines) {
+        double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        path.addText(QPointF(x, y + metrics.ascent()), font, line);
+        y += line_h;
+    }
+    return path;
+}
+
+static bool title_has_dynamic_text_layer(const std::shared_ptr<Title> &title)
+{
+    if (!title) return false;
+    return std::any_of(title->layers.begin(), title->layers.end(), [](const std::shared_ptr<Layer> &layer) {
+        return layer && (layer->type == LayerType::Clock || layer->type == LayerType::Ticker);
+    });
 }
 
 static QColor color_from_argb(uint32_t argb)
@@ -808,7 +901,7 @@ TitleEditor::TitleEditor(QWidget *parent)
     connect(play_timer_, &QTimer::timeout, this, &TitleEditor::tick);
 
     clock_timer_ = new QTimer(this);
-    clock_timer_->setInterval(1000);
+    clock_timer_->setInterval(33);
     connect(clock_timer_, &QTimer::timeout, this, [this]() {
         if (canvas_) canvas_->update();
     });
@@ -940,9 +1033,11 @@ void TitleEditor::build_ui()
                 l->id   = TitleDataStore::make_uuid();
                 l->name = (type == LayerType::Text) ? editor_text_std("OBSTitles.Text") :
                           (type == LayerType::Clock) ? editor_text_std("OBSTitles.Clock") :
+                          (type == LayerType::Ticker) ? editor_text_std("OBSTitles.Ticker") :
                           (type == LayerType::Image) ? editor_text_std("OBSTitles.Image") : editor_text_std("OBSTitles.Rectangle");
                 l->type = type;
-                l->text_content = (type == LayerType::Text) ? editor_text_std("OBSTitles.NewText") : "";
+                l->text_content = (type == LayerType::Text) ? editor_text_std("OBSTitles.NewText") :
+                                  (type == LayerType::Ticker) ? editor_text_std("OBSTitles.NewTickerText") : "";
                 l->clock_format = (type == LayerType::Clock) ? "H:i:s" : l->clock_format;
                 l->pos_x.static_value = title_->width  / 2.0;
                 l->pos_y.static_value = title_->height / 2.0;
@@ -2132,7 +2227,7 @@ void CanvasPreview::render_to_pixmap()
             }
         }
 
-        if (layer->type == LayerType::Text || layer->type == LayerType::Clock) {
+        if (layer->type == LayerType::Text || layer->type == LayerType::Clock || layer->type == LayerType::Ticker) {
             QColor tc = color_from_argb(eval_text_color(*layer, lt));
             QFont f(QString::fromStdString(layer->font_family));
             f.setPixelSize(layer->font_size);
@@ -2150,7 +2245,9 @@ void CanvasPreview::render_to_pixmap()
             Qt::AlignmentFlag va = Qt::AlignVCenter;
             if (layer->align_v == 0) va = Qt::AlignTop;
             if (layer->align_v == 2) va = Qt::AlignBottom;
-            QPainterPath text_path = text_overflow_path(f, text_box, ha | va, text, *layer);
+            QPainterPath text_path = layer->type == LayerType::Ticker
+                ? ticker_text_path(f, text_box, ha | va, text, *layer)
+                : text_overflow_path(f, text_box, ha | va, text, *layer);
             if (eval_shadow_enabled(*layer, lt)) {
                 QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
                 sc.setAlphaF(std::clamp((double)sc.alphaF() * eval_shadow_opacity(*layer, lt), 0.0, 1.0));
@@ -2206,6 +2303,7 @@ void CanvasPreview::paintEvent(QPaintEvent *)
 
     if (!title_) return;
 
+    if (title_has_dynamic_text_layer(title_)) dirty_ = true;
     if (dirty_) render_to_pixmap();
     if (frame_pixmap_.isNull()) return;
 
@@ -2435,6 +2533,8 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
                         obsgs_tr("OBSTitles.Text"), this, &LayerStack::on_add_text);
     add_menu->addAction(obs_icon("clock.svg"),
                         obsgs_tr("OBSTitles.Clock"), this, &LayerStack::on_add_clock);
+    add_menu->addAction(obs_icon("text.svg"),
+                        obsgs_tr("OBSTitles.Ticker"), this, &LayerStack::on_add_ticker);
     add_menu->addAction(obs_icon("shape.svg"),
                         obsgs_tr("OBSTitles.Shape"), this, &LayerStack::on_add_rect);
     add_menu->addAction(obs_icon("image.svg"),
@@ -2737,6 +2837,7 @@ void LayerStack::on_selection_changed()
 
 void LayerStack::on_add_text() { emit add_layer_requested(LayerType::Text); }
 void LayerStack::on_add_clock() { emit add_layer_requested(LayerType::Clock); }
+void LayerStack::on_add_ticker() { emit add_layer_requested(LayerType::Ticker); }
 void LayerStack::on_add_rect() { emit add_layer_requested(LayerType::SolidRect); }
 void LayerStack::on_add_image() { emit add_layer_requested(LayerType::Image); }
 
@@ -3811,6 +3912,20 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     lbl_text_fit_scale_ = new QLabel(obsgs_tr("OBSTitles.Scale100"), inner);
     lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
 
+    cmb_ticker_style_ = new QComboBox(inner);
+    cmb_ticker_style_->addItem(obsgs_tr("OBSTitles.TickerHorizontal"), 0);
+    cmb_ticker_style_->addItem(obsgs_tr("OBSTitles.TickerVerticalLine"), 1);
+    cmb_ticker_style_->addItem(obsgs_tr("OBSTitles.TickerVerticalSmooth"), 2);
+    cmb_ticker_style_->setFixedHeight(22);
+    cmb_ticker_style_->setStyleSheet(control_style);
+    spn_ticker_speed_ = mk_dspin(1.0, 5000.0, 1.0);
+    spn_ticker_speed_->setSuffix(" px/s");
+    spn_ticker_line_hold_ = mk_dspin(0.1, 60.0, 0.1);
+    spn_ticker_line_hold_->setSuffix(" s");
+    cmb_ticker_direction_ = new QComboBox(inner);
+    cmb_ticker_direction_->setFixedHeight(22);
+    cmb_ticker_direction_->setStyleSheet(control_style);
+
     txfl->addRow(obsgs_tr("OBSTitles.TextLabel"),   txt_content_);
     txfl->addRow(obsgs_tr("OBSTitles.FontLabel"),   cmb_font_);
     txfl->addRow(obsgs_tr("OBSTitles.SizeLabel"),   spn_size_);
@@ -3826,6 +3941,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     txfl->addRow(obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
     txfl->addRow(obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
     txfl->addRow("", lbl_text_fit_scale_);
+    txfl->addRow(obsgs_tr("OBSTitles.TickerStyleLabel"), cmb_ticker_style_);
+    txfl->addRow(obsgs_tr("OBSTitles.TickerSpeedLabel"), spn_ticker_speed_);
+    txfl->addRow(obsgs_tr("OBSTitles.TickerLineHoldLabel"), spn_ticker_line_hold_);
+    txfl->addRow(obsgs_tr("OBSTitles.DirectionLabel"), cmb_ticker_direction_);
     cmb_text_align_ = new QComboBox(inner);
     cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignLeft"), 0);
     cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignCenter"), 1);
@@ -4058,6 +4177,22 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     connect(spn_text_fit_min_scale_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, emit_change](double v) {
                 if (can_edit()) { layer_->text_fit_min_scale = (float)v; emit_change(); }
+            });
+    connect(cmb_ticker_style_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx) {
+                if (can_edit()) { layer_->ticker_style = cmb_ticker_style_->itemData(idx).toInt(); emit_change(); load_values(); }
+            });
+    connect(spn_ticker_speed_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) {
+                if (can_edit()) { layer_->ticker_speed = v; emit_change(); }
+            });
+    connect(spn_ticker_line_hold_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) {
+                if (can_edit()) { layer_->ticker_line_hold = v; emit_change(); }
+            });
+    connect(cmb_ticker_direction_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx) {
+                if (can_edit()) { layer_->ticker_direction = cmb_ticker_direction_->itemData(idx).toInt(); emit_change(); }
             });
     connect(chk_expose_text_, &QCheckBox::toggled,
             this, [this, can_edit, emit_change](bool v){
@@ -4492,26 +4627,44 @@ void PropertiesPanel::load_values()
 
     const bool is_text = layer_->type == LayerType::Text;
     const bool is_clock = layer_->type == LayerType::Clock;
-    const bool is_text_like = is_text || is_clock;
+    const bool is_ticker = layer_->type == LayerType::Ticker;
+    const bool is_text_like = is_text || is_clock || is_ticker;
     const bool is_rect = layer_->type == LayerType::SolidRect || layer_->type == LayerType::Shape;
     const bool is_image = layer_->type == LayerType::Image;
     const bool supports_outline = is_text_like || is_rect;
     text_box_->setVisible(is_text_like);
-    text_box_->setTitle(is_clock ? obsgs_tr("OBSTitles.Clock") : obsgs_tr("OBSTitles.Text"));
+    text_box_->setTitle(is_clock ? obsgs_tr("OBSTitles.Clock") : (is_ticker ? obsgs_tr("OBSTitles.Ticker") : obsgs_tr("OBSTitles.Text")));
     txt_content_->setPlaceholderText(is_clock ? "H:i:s" : obsgs_tr("OBSTitles.EnterTextPlaceholder"));
-    if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2);
-    if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2);
+    if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2 && !is_ticker);
+    if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2 && !is_ticker);
     if (auto *text_form = qobject_cast<QFormLayout *>(text_box_->layout())) {
+        const bool show_ticker_fit = is_text_like && layer_->text_overflow_mode == 2 && !is_ticker;
         if (auto *label = text_form->labelForField(spn_text_fit_min_scale_))
-            label->setVisible(is_text_like && layer_->text_overflow_mode == 2);
+            label->setVisible(show_ticker_fit);
+        if (cmb_ticker_style_) {
+            cmb_ticker_style_->setVisible(is_ticker);
+            if (auto *label = text_form->labelForField(cmb_ticker_style_)) label->setVisible(is_ticker);
+        }
+        if (spn_ticker_speed_) {
+            spn_ticker_speed_->setVisible(is_ticker && layer_->ticker_style != 1);
+            if (auto *label = text_form->labelForField(spn_ticker_speed_)) label->setVisible(is_ticker && layer_->ticker_style != 1);
+        }
+        if (spn_ticker_line_hold_) {
+            spn_ticker_line_hold_->setVisible(is_ticker && layer_->ticker_style == 1);
+            if (auto *label = text_form->labelForField(spn_ticker_line_hold_)) label->setVisible(is_ticker && layer_->ticker_style == 1);
+        }
+        if (cmb_ticker_direction_) {
+            cmb_ticker_direction_->setVisible(is_ticker);
+            if (auto *label = text_form->labelForField(cmb_ticker_direction_)) label->setVisible(is_ticker);
+        }
         if (chk_expose_text_) {
-            chk_expose_text_->setVisible(is_text);
+            chk_expose_text_->setVisible(is_text || is_ticker);
             if (auto *label = text_form->labelForField(chk_expose_text_))
-                label->setVisible(is_text);
+                label->setVisible(is_text || is_ticker);
         }
     }
     rect_box_->setVisible(is_text_like || is_rect || is_image);
-    rect_box_->setTitle(is_text_like ? (is_clock ? obsgs_tr("OBSTitles.ClockBox") : obsgs_tr("OBSTitles.TextBox")) : (is_image ? obsgs_tr("OBSTitles.ImageSize") : obsgs_tr("OBSTitles.ShapeGeometryFill")));
+    rect_box_->setTitle(is_text_like ? (is_clock ? obsgs_tr("OBSTitles.ClockBox") : (is_ticker ? obsgs_tr("OBSTitles.TickerBox") : obsgs_tr("OBSTitles.TextBox"))) : (is_image ? obsgs_tr("OBSTitles.ImageSize") : obsgs_tr("OBSTitles.ShapeGeometryFill")));
     spn_rect_corner_->setVisible(is_rect);
     btn_fill_color_->setVisible(is_rect);
     btn_kf_text_color_->setVisible(is_text_like);
@@ -4607,6 +4760,20 @@ void PropertiesPanel::load_values()
                                                             &layer_->shadow_color_g, &layer_->shadow_color_b}, lt));
 
     txt_content_->setPlainText(QString::fromStdString(is_clock ? layer_->clock_format : layer_->text_content));
+    int ticker_style_idx = cmb_ticker_style_->findData(layer_->ticker_style);
+    cmb_ticker_style_->setCurrentIndex(ticker_style_idx >= 0 ? ticker_style_idx : 0);
+    spn_ticker_speed_->setValue(layer_->ticker_speed);
+    spn_ticker_line_hold_->setValue(layer_->ticker_line_hold);
+    cmb_ticker_direction_->clear();
+    if (layer_->ticker_style == 0) {
+        cmb_ticker_direction_->addItem(obsgs_tr("OBSTitles.LeftToRight"), 0);
+        cmb_ticker_direction_->addItem(obsgs_tr("OBSTitles.RightToLeft"), 1);
+    } else {
+        cmb_ticker_direction_->addItem(obsgs_tr("OBSTitles.TopToBottom"), 0);
+        cmb_ticker_direction_->addItem(obsgs_tr("OBSTitles.BottomToTop"), 1);
+    }
+    int ticker_direction_idx = cmb_ticker_direction_->findData(layer_->ticker_direction);
+    cmb_ticker_direction_->setCurrentIndex(ticker_direction_idx >= 0 ? ticker_direction_idx : 0);
     int fi = cmb_font_->findText(QString::fromStdString(layer_->font_family));
     if (fi >= 0) cmb_font_->setCurrentIndex(fi);
     spn_size_->setValue(layer_->font_size);

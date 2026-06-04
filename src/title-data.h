@@ -81,6 +81,7 @@ enum class LayerType {
     Image,
     Shape,      /* future: polygon / ellipse */
     Clock,
+    Ticker,
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -118,6 +119,17 @@ struct Layer {
     int         text_style    = 0;  /* 0=normal, 1=all caps, 2=small caps, 3=superscript, 4=subscript */
     int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
     float       text_fit_min_scale = 0.5f;
+
+    /* ----- Ticker-specific -----
+     * style: 0=horizontal scrolling, 1=vertical line-by-line, 2=vertical smooth.
+     * direction: horizontal 0=left-to-right, 1=right-to-left; vertical 0=top-to-bottom, 1=bottom-to-top.
+     * speed is pixels/second. line_hold is seconds between line-by-line moves.
+     */
+    int         ticker_style = 0;
+    double      ticker_speed = 120.0;
+    double      ticker_line_hold = 2.0;
+    int         ticker_direction = 1;
+
     uint32_t    text_color    = 0xFFFFFFFF;  /* ARGB */
 
     /* ----- Outline shared by text and solid/shape layers ----- */

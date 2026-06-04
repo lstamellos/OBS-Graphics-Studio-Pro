@@ -22,6 +22,7 @@
 #include <pango/pangocairo.h>
 #include <QImage>
 #include <QString>
+#include <QStringList>
 #include <QLocale>
 #include <QPointF>
 #include <QPainter>
@@ -125,6 +126,15 @@ static bool title_has_clock_layer(const std::shared_ptr<Title> &title)
                        });
 }
 
+static bool title_has_ticker_layer(const std::shared_ptr<Title> &title)
+{
+    if (!title) return false;
+    return std::any_of(title->layers.begin(), title->layers.end(),
+                       [](const std::shared_ptr<Layer> &layer) {
+                           return layer && layer->type == LayerType::Ticker;
+                       });
+}
+
 static bool title_has_animation(const std::shared_ptr<Title> &title)
 {
     if (!title) return false;
@@ -139,7 +149,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
-        if (layer->type == LayerType::Text && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
     return exposed;
@@ -503,6 +513,88 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
     return path;
 }
 
+
+static double ticker_time_seconds()
+{
+    return QDateTime::currentMSecsSinceEpoch() / 1000.0;
+}
+
+static QStringList ticker_lines(const QString &text)
+{
+    QString normalized = text;
+    normalized.replace('\r', '\n');
+    QStringList raw_lines = normalized.split('\n');
+    QStringList lines;
+    for (const QString &line : raw_lines) {
+        if (!line.trimmed().isEmpty())
+            lines << line;
+    }
+    if (lines.isEmpty()) lines << QString();
+    return lines;
+}
+
+static QPainterPath ticker_text_path(const QFont &font, const QRectF &rect,
+                                     Qt::Alignment alignment, const QString &text,
+                                     const Layer &layer)
+{
+    QPainterPath path;
+    QFontMetricsF metrics(font);
+    const double speed = std::max(1.0, layer.ticker_speed);
+    const double now = ticker_time_seconds();
+
+    if (layer.ticker_style == 0) {
+        QString single = text;
+        single.replace('\r', ' ');
+        single.replace('\n', QStringLiteral("     •     "));
+        QRectF bounds = metrics.boundingRect(single);
+        const double text_w = std::max(1.0, bounds.width());
+        const double travel = rect.width() + text_w;
+        const double progress = std::fmod(now * speed, travel);
+        const double x = layer.ticker_direction == 0
+            ? rect.left() - text_w + progress
+            : rect.right() - progress;
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(x, y), font, single);
+        return path;
+    }
+
+    const QStringList lines = ticker_lines(text);
+    const int line_count = std::max(1, lines.size());
+    const double line_h = std::max(1.0, metrics.lineSpacing());
+    if (layer.ticker_style == 1) {
+        const double hold = std::max(0.1, layer.ticker_line_hold);
+        int idx = (int)std::floor(now / hold) % line_count;
+        if (layer.ticker_direction == 0) idx = line_count - 1 - idx;
+        QString line = lines.at(idx);
+        double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        QRectF bounds = metrics.boundingRect(line);
+        double y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        path.addText(QPointF(x, y), font, line);
+        return path;
+    }
+
+    const double content_h = line_count * line_h;
+    const double travel = rect.height() + content_h;
+    const double progress = std::fmod(now * speed, travel);
+    double y = layer.ticker_direction == 0
+        ? rect.top() - content_h + progress
+        : rect.bottom() - progress;
+    for (const QString &line : lines) {
+        double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        path.addText(QPointF(x, y + metrics.ascent()), font, line);
+        y += line_h;
+    }
+    return path;
+}
+
 static QColor color_from_argb(uint32_t argb)
 {
     return QColor((argb >> 16) & 0xFF,
@@ -558,7 +650,9 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (layer.align_h == 2) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignRight;
     if (layer.align_v == 0) align = (align & ~Qt::AlignVertical_Mask) | Qt::AlignTop;
     if (layer.align_v == 2) align = (align & ~Qt::AlignVertical_Mask) | Qt::AlignBottom;
-    QPainterPath text_path = text_overflow_path(font, text_rect, align, text, layer);
+    QPainterPath text_path = layer.type == LayerType::Ticker
+        ? ticker_text_path(font, text_rect, align, text, layer)
+        : text_overflow_path(font, text_rect, align, text, layer);
 
     if (eval_shadow_enabled(layer, t)) {
         QColor shadow = color_from_argb(eval_shadow_color(layer, t));
@@ -791,6 +885,7 @@ static void render_title_frame(TitleSourceData *data,
         switch (layer->type) {
         case LayerType::Text:
         case LayerType::Clock:
+        case LayerType::Ticker:
             render_layer_text(cr, *layer, lt, (int)w, (int)h);
             break;
         case LayerType::SolidRect:
@@ -916,6 +1011,7 @@ static void source_video_tick(void *priv, float seconds)
     }
 
     const bool has_clock_layer = title_has_clock_layer(title);
+    const bool has_ticker_layer = title_has_ticker_layer(title);
     const bool has_timeline_animation = title_has_animation(title);
     const bool static_clock_title = has_clock_layer && !has_timeline_animation;
 
@@ -999,6 +1095,9 @@ static void source_video_tick(void *priv, float seconds)
         data->dirty = true;
     }
 
+
+    if (has_ticker_layer)
+        data->dirty = true;
 
     if (static_clock_title || (!data->playing && has_clock_layer)) {
         auto now = std::chrono::steady_clock::now();

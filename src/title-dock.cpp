@@ -42,7 +42,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
-        if (layer->type == LayerType::Text && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
     return exposed;
@@ -680,7 +680,13 @@ std::shared_ptr<Title> TitleDock::create_template_title(const std::string &name,
         add_rect(obs_text_std("OBSTitles.LayerTickerBackground"), 960, 1010, 1920, 110, 0xE0101010, 0.0f);
         add_rect(obs_text_std("OBSTitles.LayerTickerAccent"), 125, 1010, 250, 110, 0xFF0078D4, 0.0f);
         add_text(obs_text_std("OBSTitles.LayerTickerLabel"), obs_text_std("OBSTitles.TemplateLive"), 125, 1010, 44, 0xFFFFFFFF, true, 1, 1);
-        add_text(obs_text_std("OBSTitles.LayerTickerText"), name, 1030, 1010, 44, 0xFFFFFFFF, false, 0, 1);
+        auto ticker = add_text(obs_text_std("OBSTitles.LayerTickerText"), name, 1030, 1010, 44, 0xFFFFFFFF, false, 0, 1);
+        ticker->type = LayerType::Ticker;
+        ticker->rect_width = 1640.0f;
+        ticker->box_width.static_value = ticker->rect_width;
+        ticker->ticker_style = 0;
+        ticker->ticker_direction = 1;
+        ticker->ticker_speed = 140.0;
         break;
     default:
         add_text(obs_text_std("OBSTitles.TemplateTitleText"), name, 960, 540, 72, 0xFFFFFFFF, true, 1, 1);
