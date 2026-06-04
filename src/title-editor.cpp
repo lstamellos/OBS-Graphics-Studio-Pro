@@ -44,6 +44,7 @@
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QColorDialog>
 #include <QFileDialog>
 #include <QFontDatabase>
@@ -4002,19 +4003,61 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     vl->addWidget(tform_box);
     make_collapsible(tform_box);
 
-    /* ── Text ── */
-    text_box_ = new QGroupBox(obsgs_tr("OBSTitles.Text"), inner);
+    auto make_property_grid = [&](QWidget *parent_widget) {
+        auto *grid = new QGridLayout(parent_widget);
+        grid->setContentsMargins(6, 5, 6, 6);
+        grid->setHorizontalSpacing(5);
+        grid->setVerticalSpacing(3);
+        grid->setColumnStretch(1, 1);
+        grid->setColumnStretch(3, 1);
+        return grid;
+    };
+    auto grid_label = [&](const QString &text, QWidget *parent_widget) {
+        auto *label = new QLabel(text, parent_widget);
+        label->setStyleSheet("color:#9f9f9f;font-size:10px;");
+        label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        return label;
+    };
+    auto add_grid_field = [&](QGridLayout *grid, int row, int col, const QString &label_text, QWidget *field) {
+        QWidget *parent_widget = grid->parentWidget();
+        grid->addWidget(grid_label(label_text, parent_widget), row, col * 2);
+        grid->addWidget(field, row, col * 2 + 1);
+    };
+    auto mk_combo = [&](const QStringList &labels, const QList<int> &values) {
+        auto *combo = new QComboBox(inner);
+        for (int i = 0; i < labels.size(); ++i)
+            combo->addItem(labels[i], i < values.size() ? values[i] : i);
+        combo->setFixedHeight(22);
+        combo->setStyleSheet(control_style);
+        return combo;
+    };
+    auto mk_type_button = [&](const QString &label, const QString &tip) {
+        auto *button = new QToolButton(inner);
+        button->setText(label);
+        button->setToolTip(tip);
+        button->setCheckable(true);
+        button->setFixedSize(28, 22);
+        button->setAutoRaise(false);
+        button->setStyleSheet(
+            "QToolButton{color:#d8d8d8;background:#242424;border:1px solid #373737;border-radius:2px;"
+            "font-size:10px;font-weight:bold;padding:0;}"
+            "QToolButton:hover{background:#303030;border-color:#4a4a4a;}"
+            "QToolButton:checked{background:#4b6ea8;color:white;border-color:#6f8fc4;}");
+        return button;
+    };
+
+    /* ── Character ── */
+    text_box_ = new QGroupBox("Character", inner);
     text_box_->setStyleSheet(section_style);
-    auto *txfl = new QFormLayout(text_box_);
-    style_form(txfl);
+    auto *char_grid = make_property_grid(text_box_);
 
     txt_content_ = new QTextEdit(inner);
     txt_content_->setAcceptRichText(false);
-    txt_content_->setMinimumHeight(96);
+    txt_content_->setMinimumHeight(72);
+    txt_content_->setMaximumHeight(92);
     txt_content_->setPlaceholderText(obsgs_tr("OBSTitles.EnterTextPlaceholder"));
     txt_content_->setStyleSheet(control_style);
 
-    /* Font family combo populated from system */
     cmb_font_ = new QComboBox(inner);
     cmb_font_->setFixedHeight(22);
     cmb_font_->setEditable(true);
@@ -4034,28 +4077,113 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_size_->setFixedHeight(22);
     spn_size_->setStyleSheet(control_style);
 
-    chk_bold_   = new QCheckBox(obsgs_tr("OBSTitles.Bold"),   inner);
-    chk_italic_ = new QCheckBox(obsgs_tr("OBSTitles.Italic"), inner);
-    chk_font_kerning_ = new QCheckBox(obsgs_tr("OBSTitles.Kerning"), inner);
-    chk_font_kerning_->setToolTip(obsgs_tr("OBSTitles.KerningTooltip"));
-    chk_expose_text_ = new QCheckBox(obsgs_tr("OBSTitles.ExposeInDock"), inner);
-    chk_expose_text_->setToolTip(obsgs_tr("OBSTitles.ExposeInDockTooltip"));
-    chk_bold_->setStyleSheet("color:#ccc;");
-    chk_italic_->setStyleSheet("color:#ccc;");
-    chk_font_kerning_->setStyleSheet("color:#ccc;");
-    chk_expose_text_->setStyleSheet("color:#ccc;");
+    cmb_kerning_mode_ = mk_combo({"Metrics", "Optical", "Manual"}, {0, 1, 2});
+    spn_kerning_value_ = mk_dspin(-100.0, 500.0, 1.0);
+    spn_kerning_value_->setSuffix(" px");
+    spn_kerning_value_->setToolTip("Manual kerning adjustment added to tracking.");
     spn_text_leading_ = mk_dspin(-200.0, 500.0, 1.0);
     spn_text_leading_->setSuffix(" px");
     spn_text_leading_->setToolTip(obsgs_tr("OBSTitles.LeadingTooltip"));
     spn_char_tracking_ = mk_dspin(-100.0, 500.0, 1.0);
     spn_char_tracking_->setSuffix(" px");
     spn_char_tracking_->setToolTip(obsgs_tr("OBSTitles.TrackingTooltip"));
-    spn_char_scale_x_ = mk_dspin(0.1, 5.0, 0.05);
-    spn_char_scale_x_->setDecimals(2);
-    spn_char_scale_x_->setSuffix(" x");
-    spn_char_scale_y_ = mk_dspin(0.1, 5.0, 0.05);
-    spn_char_scale_y_->setDecimals(2);
-    spn_char_scale_y_->setSuffix(" x");
+    spn_char_scale_x_ = mk_dspin(10.0, 500.0, 1.0);
+    spn_char_scale_x_->setSuffix("%");
+    spn_char_scale_y_ = mk_dspin(10.0, 500.0, 1.0);
+    spn_char_scale_y_->setSuffix("%");
+    spn_baseline_shift_ = mk_dspin(-500.0, 500.0, 1.0);
+    spn_baseline_shift_->setSuffix(" px");
+    cmb_language_ = mk_combo({"English", "Arabic", "Chinese", "French", "German", "Japanese", "Korean", "Portuguese", "Spanish"}, {});
+    cmb_antialias_ = mk_combo({"Default", "Smooth", "Crisp", "None"}, {0, 1, 2, 3});
+
+    btn_text_color_ = new QPushButton(inner);
+    btn_text_color_->setFixedHeight(22);
+    btn_kf_text_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleTextColorKeyframe"));
+
+    char_grid->addWidget(grid_label(obsgs_tr("OBSTitles.TextLabel"), text_box_), 0, 0);
+    char_grid->addWidget(txt_content_, 0, 1, 1, 3);
+    add_grid_field(char_grid, 1, 0, "Font", cmb_font_);
+    add_grid_field(char_grid, 1, 1, "Style", cmb_font_style_);
+    add_grid_field(char_grid, 2, 0, "Size", spn_size_);
+    add_grid_field(char_grid, 2, 1, "Leading", spn_text_leading_);
+    add_grid_field(char_grid, 3, 0, "Kerning", cmb_kerning_mode_);
+    add_grid_field(char_grid, 3, 1, "Value", spn_kerning_value_);
+    add_grid_field(char_grid, 4, 0, "H Scale", spn_char_scale_x_);
+    add_grid_field(char_grid, 4, 1, "V Scale", spn_char_scale_y_);
+    add_grid_field(char_grid, 5, 0, "Tracking", spn_char_tracking_);
+    add_grid_field(char_grid, 5, 1, "Baseline", spn_baseline_shift_);
+    add_grid_field(char_grid, 6, 0, "Fill", with_kf(btn_text_color_, btn_kf_text_color_));
+    add_grid_field(char_grid, 6, 1, "Language", cmb_language_);
+    add_grid_field(char_grid, 7, 0, "AA", cmb_antialias_);
+    vl->addWidget(text_box_);
+    make_collapsible(text_box_);
+
+    /* ── Type Options ── */
+    type_options_box_ = new QGroupBox("Type Options", inner);
+    type_options_box_->setStyleSheet(section_style);
+    auto *type_grid = new QGridLayout(type_options_box_);
+    type_grid->setContentsMargins(6, 5, 6, 6);
+    type_grid->setHorizontalSpacing(4);
+    type_grid->setVerticalSpacing(4);
+    chk_bold_ = mk_type_button("B", obsgs_tr("OBSTitles.Bold"));
+    chk_italic_ = mk_type_button("I", obsgs_tr("OBSTitles.Italic"));
+    chk_font_kerning_ = mk_type_button("K", obsgs_tr("OBSTitles.Kerning"));
+    chk_font_kerning_->setToolTip(obsgs_tr("OBSTitles.KerningTooltip"));
+    btn_all_caps_ = mk_type_button("TT", "All Caps");
+    btn_small_caps_ = mk_type_button("Tᴛ", "Small Caps");
+    btn_superscript_ = mk_type_button("x²", "Superscript");
+    btn_subscript_ = mk_type_button("x₂", "Subscript");
+    btn_underline_ = mk_type_button("U", "Underline");
+    btn_strikethrough_ = mk_type_button("S", "Strikethrough");
+    btn_ligatures_ = mk_type_button("fi", "Ligatures");
+    btn_stylistic_alternates_ = mk_type_button("Sw", "Stylistic Alternates");
+    btn_fractions_ = mk_type_button("½", "Fractions");
+    btn_opentype_features_ = mk_type_button("OT", "OpenType Features");
+    QList<QToolButton *> type_buttons{chk_bold_, chk_italic_, btn_all_caps_, btn_small_caps_, btn_superscript_,
+                                      btn_subscript_, btn_underline_, btn_strikethrough_, btn_ligatures_, btn_stylistic_alternates_,
+                                      btn_fractions_, btn_opentype_features_, chk_font_kerning_};
+    for (int i = 0; i < type_buttons.size(); ++i) type_grid->addWidget(type_buttons[i], i / 5, i % 5);
+    type_grid->setColumnStretch(5, 1);
+    vl->addWidget(type_options_box_);
+    make_collapsible(type_options_box_);
+
+    /* ── Paragraph ── */
+    paragraph_box_ = new QGroupBox("Paragraph", inner);
+    paragraph_box_->setStyleSheet(section_style);
+    auto *paragraph_layout = new QVBoxLayout(paragraph_box_);
+    paragraph_layout->setContentsMargins(6, 5, 6, 6);
+    paragraph_layout->setSpacing(5);
+    auto *align_row = new QWidget(inner);
+    auto *align_layout = new QHBoxLayout(align_row);
+    align_layout->setContentsMargins(0, 0, 0, 0);
+    align_layout->setSpacing(4);
+    cmb_text_align_ = new QComboBox(inner);
+    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignLeft"), 0);
+    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignCenter"), 1);
+    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignRight"), 2);
+    cmb_text_align_->addItem("Justify Left", 0);
+    cmb_text_align_->addItem("Justify Center", 1);
+    cmb_text_align_->addItem("Justify Right", 2);
+    cmb_text_align_->addItem("Full Justify", 1);
+    cmb_text_align_->setFixedHeight(22);
+    cmb_text_align_->setStyleSheet(control_style);
+    align_layout->addWidget(cmb_text_align_, 1);
+    cmb_text_valign_ = new QComboBox(inner);
+    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignTop"), 0);
+    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignMiddle"), 1);
+    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignBottom"), 2);
+    cmb_text_valign_->setFixedHeight(22);
+    cmb_text_valign_->setStyleSheet(control_style);
+    align_layout->addWidget(cmb_text_valign_, 1);
+    paragraph_layout->addWidget(align_row);
+    vl->addWidget(paragraph_box_);
+    make_collapsible(paragraph_box_);
+
+    /* ── Dynamic Text ── */
+    dynamic_text_box_ = new QGroupBox("Dynamic Text", inner);
+    dynamic_text_box_->setStyleSheet(section_style);
+    auto *dynamic_form = new QFormLayout(dynamic_text_box_);
+    style_form(dynamic_form);
     cmb_text_style_ = new QComboBox(inner);
     cmb_text_style_->addItem(obsgs_tr("OBSTitles.Normal"), 0);
     cmb_text_style_->addItem(obsgs_tr("OBSTitles.AllCaps"), 1);
@@ -4077,7 +4205,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_text_fit_min_scale_->setToolTip(obsgs_tr("OBSTitles.MinFitScaleTooltip"));
     lbl_text_fit_scale_ = new QLabel(obsgs_tr("OBSTitles.Scale100"), inner);
     lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
-
+    chk_expose_text_ = new QCheckBox(obsgs_tr("OBSTitles.ExposeInDock"), inner);
+    chk_expose_text_->setToolTip(obsgs_tr("OBSTitles.ExposeInDockTooltip"));
+    chk_expose_text_->setStyleSheet("color:#ccc;");
     cmb_ticker_style_ = new QComboBox(inner);
     cmb_ticker_style_->addItem(obsgs_tr("OBSTitles.TickerHorizontal"), 0);
     cmb_ticker_style_->addItem(obsgs_tr("OBSTitles.TickerVerticalLine"), 1);
@@ -4091,44 +4221,29 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_ticker_direction_ = new QComboBox(inner);
     cmb_ticker_direction_->setFixedHeight(22);
     cmb_ticker_direction_->setStyleSheet(control_style);
+    dynamic_form->addRow("Text Style", cmb_text_style_);
+    dynamic_form->addRow(obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
+    dynamic_form->addRow(obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
+    dynamic_form->addRow("", lbl_text_fit_scale_);
+    dynamic_form->addRow(obsgs_tr("OBSTitles.LiveEditLabel"), chk_expose_text_);
+    dynamic_form->addRow(obsgs_tr("OBSTitles.TickerStyleLabel"), cmb_ticker_style_);
+    dynamic_form->addRow(obsgs_tr("OBSTitles.TickerSpeedLabel"), spn_ticker_speed_);
+    dynamic_form->addRow(obsgs_tr("OBSTitles.TickerLineHoldLabel"), spn_ticker_line_hold_);
+    dynamic_form->addRow(obsgs_tr("OBSTitles.DirectionLabel"), cmb_ticker_direction_);
+    vl->addWidget(dynamic_text_box_);
+    make_collapsible(dynamic_text_box_);
 
-    txfl->addRow(obsgs_tr("OBSTitles.TextLabel"),   txt_content_);
-    txfl->addRow(obsgs_tr("OBSTitles.FontLabel"),   cmb_font_);
-    txfl->addRow(obsgs_tr("OBSTitles.FontStyleLabel"), cmb_font_style_);
-    txfl->addRow(obsgs_tr("OBSTitles.SizeLabel"),   spn_size_);
-    txfl->addRow(obsgs_tr("OBSTitles.KerningLabel"), chk_font_kerning_);
-    txfl->addRow(obsgs_tr("OBSTitles.LeadingLabel"), spn_text_leading_);
-    txfl->addRow(obsgs_tr("OBSTitles.TrackingLabel"), spn_char_tracking_);
-    txfl->addRow(obsgs_tr("OBSTitles.HorizontalScaleLabel"), spn_char_scale_x_);
-    txfl->addRow(obsgs_tr("OBSTitles.VerticalScaleLabel"), spn_char_scale_y_);
-    txfl->addRow(obsgs_tr("OBSTitles.TextStyleLabel"), cmb_text_style_);
-    txfl->addRow(obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
-    txfl->addRow(obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
-    txfl->addRow("", lbl_text_fit_scale_);
-    txfl->addRow(obsgs_tr("OBSTitles.TickerStyleLabel"), cmb_ticker_style_);
-    txfl->addRow(obsgs_tr("OBSTitles.TickerSpeedLabel"), spn_ticker_speed_);
-    txfl->addRow(obsgs_tr("OBSTitles.TickerLineHoldLabel"), spn_ticker_line_hold_);
-    txfl->addRow(obsgs_tr("OBSTitles.DirectionLabel"), cmb_ticker_direction_);
-    cmb_text_align_ = new QComboBox(inner);
-    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignLeft"), 0);
-    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignCenter"), 1);
-    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignRight"), 2);
-    cmb_text_align_->setFixedHeight(22);
-    cmb_text_align_->setStyleSheet(control_style);
-    txfl->addRow(obsgs_tr("OBSTitles.AlignmentLabel"), cmb_text_align_);
-    cmb_text_valign_ = new QComboBox(inner);
-    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignTop"), 0);
-    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignMiddle"), 1);
-    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignBottom"), 2);
-    cmb_text_valign_->setFixedHeight(22);
-    cmb_text_valign_->setStyleSheet(control_style);
-    txfl->addRow(obsgs_tr("OBSTitles.VerticalAlignLabel"), cmb_text_valign_);
-    txfl->addRow(obsgs_tr("OBSTitles.LiveEditLabel"), chk_expose_text_);
-    btn_text_color_ = new QPushButton(inner);
-    btn_kf_text_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleTextColorKeyframe"));
-    txfl->addRow(obsgs_tr("OBSTitles.ColorLabel"), with_kf(btn_text_color_, btn_kf_text_color_));
-    vl->addWidget(text_box_);
-    make_collapsible(text_box_);
+    /* ── Bullets and Numbering ── */
+    bullets_box_ = new QGroupBox("Bullets and Numbering", inner);
+    bullets_box_->setStyleSheet(section_style);
+    auto *bullets_layout = new QVBoxLayout(bullets_box_);
+    bullets_layout->setContentsMargins(6, 5, 6, 6);
+    auto *bullets_hint = new QLabel("Broadcast lower thirds typically use manual bullet glyphs; this group is ready for list presets.", inner);
+    bullets_hint->setWordWrap(true);
+    bullets_hint->setStyleSheet("color:#8f8f8f;font-size:10px;");
+    bullets_layout->addWidget(bullets_hint);
+    vl->addWidget(bullets_box_);
+    make_collapsible(bullets_box_);
 
     /* ── Rectangle ── */
     rect_box_ = new QGroupBox(obsgs_tr("OBSTitles.Rectangle"), inner);
@@ -4339,17 +4454,30 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, emit_change](int v){
                 if (can_edit()) { layer_->font_size = v; emit_change(); }
             });
-    connect(chk_bold_, &QCheckBox::toggled,
+    connect(chk_bold_, &QToolButton::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_bold = v; emit_change(); }
             });
-    connect(chk_italic_, &QCheckBox::toggled,
+    connect(chk_italic_, &QToolButton::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_italic = v; emit_change(); }
             });
-    connect(chk_font_kerning_, &QCheckBox::toggled,
+    connect(chk_font_kerning_, &QToolButton::toggled,
             this, [this, can_edit, emit_change](bool v){
                 if (can_edit()) { layer_->font_kerning = v; emit_change(); }
+            });
+    connect(cmb_kerning_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx) {
+                if (!can_edit()) return;
+                layer_->kerning_mode = cmb_kerning_mode_->itemData(idx).toInt();
+                layer_->font_kerning = layer_->kerning_mode != 2;
+                if (chk_font_kerning_) chk_font_kerning_->setChecked(layer_->font_kerning);
+                if (spn_kerning_value_) spn_kerning_value_->setEnabled(layer_->kerning_mode == 2);
+                emit_change();
+            });
+    connect(spn_kerning_value_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) {
+                if (can_edit()) { layer_->manual_kerning = (float)v; emit_change(); }
             });
     connect(spn_text_leading_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, emit_change](double v){
@@ -4361,12 +4489,40 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             });
     connect(spn_char_scale_x_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, emit_change](double v){
-                if (can_edit()) { layer_->char_scale_x = (float)v; emit_change(); }
+                if (can_edit()) { layer_->char_scale_x = (float)(v / 100.0); emit_change(); }
             });
     connect(spn_char_scale_y_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, emit_change](double v){
-                if (can_edit()) { layer_->char_scale_y = (float)v; emit_change(); }
+                if (can_edit()) { layer_->char_scale_y = (float)(v / 100.0); emit_change(); }
             });
+    connect(spn_baseline_shift_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v){
+                if (can_edit()) { layer_->baseline_shift = (float)v; emit_change(); }
+            });
+    connect(cmb_language_, &QComboBox::currentTextChanged,
+            this, [this, can_edit, emit_change](const QString &s){
+                if (can_edit()) { layer_->text_language = s.toStdString(); emit_change(); }
+            });
+    connect(cmb_antialias_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, can_edit, emit_change](int idx){
+                if (can_edit()) { layer_->text_antialias = cmb_antialias_->itemData(idx).toInt(); emit_change(); }
+            });
+    auto set_exclusive_text_style = [this, can_edit, emit_change](int style, bool checked) {
+        if (!can_edit() || !checked) return;
+        layer_->text_style = style;
+        emit_change();
+        load_values();
+    };
+    connect(btn_all_caps_, &QToolButton::toggled, this, [set_exclusive_text_style](bool v){ set_exclusive_text_style(1, v); });
+    connect(btn_small_caps_, &QToolButton::toggled, this, [set_exclusive_text_style](bool v){ set_exclusive_text_style(2, v); });
+    connect(btn_superscript_, &QToolButton::toggled, this, [set_exclusive_text_style](bool v){ set_exclusive_text_style(3, v); });
+    connect(btn_subscript_, &QToolButton::toggled, this, [set_exclusive_text_style](bool v){ set_exclusive_text_style(4, v); });
+    connect(btn_underline_, &QToolButton::toggled, this, [this, can_edit, emit_change](bool v){ if (can_edit()) { layer_->text_underline = v; emit_change(); }});
+    connect(btn_strikethrough_, &QToolButton::toggled, this, [this, can_edit, emit_change](bool v){ if (can_edit()) { layer_->text_strikethrough = v; emit_change(); }});
+    connect(btn_ligatures_, &QToolButton::toggled, this, [this, can_edit, emit_change](bool v){ if (can_edit()) { layer_->text_ligatures = v; emit_change(); }});
+    connect(btn_stylistic_alternates_, &QToolButton::toggled, this, [this, can_edit, emit_change](bool v){ if (can_edit()) { layer_->text_stylistic_alternates = v; emit_change(); }});
+    connect(btn_fractions_, &QToolButton::toggled, this, [this, can_edit, emit_change](bool v){ if (can_edit()) { layer_->text_fractions = v; emit_change(); }});
+    connect(btn_opentype_features_, &QToolButton::toggled, this, [this, can_edit, emit_change](bool v){ if (can_edit()) { layer_->text_opentype_features = v; emit_change(); }});
     connect(cmb_text_style_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, can_edit, emit_change](int idx) {
                 if (can_edit()) { layer_->text_style = cmb_text_style_->itemData(idx).toInt(); emit_change(); }
@@ -4768,6 +4924,10 @@ void PropertiesPanel::load_values()
     loading_values_ = true;
     if (!layer_) {
         text_box_->setVisible(false);
+        if (type_options_box_) type_options_box_->setVisible(false);
+        if (paragraph_box_) paragraph_box_->setVisible(false);
+        if (dynamic_text_box_) dynamic_text_box_->setVisible(false);
+        if (bullets_box_) bullets_box_->setVisible(false);
         rect_box_->setVisible(false);
         image_box_->setVisible(false);
         if (outline_box_) outline_box_->setVisible(false);
@@ -4800,8 +4960,16 @@ void PropertiesPanel::load_values()
         if (chk_font_kerning_) chk_font_kerning_->setChecked(true);
         if (spn_text_leading_) spn_text_leading_->setValue(0.0);
         if (spn_char_tracking_) spn_char_tracking_->setValue(0.0);
-        if (spn_char_scale_x_) spn_char_scale_x_->setValue(1.0);
-        if (spn_char_scale_y_) spn_char_scale_y_->setValue(1.0);
+        if (cmb_kerning_mode_) cmb_kerning_mode_->setCurrentIndex(0);
+        if (spn_kerning_value_) spn_kerning_value_->setValue(0.0);
+        if (spn_char_scale_x_) spn_char_scale_x_->setValue(100.0);
+        if (spn_char_scale_y_) spn_char_scale_y_->setValue(100.0);
+        if (spn_baseline_shift_) spn_baseline_shift_->setValue(0.0);
+        if (cmb_language_) cmb_language_->setCurrentIndex(0);
+        if (cmb_antialias_) cmb_antialias_->setCurrentIndex(0);
+        for (auto *b : {btn_all_caps_, btn_small_caps_, btn_superscript_, btn_subscript_, btn_underline_,
+                        btn_strikethrough_, btn_ligatures_, btn_stylistic_alternates_, btn_fractions_, btn_opentype_features_})
+            if (b) b->setChecked(false);
         if (cmb_text_style_) cmb_text_style_->setCurrentIndex(0);
         if (cmb_text_overflow_) cmb_text_overflow_->setCurrentIndex(0);
         if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setValue(0.5);
@@ -4840,33 +5008,37 @@ void PropertiesPanel::load_values()
     const bool is_image = layer_->type == LayerType::Image;
     const bool supports_outline = is_text_like || is_rect;
     text_box_->setVisible(is_text_like);
-    text_box_->setTitle(is_clock ? obsgs_tr("OBSTitles.Clock") : (is_ticker ? obsgs_tr("OBSTitles.Ticker") : obsgs_tr("OBSTitles.Text")));
+    if (type_options_box_) type_options_box_->setVisible(is_text_like);
+    if (paragraph_box_) paragraph_box_->setVisible(is_text_like);
+    if (dynamic_text_box_) dynamic_text_box_->setVisible(is_text_like);
+    if (bullets_box_) bullets_box_->setVisible(is_text_like);
+    text_box_->setTitle("Character");
     txt_content_->setPlaceholderText(is_clock ? "H:i:s" : obsgs_tr("OBSTitles.EnterTextPlaceholder"));
     if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2 && !is_ticker);
     if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2 && !is_ticker);
-    if (auto *text_form = qobject_cast<QFormLayout *>(text_box_->layout())) {
+    if (auto *dynamic_form = qobject_cast<QFormLayout *>(dynamic_text_box_ ? dynamic_text_box_->layout() : nullptr)) {
         const bool show_ticker_fit = is_text_like && layer_->text_overflow_mode == 2 && !is_ticker;
-        if (auto *label = text_form->labelForField(spn_text_fit_min_scale_))
+        if (auto *label = dynamic_form->labelForField(spn_text_fit_min_scale_))
             label->setVisible(show_ticker_fit);
         if (cmb_ticker_style_) {
             cmb_ticker_style_->setVisible(is_ticker);
-            if (auto *label = text_form->labelForField(cmb_ticker_style_)) label->setVisible(is_ticker);
+            if (auto *label = dynamic_form->labelForField(cmb_ticker_style_)) label->setVisible(is_ticker);
         }
         if (spn_ticker_speed_) {
             spn_ticker_speed_->setVisible(is_ticker && layer_->ticker_style != 1);
-            if (auto *label = text_form->labelForField(spn_ticker_speed_)) label->setVisible(is_ticker && layer_->ticker_style != 1);
+            if (auto *label = dynamic_form->labelForField(spn_ticker_speed_)) label->setVisible(is_ticker && layer_->ticker_style != 1);
         }
         if (spn_ticker_line_hold_) {
             spn_ticker_line_hold_->setVisible(is_ticker && layer_->ticker_style == 1);
-            if (auto *label = text_form->labelForField(spn_ticker_line_hold_)) label->setVisible(is_ticker && layer_->ticker_style == 1);
+            if (auto *label = dynamic_form->labelForField(spn_ticker_line_hold_)) label->setVisible(is_ticker && layer_->ticker_style == 1);
         }
         if (cmb_ticker_direction_) {
             cmb_ticker_direction_->setVisible(is_ticker);
-            if (auto *label = text_form->labelForField(cmb_ticker_direction_)) label->setVisible(is_ticker);
+            if (auto *label = dynamic_form->labelForField(cmb_ticker_direction_)) label->setVisible(is_ticker);
         }
         if (chk_expose_text_) {
             chk_expose_text_->setVisible(is_text || is_ticker);
-            if (auto *label = text_form->labelForField(chk_expose_text_))
+            if (auto *label = dynamic_form->labelForField(chk_expose_text_))
                 label->setVisible(is_text || is_ticker);
         }
     }
@@ -4988,19 +5160,46 @@ void PropertiesPanel::load_values()
     chk_bold_->setChecked(layer_->font_bold);
     chk_italic_->setChecked(layer_->font_italic);
     if (chk_font_kerning_) chk_font_kerning_->setChecked(layer_->font_kerning);
+    if (cmb_kerning_mode_) {
+        int ki = cmb_kerning_mode_->findData(layer_->kerning_mode);
+        cmb_kerning_mode_->setCurrentIndex(ki >= 0 ? ki : 0);
+    }
+    if (spn_kerning_value_) {
+        spn_kerning_value_->setValue(layer_->manual_kerning);
+        spn_kerning_value_->setEnabled(layer_->kerning_mode == 2);
+    }
     if (spn_text_leading_) spn_text_leading_->setValue(layer_->text_leading);
     if (spn_char_tracking_) spn_char_tracking_->setValue(layer_->char_tracking);
-    if (spn_char_scale_x_) spn_char_scale_x_->setValue(layer_->char_scale_x);
-    if (spn_char_scale_y_) spn_char_scale_y_->setValue(layer_->char_scale_y);
+    if (spn_char_scale_x_) spn_char_scale_x_->setValue(layer_->char_scale_x * 100.0);
+    if (spn_char_scale_y_) spn_char_scale_y_->setValue(layer_->char_scale_y * 100.0);
+    if (spn_baseline_shift_) spn_baseline_shift_->setValue(layer_->baseline_shift);
+    if (cmb_language_) {
+        int li = cmb_language_->findText(QString::fromStdString(layer_->text_language));
+        cmb_language_->setCurrentIndex(li >= 0 ? li : 0);
+    }
+    if (cmb_antialias_) {
+        int aa = cmb_antialias_->findData(layer_->text_antialias);
+        cmb_antialias_->setCurrentIndex(aa >= 0 ? aa : 0);
+    }
+    if (btn_all_caps_) btn_all_caps_->setChecked(layer_->text_style == 1);
+    if (btn_small_caps_) btn_small_caps_->setChecked(layer_->text_style == 2);
+    if (btn_superscript_) btn_superscript_->setChecked(layer_->text_style == 3);
+    if (btn_subscript_) btn_subscript_->setChecked(layer_->text_style == 4);
+    if (btn_underline_) btn_underline_->setChecked(layer_->text_underline);
+    if (btn_strikethrough_) btn_strikethrough_->setChecked(layer_->text_strikethrough);
+    if (btn_ligatures_) btn_ligatures_->setChecked(layer_->text_ligatures);
+    if (btn_stylistic_alternates_) btn_stylistic_alternates_->setChecked(layer_->text_stylistic_alternates);
+    if (btn_fractions_) btn_fractions_->setChecked(layer_->text_fractions);
+    if (btn_opentype_features_) btn_opentype_features_->setChecked(layer_->text_opentype_features);
     int style_idx = cmb_text_style_->findData(layer_->text_style);
     cmb_text_style_->setCurrentIndex(style_idx >= 0 ? style_idx : 0);
     int overflow_idx = cmb_text_overflow_->findData(layer_->text_overflow_mode);
     cmb_text_overflow_->setCurrentIndex(overflow_idx >= 0 ? overflow_idx : 0);
     spn_text_fit_min_scale_->setValue(layer_->text_fit_min_scale);
-    bool is_fit = layer_->text_overflow_mode == 2;
+    bool is_fit = layer_->text_overflow_mode == 2 && !is_ticker;
     spn_text_fit_min_scale_->setVisible(is_fit);
     lbl_text_fit_scale_->setVisible(is_fit);
-    if (auto *form = qobject_cast<QFormLayout *>(text_box_->layout())) {
+    if (auto *form = qobject_cast<QFormLayout *>(dynamic_text_box_ ? dynamic_text_box_->layout() : nullptr)) {
         if (auto *label = form->labelForField(spn_text_fit_min_scale_))
             label->setVisible(is_fit);
     }

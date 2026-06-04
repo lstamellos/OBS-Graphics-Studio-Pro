@@ -386,6 +386,10 @@ private:
     bool loading_values_ = false;
 
     QGroupBox       *text_box_     = nullptr;
+    QGroupBox       *type_options_box_ = nullptr;
+    QGroupBox       *paragraph_box_ = nullptr;
+    QGroupBox       *dynamic_text_box_ = nullptr;
+    QGroupBox       *bullets_box_ = nullptr;
     QGroupBox       *rect_box_     = nullptr;
     QGroupBox       *image_box_    = nullptr;
 
@@ -394,14 +398,29 @@ private:
     QComboBox       *cmb_font_     = nullptr;
     QComboBox       *cmb_font_style_ = nullptr;
     QSpinBox        *spn_size_     = nullptr;
-    QCheckBox       *chk_bold_     = nullptr;
-    QCheckBox       *chk_italic_   = nullptr;
-    QCheckBox       *chk_font_kerning_ = nullptr;
+    QToolButton     *chk_bold_     = nullptr;
+    QToolButton     *chk_italic_   = nullptr;
+    QToolButton     *chk_font_kerning_ = nullptr;
+    QComboBox       *cmb_kerning_mode_ = nullptr;
+    QDoubleSpinBox  *spn_kerning_value_ = nullptr;
     QDoubleSpinBox  *spn_text_leading_ = nullptr;
     QDoubleSpinBox  *spn_char_tracking_ = nullptr;
     QDoubleSpinBox  *spn_char_scale_x_ = nullptr;
     QDoubleSpinBox  *spn_char_scale_y_ = nullptr;
+    QDoubleSpinBox  *spn_baseline_shift_ = nullptr;
+    QComboBox       *cmb_language_ = nullptr;
+    QComboBox       *cmb_antialias_ = nullptr;
     QComboBox       *cmb_text_style_ = nullptr;
+    QToolButton     *btn_all_caps_ = nullptr;
+    QToolButton     *btn_small_caps_ = nullptr;
+    QToolButton     *btn_superscript_ = nullptr;
+    QToolButton     *btn_subscript_ = nullptr;
+    QToolButton     *btn_underline_ = nullptr;
+    QToolButton     *btn_strikethrough_ = nullptr;
+    QToolButton     *btn_ligatures_ = nullptr;
+    QToolButton     *btn_stylistic_alternates_ = nullptr;
+    QToolButton     *btn_fractions_ = nullptr;
+    QToolButton     *btn_opentype_features_ = nullptr;
     QComboBox       *cmb_text_overflow_ = nullptr;
     QDoubleSpinBox  *spn_text_fit_min_scale_ = nullptr;
     QComboBox       *cmb_ticker_style_ = nullptr;
