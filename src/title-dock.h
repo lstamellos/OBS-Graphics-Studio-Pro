@@ -51,6 +51,7 @@ private slots:
     void on_add_to_scene();
     void on_selection_changed();
     void on_add_live_text_row();
+    void on_delete_live_text_rows();
     void on_move_live_text_row_up();
     void on_move_live_text_row_down();
 
@@ -62,6 +63,7 @@ private:
     std::shared_ptr<Title> create_template_title(const std::string &name, int template_id);
     void select_title(const std::string &id);
     void create_title_from_template(const std::string &name, int template_id);
+    std::vector<int> selected_live_text_rows() const;
 
     QWidget      *container_  = nullptr;
     QListWidget  *list_       = nullptr;
@@ -77,6 +79,7 @@ private:
     QLabel       *text_editor_lbl_ = nullptr;
     QTableWidget *text_table_ = nullptr;
     QToolButton *btn_add_text_row_ = nullptr;
+    QToolButton *btn_delete_text_row_ = nullptr;
     QToolButton *btn_row_up_ = nullptr;
     QToolButton *btn_row_down_ = nullptr;
     bool          updating_exposed_text_ = false;
