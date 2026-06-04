@@ -133,7 +133,6 @@ struct Layer {
     bool        text_fractions = false;
     bool        text_opentype_features = false;
     std::string text_language = "English";
-    int         text_antialias = 0;  /* 0=default, 1=smooth, 2=crisp, 3=none */
     int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
     float       text_fit_min_scale = 0.5f;
 

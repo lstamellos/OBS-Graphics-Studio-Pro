@@ -455,7 +455,6 @@ private:
     QDoubleSpinBox  *spn_char_scale_y_ = nullptr;
     QDoubleSpinBox  *spn_baseline_shift_ = nullptr;
     QComboBox       *cmb_language_ = nullptr;
-    QComboBox       *cmb_antialias_ = nullptr;
     QComboBox       *cmb_text_style_ = nullptr;
     QToolButton     *btn_all_caps_ = nullptr;
     QToolButton     *btn_small_caps_ = nullptr;

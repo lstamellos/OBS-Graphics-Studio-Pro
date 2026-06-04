@@ -749,12 +749,6 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (std::abs(layer.baseline_shift) > 0.0001)
         text_path.translate(0.0, -layer.baseline_shift);
 
-    bool previous_text_aa = painter.testRenderHint(QPainter::TextAntialiasing);
-    bool previous_shape_aa = painter.testRenderHint(QPainter::Antialiasing);
-    const bool aa_enabled = layer.text_antialias != 3;
-    painter.setRenderHint(QPainter::TextAntialiasing, aa_enabled);
-    painter.setRenderHint(QPainter::Antialiasing, aa_enabled);
-
     if (eval_shadow_enabled(layer, t)) {
         QColor shadow = color_from_argb(eval_shadow_color(layer, t));
         shadow.setAlphaF(std::clamp((double)shadow.alphaF() * eval_shadow_opacity(layer, t), 0.0, 1.0));

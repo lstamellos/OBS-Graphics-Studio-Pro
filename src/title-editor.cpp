@@ -4694,6 +4694,11 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         grid->addWidget(grid_label(label_text, parent_widget), row, col * 2);
         grid->addWidget(field, row, col * 2 + 1);
     };
+    auto add_full_width_field = [&](QGridLayout *grid, int row, const QString &label_text, QWidget *field) {
+        QWidget *parent_widget = grid->parentWidget();
+        grid->addWidget(grid_label(label_text, parent_widget), row, 0);
+        grid->addWidget(field, row, 1, 1, 3);
+    };
     auto mk_combo = [&](const QStringList &labels, const QList<int> &values) {
         auto *combo = new QComboBox(inner);
         for (int i = 0; i < labels.size(); ++i)
@@ -4765,27 +4770,24 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_baseline_shift_ = mk_dspin(-500.0, 500.0, 1.0);
     spn_baseline_shift_->setSuffix(" px");
     cmb_language_ = mk_combo({"English", "Arabic", "Chinese", "French", "German", "Japanese", "Korean", "Portuguese", "Spanish"}, {});
-    cmb_antialias_ = mk_combo({"Default", "Smooth", "Crisp", "None"}, {0, 1, 2, 3});
-
     btn_text_color_ = new QPushButton(inner);
     btn_text_color_->setFixedHeight(22);
     btn_kf_text_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleTextColorKeyframe"));
 
     char_grid->addWidget(grid_label(obsgs_tr("OBSTitles.TextLabel"), text_box_), 0, 0);
     char_grid->addWidget(txt_content_, 0, 1, 1, 3);
-    add_grid_field(char_grid, 1, 0, "Font", cmb_font_);
-    add_grid_field(char_grid, 1, 1, "Style", cmb_font_style_);
-    add_grid_field(char_grid, 2, 0, "Size", spn_size_);
-    add_grid_field(char_grid, 2, 1, "Leading", spn_text_leading_);
-    add_grid_field(char_grid, 3, 0, "Kerning", cmb_kerning_mode_);
-    add_grid_field(char_grid, 3, 1, "Value", spn_kerning_value_);
-    add_grid_field(char_grid, 4, 0, "H Scale", spn_char_scale_x_);
-    add_grid_field(char_grid, 4, 1, "V Scale", spn_char_scale_y_);
-    add_grid_field(char_grid, 5, 0, "Tracking", spn_char_tracking_);
-    add_grid_field(char_grid, 5, 1, "Baseline", spn_baseline_shift_);
-    add_grid_field(char_grid, 6, 0, "Fill", with_kf(btn_text_color_, btn_kf_text_color_));
-    add_grid_field(char_grid, 6, 1, "Language", cmb_language_);
-    add_grid_field(char_grid, 7, 0, "AA", cmb_antialias_);
+    add_full_width_field(char_grid, 1, "Font", cmb_font_);
+    add_full_width_field(char_grid, 2, "Style", cmb_font_style_);
+    add_grid_field(char_grid, 3, 0, "Size", spn_size_);
+    add_grid_field(char_grid, 3, 1, "Leading", spn_text_leading_);
+    add_grid_field(char_grid, 4, 0, "Kerning", cmb_kerning_mode_);
+    add_grid_field(char_grid, 4, 1, "Value", spn_kerning_value_);
+    add_grid_field(char_grid, 5, 0, "H Scale", spn_char_scale_x_);
+    add_grid_field(char_grid, 5, 1, "V Scale", spn_char_scale_y_);
+    add_grid_field(char_grid, 6, 0, "Tracking", spn_char_tracking_);
+    add_grid_field(char_grid, 6, 1, "Baseline", spn_baseline_shift_);
+    add_full_width_field(char_grid, 7, "Fill Color", with_kf(btn_text_color_, btn_kf_text_color_));
+    add_grid_field(char_grid, 8, 0, "Language", cmb_language_);
     vl->addWidget(text_box_);
     make_collapsible(text_box_);
 
@@ -5173,10 +5175,6 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     connect(cmb_language_, &QComboBox::currentTextChanged,
             this, [this, can_edit, emit_change](const QString &s){
                 if (can_edit()) { layer_->text_language = s.toStdString(); emit_change(); }
-            });
-    connect(cmb_antialias_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this, can_edit, emit_change](int idx){
-                if (can_edit()) { layer_->text_antialias = cmb_antialias_->itemData(idx).toInt(); emit_change(); }
             });
     auto set_exclusive_text_style = [this, can_edit, emit_change](int style, bool checked) {
         if (!can_edit() || !checked) return;
@@ -5637,7 +5635,6 @@ void PropertiesPanel::load_values()
         if (spn_char_scale_y_) spn_char_scale_y_->setValue(100.0);
         if (spn_baseline_shift_) spn_baseline_shift_->setValue(0.0);
         if (cmb_language_) cmb_language_->setCurrentIndex(0);
-        if (cmb_antialias_) cmb_antialias_->setCurrentIndex(0);
         for (auto *b : {btn_all_caps_, btn_small_caps_, btn_superscript_, btn_subscript_, btn_underline_,
                         btn_strikethrough_, btn_ligatures_, btn_stylistic_alternates_, btn_fractions_, btn_opentype_features_})
             if (b) b->setChecked(false);
@@ -5847,10 +5844,6 @@ void PropertiesPanel::load_values()
     if (cmb_language_) {
         int li = cmb_language_->findText(QString::fromStdString(layer_->text_language));
         cmb_language_->setCurrentIndex(li >= 0 ? li : 0);
-    }
-    if (cmb_antialias_) {
-        int aa = cmb_antialias_->findData(layer_->text_antialias);
-        cmb_antialias_->setCurrentIndex(aa >= 0 ? aa : 0);
     }
     if (btn_all_caps_) btn_all_caps_->setChecked(layer_->text_style == 1);
     if (btn_small_caps_) btn_small_caps_->setChecked(layer_->text_style == 2);
