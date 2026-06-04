@@ -35,7 +35,7 @@ struct HotkeyRegistration {
 struct HotkeySection {
     std::string title_id;
     std::string display_name;
-    /* Private title source used only as the OBS hotkey settings section. */
+    /* Title source used only as the OBS Hotkeys settings section. */
     obs_source_t *source = nullptr;
 };
 
@@ -99,18 +99,25 @@ static std::string title_display_name(const std::shared_ptr<Title> &title)
     return title && !title->name.empty() ? title->name : std::string("Untitled");
 }
 
+static std::string program_display_name()
+{
+    const char *name = obs_module_text("OBSTitles.DockName");
+    return name && *name ? std::string(name) : std::string("OBS Graphics Studio Pro");
+}
+
 static std::string title_section_name(const std::shared_ptr<Title> &title,
                                       const std::map<std::string, int> &name_counts)
 {
     std::string name = title_display_name(title);
     auto it = name_counts.find(name);
-    if (it == name_counts.end() || it->second <= 1)
-        return name;
+    if (it != name_counts.end() && it->second > 1) {
+        std::string suffix = title && !title->id.empty()
+            ? title->id.substr(0, std::min<size_t>(8, title->id.size()))
+            : hotkey_safe_id(name).substr(0, 8);
+        name += " [" + suffix + "]";
+    }
 
-    std::string suffix = title && !title->id.empty()
-        ? title->id.substr(0, std::min<size_t>(8, title->id.size()))
-        : hotkey_safe_id(name).substr(0, 8);
-    return name + " [" + suffix + "]";
+    return program_display_name() + " - " + name;
 }
 
 static std::string cue_description(int cue_number)
@@ -275,8 +282,10 @@ static void unregister_all_hotkeys()
     }
     g_hotkeys.clear();
     for (auto &section : g_sections) {
-        if (section.source)
+        if (section.source) {
+            obs_source_remove(section.source);
             obs_source_release(section.source);
+        }
     }
     g_sections.clear();
     g_hotkey_signature.clear();
@@ -298,9 +307,10 @@ static void refresh_hotkeys()
     for (auto &section : g_sections) {
         obs_data_t *settings = obs_data_create();
         obs_data_set_string(settings, PROP_TITLE_ID, section.title_id.c_str());
-        section.source = obs_source_create_private("obs_graphics_studio_pro_source",
-                                                   section.display_name.c_str(),
-                                                   settings);
+        section.source = obs_source_create("obs_graphics_studio_pro_source",
+                                           section.display_name.c_str(),
+                                           settings,
+                                           nullptr);
         obs_data_release(settings);
         if (section.source)
             section_sources[section.title_id] = section.source;
