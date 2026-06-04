@@ -4566,11 +4566,32 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     auto style_form = [](QFormLayout *form) {
         form->setContentsMargins(6, 5, 6, 6);
-        form->setHorizontalSpacing(6);
-        form->setVerticalSpacing(2);
-        form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        form->setHorizontalSpacing(5);
+        form->setVerticalSpacing(3);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
         form->setFormAlignment(Qt::AlignTop);
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    };
+
+    const QString checkbox_style =
+        "QCheckBox{color:#d8d8d8;font-size:10px;spacing:5px;}"
+        "QCheckBox::indicator{width:13px;height:13px;border:1px solid #3a3a3a;"
+        "background:#242424;border-radius:2px;}"
+        "QCheckBox::indicator:hover{border-color:#4a4a4a;background:#303030;}"
+        "QCheckBox::indicator:checked{background:#4b6ea8;border-color:#6f8fc4;}";
+    const QString push_button_style =
+        "QPushButton{color:#d8d8d8;background:#242424;border:1px solid #373737;"
+        "border-radius:2px;font-size:10px;padding:2px 8px;}"
+        "QPushButton:hover{background:#303030;border-color:#4a4a4a;}"
+        "QPushButton:pressed{background:#4b6ea8;color:white;border-color:#6f8fc4;}";
+
+    auto style_checkbox = [&](QCheckBox *box) {
+        box->setFixedHeight(22);
+        box->setStyleSheet(checkbox_style);
+    };
+    auto style_push_button = [&](QPushButton *button) {
+        button->setFixedHeight(22);
+        button->setStyleSheet(push_button_style);
     };
 
     /* ── Transform ── */
@@ -4880,7 +4901,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
     chk_expose_text_ = new QCheckBox(obsgs_tr("OBSTitles.ExposeInDock"), inner);
     chk_expose_text_->setToolTip(obsgs_tr("OBSTitles.ExposeInDockTooltip"));
-    chk_expose_text_->setStyleSheet("color:#ccc;");
+    style_checkbox(chk_expose_text_);
     cmb_ticker_style_ = new QComboBox(inner);
     cmb_ticker_style_->addItem(obsgs_tr("OBSTitles.TickerHorizontal"), 0);
     cmb_ticker_style_->addItem(obsgs_tr("OBSTitles.TickerVerticalLine"), 1);
@@ -4950,7 +4971,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     auto *outline_form = new QFormLayout(outline_box_);
     style_form(outline_form);
     chk_outline_enabled_ = new QCheckBox(obsgs_tr("OBSTitles.EnableOutline"), inner);
-    chk_outline_enabled_->setStyleSheet("color:#ccc;");
+    style_checkbox(chk_outline_enabled_);
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
     spn_outline_width_->setToolTip(obsgs_tr("OBSTitles.OutlineThicknessTooltip"));
     btn_outline_color_ = new QPushButton(inner);
@@ -4969,7 +4990,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_outline_position_->setFixedHeight(22);
     cmb_outline_position_->setStyleSheet(control_style);
     chk_outline_antialias_ = new QCheckBox(obsgs_tr("OBSTitles.AntialiasOutline"), inner);
-    chk_outline_antialias_->setStyleSheet("color:#ccc;");
+    style_checkbox(chk_outline_antialias_);
     outline_form->addRow("", chk_outline_enabled_);
     outline_form->addRow(obsgs_tr("OBSTitles.ColorLabel"), btn_outline_color_);
     outline_form->addRow(obsgs_tr("OBSTitles.ThicknessLabel"), spn_outline_width_);
@@ -4989,12 +5010,11 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     edit_image_path_->setFixedHeight(22);
     edit_image_path_->setStyleSheet(control_style);
     btn_pick_image_ = new QPushButton(obsgs_tr("OBSTitles.Browse"), inner);
-    btn_pick_image_->setStyleSheet("QPushButton{color:#fff;background:#0078d4;border:none;"
-                                     "border-radius:3px;padding:3px 8px;}");
+    style_push_button(btn_pick_image_);
     spn_layer_w_->setToolTip(obsgs_tr("OBSTitles.ImageWidthTooltip"));
     spn_layer_h_->setToolTip(obsgs_tr("OBSTitles.ImageHeightTooltip"));
     chk_lock_aspect_ = new QCheckBox(obsgs_tr("OBSTitles.LockAspectRatio"), inner);
-    chk_lock_aspect_->setStyleSheet("color:#ccc;");
+    style_checkbox(chk_lock_aspect_);
     image_form->addRow(obsgs_tr("OBSTitles.PathLabel"), edit_image_path_);
     image_form->addRow("", btn_pick_image_);
     image_form->addRow("", chk_lock_aspect_);
@@ -5006,7 +5026,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     auto *sfl = new QFormLayout(shadow_box_);
     style_form(sfl);
     chk_shadow_enabled_ = new QCheckBox(obsgs_tr("OBSTitles.EnableShadow"), inner);
-    chk_shadow_enabled_->setStyleSheet("color:#ccc;");
+    style_checkbox(chk_shadow_enabled_);
     cmb_shadow_preset_ = new QComboBox(inner);
     cmb_shadow_preset_->addItems({obsgs_tr("OBSTitles.Custom"), obsgs_tr("OBSTitles.Soft"), obsgs_tr("OBSTitles.Medium"), obsgs_tr("OBSTitles.Strong"), obsgs_tr("OBSTitles.Broadcast")});
     cmb_shadow_preset_->setFixedHeight(22);
