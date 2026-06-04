@@ -203,35 +203,35 @@ void TitleDock::build_ui()
     template_layout->setSpacing(obs_layout_spacing(template_section));
 
     /* ── header toolbar ── */
-    auto *toolbar = make_obs_dock_toolbar(template_section);
+    auto *template_toolbar = make_obs_dock_toolbar(template_section);
 
-    btn_add_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Add"), obs_icon("add.svg"),
+    btn_add_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Add"), obs_icon("add.svg"),
                                          obsgs_tr("OBSTitles.AddTooltip"));
-    btn_import_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Import"), obs_icon("import.svg"),
+    btn_import_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Import"), obs_icon("import.svg"),
                                             obsgs_tr("OBSTitles.ImportTooltip"));
-    btn_dup_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Duplicate"), obs_icon("duplicate.svg"),
+    btn_dup_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Duplicate"), obs_icon("duplicate.svg"),
                                          obsgs_tr("OBSTitles.Duplicate"));
-    btn_del_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Delete"), obs_icon("delete.svg"),
+    btn_del_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Delete"), obs_icon("delete.svg"),
                                          obsgs_tr("OBSTitles.Delete"));
-    btn_rename_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Rename"), obs_icon("rename.svg"),
+    btn_rename_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Rename"), obs_icon("rename.svg"),
                                             obsgs_tr("OBSTitles.RenameTooltip"));
-    btn_export_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Export"), obs_icon("export.svg"),
+    btn_export_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Export"), obs_icon("export.svg"),
                                             obsgs_tr("OBSTitles.ExportTooltip"));
-    btn_edit_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.Edit"), obs_icon("edit.svg"),
+    btn_edit_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Edit"), obs_icon("edit.svg"),
                                           obsgs_tr("OBSTitles.EditTooltip"));
-    btn_scene_ = make_obs_dock_tool_button(toolbar, obsgs_tr("OBSTitles.AddToScene"), obs_icon("add-to-scene.svg"),
+    btn_scene_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.AddToScene"), obs_icon("add-to-scene.svg"),
                                            obsgs_tr("OBSTitles.AddToSceneTooltip"));
 
-    toolbar->addWidget(btn_add_);
-    toolbar->addWidget(btn_import_);
-    toolbar->addSeparator();
-    toolbar->addWidget(btn_dup_);
-    toolbar->addWidget(btn_del_);
-    toolbar->addWidget(toolbar_spacer(toolbar));
-    toolbar->addWidget(btn_rename_);
-    toolbar->addWidget(btn_export_);
-    toolbar->addWidget(btn_edit_);
-    toolbar->addWidget(btn_scene_);
+    template_toolbar->addWidget(btn_add_);
+    template_toolbar->addWidget(btn_import_);
+    template_toolbar->addSeparator();
+    template_toolbar->addWidget(btn_dup_);
+    template_toolbar->addWidget(btn_del_);
+    template_toolbar->addWidget(toolbar_spacer(template_toolbar));
+    template_toolbar->addWidget(btn_rename_);
+    template_toolbar->addWidget(btn_export_);
+    template_toolbar->addWidget(btn_edit_);
+    template_toolbar->addWidget(btn_scene_);
 
     /* ── template/title section ── */
     auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
@@ -300,7 +300,7 @@ void TitleDock::build_ui()
     sf.setPointSize(std::max(1, sf.pointSize() - 1));
     status_lbl_->setFont(sf);
     template_layout->addWidget(status_lbl_);
-    template_layout->addWidget(toolbar);
+    template_layout->addWidget(template_toolbar);
 
     setWidget(container_);
 
