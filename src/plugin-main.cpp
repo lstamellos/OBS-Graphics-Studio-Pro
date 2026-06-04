@@ -7,6 +7,7 @@
 #include "title-source.h"
 #include "title-dock.h"
 #include "title-data.h"
+#include "title-localization.h"
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 #include <QMainWindow>
@@ -34,7 +35,7 @@ static QMenu *find_docks_menu(QMainWindow *main)
     for (auto *menu : main->menuBar()->findChildren<QMenu *>()) {
         QString title = menu->title();
         title.remove('&');
-        if (title.compare("Docks", Qt::CaseInsensitive) == 0)
+        if (title.compare(obsgs_tr("OBSTitles.DocksMenu"), Qt::CaseInsensitive) == 0)
             return menu;
     }
     return nullptr;
@@ -45,7 +46,7 @@ static void add_docks_menu_entry(QMainWindow *main)
     QMenu *docks_menu = find_docks_menu(main);
     if (!docks_menu || !g_dock || g_dock_menu_action) return;
 
-    g_dock_menu_action = docks_menu->addAction("OBS Graphics Studio Pro");
+    g_dock_menu_action = docks_menu->addAction(obsgs_tr("OBSTitles.DockName"));
     g_dock_menu_action->setObjectName("obs-graphics-studio-pro-docks-menu-action");
     g_dock_menu_action->setCheckable(true);
     g_dock_menu_action->setChecked(g_dock->isVisible());
@@ -99,7 +100,7 @@ static void on_frontend_event(obs_frontend_event event, void * /*priv*/)
 
         g_dock = new TitleDock(main);
         g_dock->setObjectName("OBSGraphicsStudioProDock");
-        g_dock->setWindowTitle("OBS Graphics Studio Pro");
+        g_dock->setWindowTitle(obsgs_tr("OBSTitles.DockName"));
 
         obs_frontend_add_custom_qdock("obs-graphics-studio-pro-dock", g_dock);
         add_docks_menu_entry(main);

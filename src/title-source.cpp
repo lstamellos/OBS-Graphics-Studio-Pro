@@ -12,6 +12,7 @@
 #include "title-source.h"
 #include "title-data.h"
 #include "plugin-main.h"
+#include "title-localization.h"
 
 #include <obs-module.h>
 #include <graphics/graphics.h>
@@ -823,7 +824,7 @@ static void render_title_frame(TitleSourceData *data,
  * ══════════════════════════════════════════════════════════════════ */
 static const char *source_get_name(void *)
 {
-    return "OBS Graphics Studio Pro";
+    return obsgs_tr_c("OBSTitles.SourceName");
 }
 
 static void *source_create(obs_data_t *settings, obs_source_t *source)
@@ -1037,16 +1038,16 @@ static obs_properties_t *source_get_properties(void * /*priv*/)
 
     /* Title selector */
     obs_property_t *p = obs_properties_add_list(
-        props, PROP_TITLE_ID, "Title",
+        props, PROP_TITLE_ID, obsgs_tr_c("OBSTitles.TitleID"),
         OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 
-    obs_property_list_add_string(p, "(none)", "");
+    obs_property_list_add_string(p, obsgs_tr_c("OBSTitles.NoTitle"), "");
     for (auto &t : TitleDataStore::instance().titles())
         obs_property_list_add_string(p, t->name.c_str(), t->id.c_str());
 
-    obs_properties_add_bool(props,   PROP_LOOP,  "Loop");
+    obs_properties_add_bool(props,   PROP_LOOP,  obsgs_tr_c("OBSTitles.Loop"));
     obs_properties_add_float_slider(props, PROP_SPEED,
-        "Playback Speed", 0.1, 4.0, 0.05);
+        obsgs_tr_c("OBSTitles.Speed"), 0.1, 4.0, 0.05);
 
     return props;
 }

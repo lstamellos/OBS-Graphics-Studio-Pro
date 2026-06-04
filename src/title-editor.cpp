@@ -7,6 +7,9 @@
 
 #include "title-editor.h"
 #include "title-data.h"
+#include "title-assets.h"
+#include "title-localization.h"
+#include "plugin-main.h"
 
 #include <obs-module.h>
 
@@ -57,6 +60,8 @@
 #include <QTransform>
 #include <QToolButton>
 #include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
 #include <QContextMenuEvent>
 #include <cmath>
 #include <algorithm>
@@ -79,24 +84,9 @@ static const QColor C_PLAYHEAD { 0xff4444 };
 
 static QIcon keyframe_diamond_icon(bool active)
 {
-    QPixmap pix(16, 16);
-    pix.fill(Qt::transparent);
-
-    QPainter painter(&pix);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    const QColor color = active ? C_KF_DOT : QColor(0x9a, 0xa5, 0xb1);
-    QPolygon diamond;
-    diamond << QPoint(8, 2) << QPoint(14, 8) << QPoint(8, 14) << QPoint(2, 8);
-
-    QPen pen(color, 1.6);
-    pen.setJoinStyle(Qt::MiterJoin);
-    painter.setPen(pen);
-    painter.setBrush(active ? QBrush(color) : Qt::NoBrush);
-    painter.drawPolygon(diamond);
-
-    return QIcon(pix);
+    return obsgs_icon(active ? "keyframe-active.svg" : "keyframe-inactive.svg");
 }
+
 
 
 
@@ -165,16 +155,15 @@ static QString layer_type_short(LayerType type)
     return "•";
 }
 
-static QIcon obs_icon(QWidget *widget, const QStringList &names, QStyle::StandardPixmap fallback)
+static QIcon obs_icon(const char *file_name)
 {
-    for (const QString &name : names) {
-        QIcon icon = QIcon::fromTheme(name);
-        if (!icon.isNull()) return icon;
-    }
-    return widget ? widget->style()->standardIcon(fallback) : QIcon();
+    return obsgs_icon(file_name);
 }
 
-
+static std::string editor_text_std(const char *key)
+{
+    return obsgs_tr(key).toStdString();
+}
 
 static QLocale locale_for_text_transform(const QString &text)
 {
@@ -691,13 +680,13 @@ static QColor keyframe_color(EasingType easing)
 static QString easing_label(EasingType easing)
 {
     switch (easing) {
-    case EasingType::Linear: return "Linear";
-    case EasingType::EaseIn: return "Ease In";
-    case EasingType::EaseOut: return "Ease Out";
-    case EasingType::EaseInOut: return "Easy Ease";
-    case EasingType::Bezier: return "Custom Bezier";
-    case EasingType::Hold: return "Hold";
-    default: return "Linear";
+    case EasingType::Linear: return obsgs_tr("OBSTitles.Linear");
+    case EasingType::EaseIn: return obsgs_tr("OBSTitles.EaseIn");
+    case EasingType::EaseOut: return obsgs_tr("OBSTitles.EaseOut");
+    case EasingType::EaseInOut: return obsgs_tr("OBSTitles.EasyEase");
+    case EasingType::Bezier: return obsgs_tr("OBSTitles.CustomBezier");
+    case EasingType::Hold: return obsgs_tr("OBSTitles.Hold");
+    default: return obsgs_tr("OBSTitles.Linear");
     }
 }
 
@@ -721,24 +710,24 @@ static std::vector<AnimatedProperty *> timeline_properties(Layer &layer)
 
 static QString property_label(const std::string &name)
 {
-    if (name == "pos_x" || name == "pos_y") return "Position";
-    if (name == "scale_x" || name == "scale_y") return "Scale";
-    if (name == "box_width" || name == "box_height") return "Size";
-    if (name == "origin_x" || name == "origin_y") return "Origin";
+    if (name == "pos_x" || name == "pos_y") return obsgs_tr("OBSTitles.Position");
+    if (name == "scale_x" || name == "scale_y") return obsgs_tr("OBSTitles.Scale");
+    if (name == "box_width" || name == "box_height") return obsgs_tr("OBSTitles.Size");
+    if (name == "origin_x" || name == "origin_y") return obsgs_tr("OBSTitles.Origin");
     if (name == "text_color_a" || name == "text_color_r" ||
-        name == "text_color_g" || name == "text_color_b") return "Text Color";
+        name == "text_color_g" || name == "text_color_b") return obsgs_tr("OBSTitles.TextColor");
     if (name == "fill_color_a" || name == "fill_color_r" ||
-        name == "fill_color_g" || name == "fill_color_b") return "Fill Color";
+        name == "fill_color_g" || name == "fill_color_b") return obsgs_tr("OBSTitles.FillColor");
     if (name == "shadow_color_a" || name == "shadow_color_r" ||
-        name == "shadow_color_g" || name == "shadow_color_b") return "Shadow Color";
-    if (name == "shadow_enabled") return "Shadow Enable";
-    if (name == "shadow_opacity") return "Shadow Opacity";
-    if (name == "shadow_distance") return "Shadow Distance";
-    if (name == "shadow_angle") return "Shadow Angle";
-    if (name == "shadow_blur") return "Shadow Blur";
-    if (name == "shadow_spread") return "Shadow Spread";
-    if (name == "rotation") return "Rotation";
-    if (name == "opacity") return "Opacity";
+        name == "shadow_color_g" || name == "shadow_color_b") return obsgs_tr("OBSTitles.ShadowColor");
+    if (name == "shadow_enabled") return obsgs_tr("OBSTitles.ShadowEnable");
+    if (name == "shadow_opacity") return obsgs_tr("OBSTitles.ShadowOpacity");
+    if (name == "shadow_distance") return obsgs_tr("OBSTitles.ShadowDistance");
+    if (name == "shadow_angle") return obsgs_tr("OBSTitles.ShadowAngle");
+    if (name == "shadow_blur") return obsgs_tr("OBSTitles.ShadowBlur");
+    if (name == "shadow_spread") return obsgs_tr("OBSTitles.ShadowSpread");
+    if (name == "rotation") return obsgs_tr("OBSTitles.Rotation");
+    if (name == "opacity") return obsgs_tr("OBSTitles.Opacity");
     return QString::fromStdString(name);
 }
 
@@ -758,7 +747,7 @@ static QString property_value_text(const AnimatedProperty &prop, const Layer &la
         return QString("%1,%2").arg(layer.origin_x_prop.static_value, 0, 'f', 2)
                                 .arg(layer.origin_y_prop.static_value, 0, 'f', 2);
     if (prop.name == "opacity" || prop.name == "shadow_opacity") value *= 100.0;
-    if (prop.name == "shadow_enabled") return value >= 0.5 ? "On" : "Off";
+    if (prop.name == "shadow_enabled") return value >= 0.5 ? obsgs_tr("OBSTitles.On") : obsgs_tr("OBSTitles.Off");
     return QString::number(value, 'f', (prop.name == "opacity" || prop.name == "shadow_opacity") ? 1 : 2);
 }
 
@@ -794,7 +783,7 @@ static std::vector<TimelineRow> timeline_rows(const std::shared_ptr<Title> &titl
 TitleEditor::TitleEditor(QWidget *parent)
     : QDialog(parent, Qt::Window)
 {
-    setWindowTitle("OBS Graphics Studio Pro Editor");
+    setWindowTitle(obsgs_tr("OBSTitles.EditorWindowTitle"));
     resize(1280, 760);
     setMinimumSize(900, 600);
 
@@ -832,6 +821,15 @@ void TitleEditor::build_ui()
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
+
+    auto *menu_bar = new QMenuBar(this);
+    auto *file_menu = menu_bar->addMenu(obsgs_tr("OBSTitles.FileMenu"));
+    QAction *exit_action = file_menu->addAction(obs_icon("file-exit.svg"), obsgs_tr("OBSTitles.Exit"));
+    connect(exit_action, &QAction::triggered, this, &TitleEditor::close);
+    auto *help_menu = menu_bar->addMenu(obsgs_tr("OBSTitles.HelpMenu"));
+    QAction *about_action = help_menu->addAction(obs_icon("about.svg"), obsgs_tr("OBSTitles.About"));
+    connect(about_action, &QAction::triggered, this, &TitleEditor::show_about);
+    root->setMenuBar(menu_bar);
 
     /* ── Toolbar ── */
     build_toolbar();
@@ -898,7 +896,7 @@ void TitleEditor::build_ui()
     layer_transport->addAction(act_prev_kf_);
     layer_transport->addAction(act_play_);
     layer_transport->addAction(act_full_loop_);
-    layer_transport->addAction("▶|", this, &TitleEditor::step_forward);
+    layer_transport->addAction(obs_icon("step-forward.svg"), obsgs_tr("OBSTitles.StepForward"), this, &TitleEditor::step_forward);
     layer_transport->addAction(act_next_kf_);
     layers_layout->addWidget(layer_transport);
 
@@ -934,11 +932,11 @@ void TitleEditor::build_ui()
                 if (!title_) return;
                 auto l = std::make_shared<Layer>();
                 l->id   = TitleDataStore::make_uuid();
-                l->name = (type == LayerType::Text) ? "Text" :
-                          (type == LayerType::Clock) ? "Clock" :
-                          (type == LayerType::Image) ? "Image" : "Rectangle";
+                l->name = (type == LayerType::Text) ? editor_text_std("OBSTitles.Text") :
+                          (type == LayerType::Clock) ? editor_text_std("OBSTitles.Clock") :
+                          (type == LayerType::Image) ? editor_text_std("OBSTitles.Image") : editor_text_std("OBSTitles.Rectangle");
                 l->type = type;
-                l->text_content = (type == LayerType::Text) ? "New Text" : "";
+                l->text_content = (type == LayerType::Text) ? editor_text_std("OBSTitles.NewText") : "";
                 l->clock_format = (type == LayerType::Clock) ? "H:i:s" : l->clock_format;
                 l->pos_x.static_value = title_->width  / 2.0;
                 l->pos_y.static_value = title_->height / 2.0;
@@ -953,8 +951,8 @@ void TitleEditor::build_ui()
                 if (type == LayerType::Image) {
                     l->lock_aspect_ratio = true;
                     QString path = QFileDialog::getOpenFileName(
-                        this, "Choose Image", QString(),
-                        "Images (*.png *.jpg *.jpeg *.bmp *.gif);;All Files (*)");
+                        this, obsgs_tr("OBSTitles.ChooseImage"), QString(),
+                        obsgs_tr("OBSTitles.ImageFileFilter"));
                     if (path.isEmpty()) return;
                     l->image_path = path.toStdString();
                     QImage img(path);
@@ -1045,7 +1043,7 @@ void TitleEditor::build_ui()
                 if (!title_) return;
                 if (auto layer = title_->find_layer(lid)) {
                     if (layer->name == name) return;
-                    layer->name = name.empty() ? "Layer" : name;
+                    layer->name = name.empty() ? editor_text_std("OBSTitles.Layer") : name;
                     timeline_->set_title(title_);
                     on_title_modified();
                     QTimer::singleShot(0, layers_, [this]() {
@@ -1168,12 +1166,29 @@ void TitleEditor::align_selected_layers(int x_mode, int y_mode)
     if (entries.empty()) return;
     if (alignment_target_ == 0 && entries.size() < 2) return;
 
-    double target_left = alignment_target_ == 2 ? 0.0 : min_left;
-    double target_hcenter = alignment_target_ == 2 ? title_->width / 2.0 : (min_left + max_right) / 2.0;
-    double target_right = alignment_target_ == 2 ? title_->width : max_right;
-    double target_top = alignment_target_ == 2 ? 0.0 : min_top;
-    double target_vcenter = alignment_target_ == 2 ? title_->height / 2.0 : (min_top + max_bottom) / 2.0;
-    double target_bottom = alignment_target_ == 2 ? title_->height : max_bottom;
+    double target_left = min_left;
+    double target_hcenter = (min_left + max_right) / 2.0;
+    double target_right = max_right;
+    double target_top = min_top;
+    double target_vcenter = (min_top + max_bottom) / 2.0;
+    double target_bottom = max_bottom;
+
+    if (alignment_target_ == 1) {
+        constexpr double title_safe_inset = 0.10;
+        target_left = title_->width * title_safe_inset;
+        target_hcenter = title_->width / 2.0;
+        target_right = title_->width * (1.0 - title_safe_inset);
+        target_top = title_->height * title_safe_inset;
+        target_vcenter = title_->height / 2.0;
+        target_bottom = title_->height * (1.0 - title_safe_inset);
+    } else if (alignment_target_ == 2) {
+        target_left = 0.0;
+        target_hcenter = title_->width / 2.0;
+        target_right = title_->width;
+        target_top = 0.0;
+        target_vcenter = title_->height / 2.0;
+        target_bottom = title_->height;
+    }
 
     std::shared_ptr<Layer> last_layer;
     for (const auto &entry : entries) {
@@ -1208,12 +1223,12 @@ void TitleEditor::build_toolbar()
         "QToolButton:hover { background:#333; border-radius:3px; }"
         "QToolButton:pressed { background:#0078d4; }");
 
-    act_rew_ = new QAction(obs_icon(this, {"media-skip-backward", "go-first"}, QStyle::SP_MediaSkipBackward), "⏮", this);
-    act_prev_kf_ = new QAction(obs_icon(this, {"go-previous", "media-seek-backward"}, QStyle::SP_MediaSeekBackward), "◆◀", this);
-    act_play_ = new QAction(obs_icon(this, {"media-playback-start"}, QStyle::SP_MediaPlay), "▶", this);
-    act_full_loop_ = new QAction(obs_icon(this, {"media-playlist-repeat", "view-refresh"}, QStyle::SP_BrowserReload), "↻", this);
-    act_full_loop_->setToolTip("Loop preview from beginning to end of the title");
-    act_next_kf_ = new QAction(obs_icon(this, {"go-next", "media-seek-forward"}, QStyle::SP_MediaSeekForward), "▶◆", this);
+    act_rew_ = new QAction(obs_icon("rewind.svg"), obsgs_tr("OBSTitles.Rewind"), this);
+    act_prev_kf_ = new QAction(obs_icon("previous-keyframe.svg"), obsgs_tr("OBSTitles.PreviousKeyframe"), this);
+    act_play_ = new QAction(obs_icon("play.svg"), obsgs_tr("OBSTitles.Play"), this);
+    act_full_loop_ = new QAction(obs_icon("loop.svg"), obsgs_tr("OBSTitles.LoopPreview"), this);
+    act_full_loop_->setToolTip(obsgs_tr("OBSTitles.LoopPreviewTooltip"));
+    act_next_kf_ = new QAction(obs_icon("next-keyframe.svg"), obsgs_tr("OBSTitles.NextKeyframe"), this);
 
     connect(act_rew_, &QAction::triggered, this, &TitleEditor::rewind);
     connect(act_prev_kf_, &QAction::triggered, this, &TitleEditor::previous_keyframe);
@@ -1228,14 +1243,14 @@ void TitleEditor::build_toolbar()
     toolbar_->addSeparator();
 
     /* Zoom controls */
-    auto *zoom_lbl = new QLabel(" Zoom: ", toolbar_);
+    auto *zoom_lbl = new QLabel(obsgs_tr("OBSTitles.ZoomLabel"), toolbar_);
     zoom_lbl->setStyleSheet("color:#888;");
     toolbar_->addWidget(zoom_lbl);
 
     auto *zoom_in  = new QPushButton("+", toolbar_);
     auto *zoom_out = new QPushButton("−", toolbar_);
-    zoom_in->setIcon(obs_icon(this, {"zoom-in"}, QStyle::SP_ArrowUp));
-    zoom_out->setIcon(obs_icon(this, {"zoom-out"}, QStyle::SP_ArrowDown));
+    zoom_in->setIcon(obs_icon("zoom-in.svg"));
+    zoom_out->setIcon(obs_icon("zoom-out.svg"));
     zoom_in->setFixedWidth(22);
     zoom_out->setFixedWidth(22);
     zoom_in->setStyleSheet("color:#ccc; background:#2a2a2a; border:none; border-radius:2px;");
@@ -1245,61 +1260,69 @@ void TitleEditor::build_toolbar()
 
     toolbar_->addSeparator();
     auto *align_target = new QToolButton(toolbar_);
-    align_target->setText("▣⌄");
-    align_target->setToolTip("Alignment target");
+    align_target->setIcon(obs_icon("alignment-target.svg"));
+    align_target->setText(obsgs_tr("OBSTitles.AlignmentTargetShort"));
+    align_target->setToolTip(obsgs_tr("OBSTitles.AlignmentTarget"));
     align_target->setPopupMode(QToolButton::InstantPopup);
     align_target->setStyleSheet("QToolButton{color:#ddd;background:#3a3a3a;border:1px solid #666;border-radius:2px;padding:3px 8px;} QToolButton::menu-indicator{image:none;}");
     auto *align_menu = new QMenu(align_target);
-    QAction *target_selection = align_menu->addAction("Align to Selection");
-    QAction *target_key = align_menu->addAction("Align to Key Object");
-    target_key->setEnabled(false);
-    QAction *target_artboard = align_menu->addAction("Align to Artboard");
+    QAction *target_selection = align_menu->addAction(obsgs_tr("OBSTitles.AlignToSelection"));
+    QAction *target_title_safe = align_menu->addAction(obsgs_tr("OBSTitles.AlignToTitleSafeGuides"));
+    QAction *target_artboard = align_menu->addAction(obsgs_tr("OBSTitles.AlignToArtboard"));
     target_selection->setCheckable(true);
+    target_title_safe->setCheckable(true);
     target_artboard->setCheckable(true);
     target_artboard->setChecked(true);
-    auto update_alignment_target = [this, align_target, target_selection, target_artboard](int target) {
+    auto update_alignment_target = [this, align_target, target_selection, target_title_safe, target_artboard](int target) {
         alignment_target_ = target;
         target_selection->setChecked(target == 0);
+        target_title_safe->setChecked(target == 1);
         target_artboard->setChecked(target == 2);
-        align_target->setToolTip(target == 0 ? "Align to Selection" : "Align to Artboard");
+        QString tooltip = obsgs_tr("OBSTitles.AlignToArtboard");
+        if (target == 0)
+            tooltip = obsgs_tr("OBSTitles.AlignToSelection");
+        else if (target == 1)
+            tooltip = obsgs_tr("OBSTitles.AlignToTitleSafeGuides");
+        align_target->setToolTip(tooltip);
     };
     connect(target_selection, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(0); });
+    connect(target_title_safe, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(1); });
     connect(target_artboard, &QAction::triggered, this, [update_alignment_target]() { update_alignment_target(2); });
     align_target->setMenu(align_menu);
     toolbar_->addWidget(align_target);
 
-    auto add_align_action = [this](const QString &text, const QString &tip, int x_mode, int y_mode) {
-        QAction *action = toolbar_->addAction(text);
+    auto add_align_action = [this](const char *icon_name, const QString &tip, int x_mode, int y_mode) {
+        QAction *action = toolbar_->addAction(obs_icon(icon_name), tip);
         action->setToolTip(tip);
         connect(action, &QAction::triggered, this, [this, x_mode, y_mode]() {
             align_selected_layers(x_mode, y_mode);
         });
         return action;
     };
-    add_align_action("|◧", "Align Left", 0, -1);
-    add_align_action("↔", "Align Horizontal Center", 1, -1);
-    add_align_action("◨|", "Align Right", 2, -1);
-    add_align_action("▔", "Align Top", -1, 0);
-    add_align_action("↕", "Align Vertical Center", -1, 1);
-    add_align_action("▁", "Align Bottom", -1, 2);
-    add_align_action("▦", "Align Center to Artboard", 1, 1);
+    add_align_action("align-left.svg", obsgs_tr("OBSTitles.AlignLeft"), 0, -1);
+    add_align_action("align-horizontal-center.svg", obsgs_tr("OBSTitles.AlignHorizontalCenter"), 1, -1);
+    add_align_action("align-right.svg", obsgs_tr("OBSTitles.AlignRight"), 2, -1);
+    add_align_action("align-top.svg", obsgs_tr("OBSTitles.AlignTop"), -1, 0);
+    add_align_action("align-vertical-center.svg", obsgs_tr("OBSTitles.AlignVerticalCenter"), -1, 1);
+    add_align_action("align-bottom.svg", obsgs_tr("OBSTitles.AlignBottom"), -1, 2);
+    add_align_action("align-center-artboard.svg", obsgs_tr("OBSTitles.AlignCenterToArtboard"), 1, 1);
 
-    act_safe_guides_ = toolbar_->addAction("Safe");
+    act_safe_guides_ = toolbar_->addAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"));
     act_safe_guides_->setCheckable(true);
-    act_safe_guides_->setToolTip("Show title/action safe guides in the editor preview only");
+    act_safe_guides_->setToolTip(obsgs_tr("OBSTitles.SafeTooltip"));
     connect(act_safe_guides_, &QAction::toggled, this, [this](bool visible) {
         if (canvas_) canvas_->set_safe_guides_visible(visible);
     });
 
     toolbar_->addSeparator();
-    act_undo_ = toolbar_->addAction("↶");
-    act_undo_->setToolTip("Undo");
+    act_undo_ = toolbar_->addAction(obs_icon("undo.svg"), obsgs_tr("OBSTitles.Undo"));
+    act_undo_->setToolTip(obsgs_tr("OBSTitles.Undo"));
     act_undo_->setShortcut(QKeySequence::Undo);
     connect(act_undo_, &QAction::triggered, this, [this]() {
         if (undo_index_ > 0) restore_undo_snapshot(undo_index_ - 1);
     });
-    act_redo_ = toolbar_->addAction("↷");
-    act_redo_->setToolTip("Redo");
+    act_redo_ = toolbar_->addAction(obs_icon("redo.svg"), obsgs_tr("OBSTitles.Redo"));
+    act_redo_->setToolTip(obsgs_tr("OBSTitles.Redo"));
     act_redo_->setShortcut(QKeySequence::Redo);
     connect(act_redo_, &QAction::triggered, this, [this]() {
         if (undo_index_ + 1 < (int)undo_stack_.size()) restore_undo_snapshot(undo_index_ + 1);
@@ -1311,8 +1334,8 @@ void TitleEditor::build_toolbar()
     toolbar_->addSeparator();
 
     /* Save button */
-    auto *btn_save = new QPushButton("Save", toolbar_);
-    btn_save->setIcon(obs_icon(this, {"document-save"}, QStyle::SP_DialogSaveButton));
+    auto *btn_save = new QPushButton(obsgs_tr("OBSTitles.Save"), toolbar_);
+    btn_save->setIcon(obs_icon("save.svg"));
     btn_save->setStyleSheet(
         "QPushButton { color:#fff; background:#0078d4; border:none;"
         "  border-radius:3px; padding:4px 10px; }"
@@ -1320,7 +1343,7 @@ void TitleEditor::build_toolbar()
     connect(btn_save, &QPushButton::clicked, this, [this]() {
         TitleDataStore::instance().save();
         if (title_) emit title_saved(title_->id);
-        setWindowTitle("OBS Graphics Studio Pro Editor  ·  saved");
+        setWindowTitle(obsgs_tr("OBSTitles.EditorSavedTitle"));
     });
     toolbar_->addWidget(btn_save);
 }
@@ -1331,7 +1354,7 @@ void TitleEditor::open_title(const std::string &tid)
     play_timer_->stop();
     playing_ = false;
     act_play_->setText("▶");
-    act_play_->setIcon(obs_icon(this, {"media-playback-start"}, QStyle::SP_MediaPlay));
+    act_play_->setIcon(obs_icon("play.svg"));
     playhead_ = 0.0;
     playback_reverse_ = false;
     full_loop_playback_ = false;
@@ -1377,7 +1400,7 @@ std::shared_ptr<Layer> TitleEditor::clone_layer_for_insert(const Layer &layer, b
     auto clone = std::make_shared<Layer>(layer);
     clone->id = TitleDataStore::make_uuid();
     if (suffix_name)
-        clone->name = clone->name.empty() ? "Layer (copy)" : clone->name + " (copy)";
+        clone->name = clone->name.empty() ? editor_text_std("OBSTitles.LayerCopy") : clone->name + editor_text_std("OBSTitles.CopySuffix");
     if (!clone->parent_id.empty() && (!title_ || !title_->find_layer(clone->parent_id)))
         clone->parent_id.clear();
     return clone;
@@ -1501,7 +1524,7 @@ void TitleEditor::restore_undo_snapshot(int index)
     TitleDataStore::instance().save();
     restoring_undo_ = false;
     update_undo_redo_actions();
-    setWindowTitle("OBS Graphics Studio Pro Editor  ·  modified");
+    setWindowTitle(obsgs_tr("OBSTitles.EditorModifiedTitle"));
 }
 
 void TitleEditor::update_undo_redo_actions()
@@ -1529,12 +1552,12 @@ void TitleEditor::play_pause()
         if (title_->playback_mode == 2 && playhead_ >= std::clamp(title_->pause_time, 0.0, title_->duration))
             on_playhead_changed(0.0);
         act_play_->setText("⏸");
-        act_play_->setIcon(obs_icon(this, {"media-playback-pause"}, QStyle::SP_MediaPause));
+        act_play_->setIcon(obs_icon("pause.svg"));
         playback_clock_.restart();
         play_timer_->start();
     } else {
         act_play_->setText("▶");
-        act_play_->setIcon(obs_icon(this, {"media-playback-start"}, QStyle::SP_MediaPlay));
+        act_play_->setIcon(obs_icon("play.svg"));
         play_timer_->stop();
     }
 }
@@ -1548,7 +1571,7 @@ void TitleEditor::play_full_loop()
         on_playhead_changed(0.0);
     playing_ = true;
     act_play_->setText("⏸");
-    act_play_->setIcon(obs_icon(this, {"media-playback-pause"}, QStyle::SP_MediaPause));
+    act_play_->setIcon(obs_icon("pause.svg"));
     playback_clock_.restart();
     play_timer_->start();
 }
@@ -1655,7 +1678,7 @@ void TitleEditor::tick()
                 playing_ = false;
                 play_timer_->stop();
                 act_play_->setText("▶");
-                act_play_->setIcon(obs_icon(this, {"media-playback-start"}, QStyle::SP_MediaPlay));
+                act_play_->setIcon(obs_icon("play.svg"));
             }
             break;
         }
@@ -1666,7 +1689,7 @@ void TitleEditor::tick()
                 playing_ = false;
                 play_timer_->stop();
                 act_play_->setText("▶");
-                act_play_->setIcon(obs_icon(this, {"media-playback-start"}, QStyle::SP_MediaPlay));
+                act_play_->setIcon(obs_icon("play.svg"));
             }
             break;
         }
@@ -1681,6 +1704,15 @@ static bool editor_focus_accepts_text(QWidget *widget)
            qobject_cast<QAbstractSpinBox *>(widget) ||
            qobject_cast<QComboBox *>(widget);
 }
+
+void TitleEditor::show_about()
+{
+    QMessageBox::about(
+        this,
+        obsgs_tr("OBSTitles.AboutTitle"),
+        obsgs_tr("OBSTitles.AboutTextFormat").arg(QStringLiteral(PLUGIN_VERSION)));
+}
+
 
 bool TitleEditor::eventFilter(QObject *watched, QEvent *event)
 {
@@ -1769,12 +1801,12 @@ void TitleEditor::on_playhead_changed(double t)
     }
 
     if (time_lbl_)
-        time_lbl_->setText(QString("%1  (%2 fps)").arg(format_timecode(t)).arg(obs_frame_rate(), 0, 'f', 2));
+        time_lbl_->setText(obsgs_tr("OBSTitles.TimeFpsFormat").arg(format_timecode(t)).arg(obs_frame_rate(), 0, 'f', 2));
 }
 
 void TitleEditor::on_title_modified()
 {
-    if (title_) setWindowTitle("OBS Graphics Studio Pro Editor  ·  modified");
+    if (title_) setWindowTitle(obsgs_tr("OBSTitles.EditorModifiedTitle"));
     canvas_->refresh_preview();
     if (title_props_) title_props_->set_title(title_);
     if (timeline_) timeline_->set_title(title_);
@@ -2084,7 +2116,7 @@ void CanvasPreview::render_to_pixmap()
                 p.setBrush(QColor(0x33, 0x33, 0x33));
                 p.setPen(QPen(QColor(0xff, 0x55, 0x55), 2));
                 p.drawRect(box);
-                p.drawText(box, Qt::AlignCenter, "Missing Image");
+                p.drawText(box, Qt::AlignCenter, obsgs_tr("OBSTitles.MissingImage"));
             }
         }
 
@@ -2341,11 +2373,11 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
     add_header("🔒", 20);
     add_header("", 12);
     add_header("#", 24);
-    QLabel *name = new QLabel("Layer Name", columns);
+    QLabel *name = new QLabel(obsgs_tr("OBSTitles.LayerNameHeader"), columns);
     name->setStyleSheet("color:#9a9a9a;font-size:10px;font-weight:bold;");
     ch->addWidget(name, 1);
-    add_header("Mode", 46, Qt::AlignLeft | Qt::AlignVCenter);
-    add_header("Parent", 58, Qt::AlignLeft | Qt::AlignVCenter);
+    add_header(obsgs_tr("OBSTitles.ModeHeader"), 46, Qt::AlignLeft | Qt::AlignVCenter);
+    add_header(obsgs_tr("OBSTitles.ParentHeader"), 58, Qt::AlignLeft | Qt::AlignVCenter);
     vl->addWidget(columns);
 
     list_ = new QListWidget(this);
@@ -2382,30 +2414,30 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
         return button;
     };
 
-    btn_add_ = make_layer_tool("Add Layer",
-                               obs_icon(this, {"list-add", "document-new"}, QStyle::SP_FileIcon),
-                               "Add a new layer");
+    btn_add_ = make_layer_tool(obsgs_tr("OBSTitles.AddLayer"),
+                               obs_icon("add.svg"),
+                               obsgs_tr("OBSTitles.AddLayerTooltip"));
     auto *add_menu = new QMenu(btn_add_);
-    add_menu->addAction(obs_icon(this, {"insert-text", "format-text-bold"}, QStyle::SP_FileIcon),
-                        "Text", this, &LayerStack::on_add_text);
-    add_menu->addAction(obs_icon(this, {"office-calendar", "appointment-new"}, QStyle::SP_ComputerIcon),
-                        "Clock", this, &LayerStack::on_add_clock);
-    add_menu->addAction(obs_icon(this, {"draw-rectangle", "insert-shape"}, QStyle::SP_FileDialogNewFolder),
-                        "Shape", this, &LayerStack::on_add_rect);
-    add_menu->addAction(obs_icon(this, {"insert-image", "image-x-generic"}, QStyle::SP_FileIcon),
-                        "Image", this, &LayerStack::on_add_image);
+    add_menu->addAction(obs_icon("text.svg"),
+                        obsgs_tr("OBSTitles.Text"), this, &LayerStack::on_add_text);
+    add_menu->addAction(obs_icon("clock.svg"),
+                        obsgs_tr("OBSTitles.Clock"), this, &LayerStack::on_add_clock);
+    add_menu->addAction(obs_icon("shape.svg"),
+                        obsgs_tr("OBSTitles.Shape"), this, &LayerStack::on_add_rect);
+    add_menu->addAction(obs_icon("image.svg"),
+                        obsgs_tr("OBSTitles.Image"), this, &LayerStack::on_add_image);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
 
-    btn_move_up_ = make_layer_tool("Move Layer Up",
-                                   obs_icon(this, {"go-up", "arrow-up"}, QStyle::SP_ArrowUp),
-                                   "Move selected layer up");
-    btn_move_down_ = make_layer_tool("Move Layer Down",
-                                     obs_icon(this, {"go-down", "arrow-down"}, QStyle::SP_ArrowDown),
-                                     "Move selected layer down");
-    btn_del_ = make_layer_tool("Delete Layer",
-                               obs_icon(this, {"edit-delete", "user-trash"}, QStyle::SP_TrashIcon),
-                               "Delete selected layer");
+    btn_move_up_ = make_layer_tool(obsgs_tr("OBSTitles.MoveLayerUp"),
+                                   obs_icon("move-up.svg"),
+                                   obsgs_tr("OBSTitles.MoveLayerUpTooltip"));
+    btn_move_down_ = make_layer_tool(obsgs_tr("OBSTitles.MoveLayerDown"),
+                                     obs_icon("move-down.svg"),
+                                     obsgs_tr("OBSTitles.MoveLayerDownTooltip"));
+    btn_del_ = make_layer_tool(obsgs_tr("OBSTitles.DeleteLayer"),
+                               obs_icon("delete.svg"),
+                               obsgs_tr("OBSTitles.DeleteLayerTooltip"));
     btn_move_up_->setEnabled(false);
     btn_move_down_->setEnabled(false);
     btn_del_->setEnabled(false);
@@ -2488,27 +2520,28 @@ void LayerStack::populate()
         hl->setContentsMargins(4, 0, 4, 0);
         hl->setSpacing(4);
 
-        auto make_toggle = [&](const QString &on, const QString &off, bool checked,
+        auto make_toggle = [&](const char *on_icon, const char *off_icon, bool checked,
                                const QString &tip) {
             auto *btn = new QToolButton(row_widget);
             btn->setCheckable(true);
             btn->setChecked(checked);
-            btn->setText(checked ? on : off);
+            btn->setIcon(obs_icon(checked ? on_icon : off_icon));
             btn->setToolTip(tip);
             btn->setFixedSize(20, 20);
+            btn->setIconSize(QSize(14, 14));
             btn->setAutoRaise(true);
             btn->setStyleSheet("QToolButton{color:#bcbcbc;background:transparent;border:none;}"
                                "QToolButton:hover{background:#353535;border-radius:2px;}"
                                "QToolButton:checked{color:#eeeeee;}");
-            connect(btn, &QToolButton::toggled, btn, [btn, on, off](bool state) {
-                btn->setText(state ? on : off);
+            connect(btn, &QToolButton::toggled, btn, [btn, on_icon, off_icon](bool state) {
+                btn->setIcon(obs_icon(state ? on_icon : off_icon));
             });
             hl->addWidget(btn);
             return btn;
         };
 
-        QToolButton *vis = make_toggle("●", "○", l->visible, "Layer visibility");
-        QToolButton *lock = make_toggle("🔒", "", l->locked, "Lock layer editing");
+        QToolButton *vis = make_toggle("layer-visible.svg", "layer-hidden.svg", l->visible, obsgs_tr("OBSTitles.LayerVisibilityTooltip"));
+        QToolButton *lock = make_toggle("layer-lock.svg", "layer-unlock.svg", l->locked, obsgs_tr("OBSTitles.LockLayerTooltip"));
         connect(vis, &QToolButton::toggled, this, [this, id = l->id, item](bool checked) {
             list_->setCurrentItem(item);
             emit layer_visibility_changed(id, checked);
@@ -2521,13 +2554,15 @@ void LayerStack::populate()
         QToolButton *expand = new QToolButton(row_widget);
         expand->setCheckable(true);
         expand->setChecked(l->properties_expanded);
-        expand->setText(l->properties_expanded ? "▾" : "▸");
-        expand->setToolTip("Show keyframed properties");
+        expand->setIcon(obs_icon(l->properties_expanded ? "keyframes-expand.svg" : "keyframes-collapse.svg"));
+        expand->setToolTip(obsgs_tr("OBSTitles.ShowKeyframedPropertiesTooltip"));
         expand->setFixedSize(16, 20);
+        expand->setIconSize(QSize(12, 12));
         expand->setAutoRaise(true);
         expand->setStyleSheet("QToolButton{color:#aaa;background:transparent;border:none;}"
                               "QToolButton:hover{background:#353535;border-radius:2px;}");
-        connect(expand, &QToolButton::toggled, this, [this, id = l->id](bool checked) {
+        connect(expand, &QToolButton::toggled, this, [this, expand, id = l->id](bool checked) {
+            expand->setIcon(obs_icon(checked ? "keyframes-expand.svg" : "keyframes-collapse.svg"));
             emit layer_expand_changed(id, checked);
         });
         hl->addWidget(expand);
@@ -2549,7 +2584,7 @@ void LayerStack::populate()
         name->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         name->setFrame(false);
         name->setReadOnly(l->locked);
-        name->setToolTip("Rename layer");
+        name->setToolTip(obsgs_tr("OBSTitles.RenameLayerTooltip"));
         name->setStyleSheet(l->locked
             ? "QLineEdit{color:#8f8f8f;background:transparent;border:none;}"
             : "QLineEdit{color:#d0d0d0;background:transparent;border:none;padding:1px;} QLineEdit:focus{background:#101010;border:1px solid #0078d4;border-radius:2px;}");
@@ -2558,7 +2593,7 @@ void LayerStack::populate()
         });
         hl->addWidget(name, 1);
 
-        QLabel *mode = new QLabel("Normal", row_widget);
+        QLabel *mode = new QLabel(obsgs_tr("OBSTitles.Normal"), row_widget);
         mode->setFixedWidth(54);
         mode->setStyleSheet("color:#b0b0b0;background:#101010;border-radius:3px;padding-left:4px;");
         hl->addWidget(mode);
@@ -2567,7 +2602,7 @@ void LayerStack::populate()
         parent->setFixedWidth(86);
         parent->setStyleSheet("QComboBox{color:#b0b0b0;background:#101010;border:none;border-radius:3px;padding-left:4px;}"
                               "QComboBox::drop-down{border:none;}");
-        parent->addItem("None", "");
+        parent->addItem(obsgs_tr("OBSTitles.None"), "");
         for (const auto &candidate : title_->layers) {
             if (candidate->id == l->id) continue;
             parent->addItem(QString::fromStdString(candidate->name), QString::fromStdString(candidate->id));
@@ -2730,12 +2765,12 @@ void LayerStack::show_layer_context_menu(const QPoint &pos)
                        "QMenu::item{padding:5px 22px;}"
                        "QMenu::item:selected{background:#3b4f64;}"
                        "QMenu::item:disabled{color:#666;}");
-    QAction *clone = menu.addAction("Clone Layer");
-    QAction *copy = menu.addAction("Copy Layer");
-    QAction *paste = menu.addAction("Paste Layer");
+    QAction *clone = menu.addAction(obsgs_tr("OBSTitles.CloneLayer"));
+    QAction *copy = menu.addAction(obsgs_tr("OBSTitles.CopyLayer"));
+    QAction *paste = menu.addAction(obsgs_tr("OBSTitles.PasteLayer"));
     paste->setEnabled(layer_clipboard_available_);
     menu.addSeparator();
-    QAction *del = menu.addAction("Delete Layer");
+    QAction *del = menu.addAction(obsgs_tr("OBSTitles.DeleteLayer"));
 
     QAction *chosen = menu.exec(list_->viewport()->mapToGlobal(pos));
     if (chosen == clone) emit clone_layer_requested(id);
@@ -2860,8 +2895,8 @@ void TimelineWidget::paintEvent(QPaintEvent *)
                 p.drawLine(loop_x0, 18, loop_x0, H);
                 p.drawLine(loop_x1, 18, loop_x1, H);
                 p.setPen(QColor(0xa8, 0xd8, 0xff));
-                p.drawText(loop_x0 + 4, 20, 80, 16, Qt::AlignVCenter, "Loop in");
-                p.drawText(loop_x1 + 4, 20, 80, 16, Qt::AlignVCenter, "Loop out");
+                p.drawText(loop_x0 + 4, 20, 80, 16, Qt::AlignVCenter, obsgs_tr("OBSTitles.LoopIn"));
+                p.drawText(loop_x1 + 4, 20, 80, 16, Qt::AlignVCenter, obsgs_tr("OBSTitles.LoopOut"));
             }
         }
         if (title_->playback_mode == 2) {
@@ -2874,7 +2909,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
             marker << QPoint(pause_x - 6, 12) << QPoint(pause_x + 6, 12) << QPoint(pause_x, 22);
             p.drawPolygon(marker);
             p.setPen(QColor(0xff, 0xe0, 0x85));
-            p.drawText(pause_x + 4, 22, 100, 16, Qt::AlignVCenter, "Pause");
+            p.drawText(pause_x + 4, 22, 100, 16, Qt::AlignVCenter, obsgs_tr("OBSTitles.Pause"));
         }
     }
 
@@ -3011,8 +3046,8 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     const bool has_next_segment = hit_idx + 1 < (int)hit_prop->keyframes.size();
     if (!has_previous_segment && !has_next_segment) {
         QMenu menu(this);
-        menu.setTitle("Keyframe Easing");
-        QAction *message = menu.addAction("Add another keyframe to use easing.");
+        menu.setTitle(obsgs_tr("OBSTitles.KeyframeEasing"));
+        QAction *message = menu.addAction(obsgs_tr("OBSTitles.AddKeyframeForEasing"));
         message->setEnabled(false);
         menu.exec(ev->globalPos());
         return;
@@ -3038,14 +3073,14 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     std::vector<EasingChoice> choices;
 
     QMenu menu(this);
-    menu.setTitle("Keyframe Easing");
+    menu.setTitle(obsgs_tr("OBSTitles.KeyframeEasing"));
     QAction *header = menu.addAction(QString("%1 · %2")
         .arg(QString::fromStdString(layer ? layer->name : std::string()))
         .arg(property_label(hit_prop->name)));
     header->setEnabled(false);
     QAction *scope = menu.addAction(has_previous_segment && has_next_segment
-        ? "Applies to both adjacent segments"
-        : has_next_segment ? "Applies to the next segment" : "Applies to the previous segment");
+        ? obsgs_tr("OBSTitles.EasingBothSegments")
+        : has_next_segment ? obsgs_tr("OBSTitles.EasingNextSegment") : obsgs_tr("OBSTitles.EasingPreviousSegment"));
     scope->setEnabled(false);
     menu.addSeparator();
 
@@ -3064,8 +3099,8 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
                                  EasingType easing, const std::vector<int> &indices) {
         QAction *action = target_menu->addAction(swatch_icon(easing), label);
         action->setToolTip(easing == EasingType::Hold
-            ? "Jump-cut value changes; no interpolation between keyframes."
-            : "Set temporal interpolation for the selected segment(s).");
+            ? obsgs_tr("OBSTitles.HoldEasingTooltip")
+            : obsgs_tr("OBSTitles.EasingTooltip"));
         action->setCheckable(true);
         action->setChecked(std::all_of(indices.begin(), indices.end(), [&](int idx) {
             return idx >= 0 && idx < (int)hit_prop->keyframes.size() &&
@@ -3079,12 +3114,12 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
         auto *group = new QActionGroup(target_menu);
         group->setExclusive(true);
         for (auto [label, easing] : std::initializer_list<std::pair<QString, EasingType>>{
-                 {"Linear", EasingType::Linear},
-                 {"Easy Ease", EasingType::EaseInOut},
-                 {"Ease In", EasingType::EaseIn},
-                 {"Ease Out", EasingType::EaseOut},
-                 {"Hold", EasingType::Hold},
-                 {"Custom Bezier", EasingType::Bezier},
+                 {obsgs_tr("OBSTitles.Linear"), EasingType::Linear},
+                 {obsgs_tr("OBSTitles.EasyEase"), EasingType::EaseInOut},
+                 {obsgs_tr("OBSTitles.EaseIn"), EasingType::EaseIn},
+                 {obsgs_tr("OBSTitles.EaseOut"), EasingType::EaseOut},
+                 {obsgs_tr("OBSTitles.Hold"), EasingType::Hold},
+                 {obsgs_tr("OBSTitles.CustomBezier"), EasingType::Bezier},
              }) {
             add_easing_action(target_menu, label, easing, indices)->setActionGroup(group);
         }
@@ -3094,10 +3129,10 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
 
     if (has_previous_segment && has_next_segment) {
         menu.addSeparator();
-        QMenu *advanced = menu.addMenu("Apply to One Side");
-        QMenu *previous = advanced->addMenu("Previous Segment");
+        QMenu *advanced = menu.addMenu(obsgs_tr("OBSTitles.ApplyOneSide"));
+        QMenu *previous = advanced->addMenu(obsgs_tr("OBSTitles.PreviousSegment"));
         add_easing_group(previous, {hit_idx - 1});
-        QMenu *next = advanced->addMenu("Next Segment");
+        QMenu *next = advanced->addMenu(obsgs_tr("OBSTitles.NextSegment"));
         add_easing_group(next, {hit_idx});
     }
 
@@ -3353,7 +3388,7 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent *)
  *  TitlePropertiesPanel
  * ══════════════════════════════════════════════════════════════════ */
 TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
-    : QGroupBox("Title", parent)
+    : QGroupBox(obsgs_tr("OBSTitles.TitleSection"), parent)
 {
     setStyleSheet(
         "QGroupBox{color:#aaa;background:#1a1a1a;border:1px solid #333;"
@@ -3367,51 +3402,51 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     fl->setSpacing(3);
 
     cmb_playback_mode_ = new QComboBox(this);
-    cmb_playback_mode_->addItem("Play Once", 0);
-    cmb_playback_mode_->addItem("Loop In/Out", 1);
-    cmb_playback_mode_->addItem("Pause at Timeline Position", 2);
-    fl->addRow("Playback Mode:", cmb_playback_mode_);
+    cmb_playback_mode_->addItem(obsgs_tr("OBSTitles.PlayOnce"), 0);
+    cmb_playback_mode_->addItem(obsgs_tr("OBSTitles.LoopInOut"), 1);
+    cmb_playback_mode_->addItem(obsgs_tr("OBSTitles.PauseAtTimelinePosition"), 2);
+    fl->addRow(obsgs_tr("OBSTitles.PlaybackModeLabel"), cmb_playback_mode_);
 
     cmb_loop_type_ = new QComboBox(this);
-    cmb_loop_type_->addItem("Restart Loop", 0);
-    cmb_loop_type_->addItem("Ping-Pong Loop", 1);
-    fl->addRow("Loop Type:", cmb_loop_type_);
+    cmb_loop_type_->addItem(obsgs_tr("OBSTitles.RestartLoop"), 0);
+    cmb_loop_type_->addItem(obsgs_tr("OBSTitles.PingPongLoop"), 1);
+    fl->addRow(obsgs_tr("OBSTitles.LoopTypeLabel"), cmb_loop_type_);
 
     spn_pause_frame_ = new QSpinBox(this);
     spn_pause_frame_->setRange(0, 1000000);
-    spn_pause_frame_->setToolTip("Frame where Play Once pauses indefinitely.");
-    fl->addRow("Pause Frame:", spn_pause_frame_);
+    spn_pause_frame_->setToolTip(obsgs_tr("OBSTitles.PauseFrameTooltip"));
+    fl->addRow(obsgs_tr("OBSTitles.PauseFrameLabel"), spn_pause_frame_);
 
     spn_pause_time_ = new QDoubleSpinBox(this);
     spn_pause_time_->setRange(0.0, 3600.0);
     spn_pause_time_->setSingleStep(obs_frame_duration());
     spn_pause_time_->setDecimals(3);
     spn_pause_time_->setSuffix(" s");
-    spn_pause_time_->setToolTip("Timeline timecode where playback pauses. Drag the yellow marker on the timeline to set this visually.");
-    fl->addRow("Pause Timecode:", spn_pause_time_);
+    spn_pause_time_->setToolTip(obsgs_tr("OBSTitles.PauseTimecodeTooltip"));
+    fl->addRow(obsgs_tr("OBSTitles.PauseTimecodeLabel"), spn_pause_time_);
 
     spn_duration_ = new QDoubleSpinBox(this);
     spn_duration_->setRange(0.1, 3600.0);
     spn_duration_->setSingleStep(0.5);
     spn_duration_->setDecimals(2);
     spn_duration_->setSuffix(" s");
-    fl->addRow("Length:", spn_duration_);
+    fl->addRow(obsgs_tr("OBSTitles.LengthLabel"), spn_duration_);
 
     spn_loop_start_ = new QDoubleSpinBox(this);
     spn_loop_start_->setRange(0.0, 3600.0);
     spn_loop_start_->setSingleStep(0.5);
     spn_loop_start_->setDecimals(2);
     spn_loop_start_->setSuffix(" s");
-    spn_loop_start_->setToolTip("Cue playback runs from 0 to this point, then loops from here.");
-    fl->addRow("Loop start:", spn_loop_start_);
+    spn_loop_start_->setToolTip(obsgs_tr("OBSTitles.LoopStartTooltip"));
+    fl->addRow(obsgs_tr("OBSTitles.LoopStartLabel"), spn_loop_start_);
 
     spn_loop_end_ = new QDoubleSpinBox(this);
     spn_loop_end_->setRange(0.0, 3600.0);
     spn_loop_end_->setSingleStep(0.5);
     spn_loop_end_->setDecimals(2);
     spn_loop_end_->setSuffix(" s");
-    spn_loop_end_->setToolTip("Cue playback loops until this point; the next cue plays from here to the end.");
-    fl->addRow("Loop end:", spn_loop_end_);
+    spn_loop_end_->setToolTip(obsgs_tr("OBSTitles.LoopEndTooltip"));
+    fl->addRow(obsgs_tr("OBSTitles.LoopEndLabel"), spn_loop_end_);
 
     connect(cmb_playback_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
@@ -3541,7 +3576,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     vl->setSpacing(3);
 
     /* Header */
-    auto *hdr = new QLabel("PROPERTIES", inner);
+    auto *hdr = new QLabel(obsgs_tr("OBSTitles.Properties"), inner);
     hdr->setStyleSheet("color:#888;font-size:9px;font-weight:bold;letter-spacing:1px;padding:2px 4px;");
     vl->addWidget(hdr);
 
@@ -3566,7 +3601,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     };
 
     /* ── Transform ── */
-    auto *tform_box = new QGroupBox("Transform", inner);
+    auto *tform_box = new QGroupBox(obsgs_tr("OBSTitles.Transform"), inner);
     tform_box->setStyleSheet(section_style);
     auto *tfl = new QFormLayout(tform_box);
     style_form(tfl);
@@ -3641,33 +3676,33 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_origin_y_ = mk_dspin(0.0, 1.0, 0.05);
     spn_origin_x_->setDecimals(2);
     spn_origin_y_->setDecimals(2);
-    spn_origin_x_->setToolTip("Horizontal origin: 0=left, 0.5=center, 1=right.");
-    spn_origin_y_->setToolTip("Vertical origin: 0=top, 0.5=center, 1=bottom.");
+    spn_origin_x_->setToolTip(obsgs_tr("OBSTitles.OriginXTooltip"));
+    spn_origin_y_->setToolTip(obsgs_tr("OBSTitles.OriginYTooltip"));
     cmb_anchor_ = new QComboBox(inner);
-    for (const QString &label : QStringList{"Top Left", "Top Center", "Top Right", "Center Left", "Center", "Center Right", "Bottom Left", "Bottom Center", "Bottom Right"})
+    for (const QString &label : QStringList{obsgs_tr("OBSTitles.TopLeft"), obsgs_tr("OBSTitles.TopCenter"), obsgs_tr("OBSTitles.TopRight"), obsgs_tr("OBSTitles.CenterLeft"), obsgs_tr("OBSTitles.Center"), obsgs_tr("OBSTitles.CenterRight"), obsgs_tr("OBSTitles.BottomLeft"), obsgs_tr("OBSTitles.BottomCenter"), obsgs_tr("OBSTitles.BottomRight")})
         cmb_anchor_->addItem(label);
-    cmb_anchor_->setToolTip("Change layer anchor/origin while preserving visual position.");
+    cmb_anchor_->setToolTip(obsgs_tr("OBSTitles.AnchorChangeTooltip"));
     cmb_anchor_->setFixedHeight(22);
     cmb_anchor_->setStyleSheet(control_style);
 
-    btn_kf_pos_x_ = mk_kf_button("Toggle X position keyframe");
-    btn_kf_pos_y_ = mk_kf_button("Toggle Y position keyframe");
-    btn_kf_rotation_ = mk_kf_button("Toggle rotation keyframe");
-    btn_kf_opacity_ = mk_kf_button("Toggle opacity keyframe");
-    btn_kf_origin_x_ = mk_kf_button("Toggle origin X keyframe");
-    btn_kf_origin_y_ = mk_kf_button("Toggle origin Y keyframe");
-    tfl->addRow("X:",       with_kf(spn_px_, btn_kf_pos_x_));
-    tfl->addRow("Y:",       with_kf(spn_py_, btn_kf_pos_y_));
-    tfl->addRow("Rotation:",with_kf(spn_rot_, btn_kf_rotation_));
-    tfl->addRow("Opacity:", with_kf(spn_opacity_, btn_kf_opacity_));
-    tfl->addRow("Anchor:", with_kf(cmb_anchor_, mk_kf_button("Toggle anchor keyframe")));
-    tfl->addRow("Origin X:", with_kf(spn_origin_x_, btn_kf_origin_x_));
-    tfl->addRow("Origin Y:", with_kf(spn_origin_y_, btn_kf_origin_y_));
+    btn_kf_pos_x_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleXKeyframe"));
+    btn_kf_pos_y_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleYKeyframe"));
+    btn_kf_rotation_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleRotationKeyframe"));
+    btn_kf_opacity_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOpacityKeyframe"));
+    btn_kf_origin_x_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOriginXKeyframe"));
+    btn_kf_origin_y_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOriginYKeyframe"));
+    tfl->addRow(obsgs_tr("OBSTitles.XLabel"),       with_kf(spn_px_, btn_kf_pos_x_));
+    tfl->addRow(obsgs_tr("OBSTitles.YLabel"),       with_kf(spn_py_, btn_kf_pos_y_));
+    tfl->addRow(obsgs_tr("OBSTitles.RotationLabel"),with_kf(spn_rot_, btn_kf_rotation_));
+    tfl->addRow(obsgs_tr("OBSTitles.OpacityLabel"), with_kf(spn_opacity_, btn_kf_opacity_));
+    tfl->addRow(obsgs_tr("OBSTitles.AnchorLabel"), with_kf(cmb_anchor_, mk_kf_button(obsgs_tr("OBSTitles.ToggleAnchorKeyframe"))));
+    tfl->addRow(obsgs_tr("OBSTitles.OriginXLabel"), with_kf(spn_origin_x_, btn_kf_origin_x_));
+    tfl->addRow(obsgs_tr("OBSTitles.OriginYLabel"), with_kf(spn_origin_y_, btn_kf_origin_y_));
     vl->addWidget(tform_box);
     make_collapsible(tform_box);
 
     /* ── Text ── */
-    text_box_ = new QGroupBox("Text", inner);
+    text_box_ = new QGroupBox(obsgs_tr("OBSTitles.Text"), inner);
     text_box_->setStyleSheet(section_style);
     auto *txfl = new QFormLayout(text_box_);
     style_form(txfl);
@@ -3675,7 +3710,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     txt_content_ = new QTextEdit(inner);
     txt_content_->setAcceptRichText(false);
     txt_content_->setMinimumHeight(96);
-    txt_content_->setPlaceholderText("Enter text…");
+    txt_content_->setPlaceholderText(obsgs_tr("OBSTitles.EnterTextPlaceholder"));
     txt_content_->setStyleSheet(control_style);
 
     /* Font family combo populated from system */
@@ -3691,38 +3726,38 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_size_->setFixedHeight(22);
     spn_size_->setStyleSheet(control_style);
 
-    chk_bold_   = new QCheckBox("Bold",   inner);
-    chk_italic_ = new QCheckBox("Italic", inner);
-    chk_expose_text_ = new QCheckBox("Expose in dock", inner);
-    chk_expose_text_->setToolTip("Show this text layer in the OBS Graphics Studio Pro dock for fast live edits.");
+    chk_bold_   = new QCheckBox(obsgs_tr("OBSTitles.Bold"),   inner);
+    chk_italic_ = new QCheckBox(obsgs_tr("OBSTitles.Italic"), inner);
+    chk_expose_text_ = new QCheckBox(obsgs_tr("OBSTitles.ExposeInDock"), inner);
+    chk_expose_text_->setToolTip(obsgs_tr("OBSTitles.ExposeInDockTooltip"));
     chk_bold_->setStyleSheet("color:#ccc;");
     chk_italic_->setStyleSheet("color:#ccc;");
     chk_expose_text_->setStyleSheet("color:#ccc;");
     cmb_text_style_ = new QComboBox(inner);
-    cmb_text_style_->addItem("Normal", 0);
-    cmb_text_style_->addItem("All Caps", 1);
-    cmb_text_style_->addItem("Small Caps", 2);
-    cmb_text_style_->addItem("Superscript", 3);
-    cmb_text_style_->addItem("Subscript", 4);
-    cmb_text_style_->setToolTip("Visual text style. Source text is preserved for editing and export.");
+    cmb_text_style_->addItem(obsgs_tr("OBSTitles.Normal"), 0);
+    cmb_text_style_->addItem(obsgs_tr("OBSTitles.AllCaps"), 1);
+    cmb_text_style_->addItem(obsgs_tr("OBSTitles.SmallCaps"), 2);
+    cmb_text_style_->addItem(obsgs_tr("OBSTitles.Superscript"), 3);
+    cmb_text_style_->addItem(obsgs_tr("OBSTitles.Subscript"), 4);
+    cmb_text_style_->setToolTip(obsgs_tr("OBSTitles.TextStyleTooltip"));
     cmb_text_style_->setFixedHeight(22);
     cmb_text_style_->setStyleSheet(control_style);
     cmb_text_overflow_ = new QComboBox(inner);
-    cmb_text_overflow_->addItem("Wrap", 0);
-    cmb_text_overflow_->addItem("Clip", 1);
-    cmb_text_overflow_->addItem("Horizontal Fit", 2);
-    cmb_text_overflow_->setToolTip("Controls how text behaves when it exceeds the text box width.");
+    cmb_text_overflow_->addItem(obsgs_tr("OBSTitles.Wrap"), 0);
+    cmb_text_overflow_->addItem(obsgs_tr("OBSTitles.Clip"), 1);
+    cmb_text_overflow_->addItem(obsgs_tr("OBSTitles.HorizontalFit"), 2);
+    cmb_text_overflow_->setToolTip(obsgs_tr("OBSTitles.TextOverflowTooltip"));
     cmb_text_overflow_->setFixedHeight(22);
     cmb_text_overflow_->setStyleSheet(control_style);
     spn_text_fit_min_scale_ = mk_dspin(0.05, 1.0, 0.05);
     spn_text_fit_min_scale_->setDecimals(2);
-    spn_text_fit_min_scale_->setToolTip("Minimum horizontal scale for Horizontal Fit mode.");
-    lbl_text_fit_scale_ = new QLabel("Scale: 100%", inner);
+    spn_text_fit_min_scale_->setToolTip(obsgs_tr("OBSTitles.MinFitScaleTooltip"));
+    lbl_text_fit_scale_ = new QLabel(obsgs_tr("OBSTitles.Scale100"), inner);
     lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
 
-    txfl->addRow("Text:",   txt_content_);
-    txfl->addRow("Font:",   cmb_font_);
-    txfl->addRow("Size:",   spn_size_);
+    txfl->addRow(obsgs_tr("OBSTitles.TextLabel"),   txt_content_);
+    txfl->addRow(obsgs_tr("OBSTitles.FontLabel"),   cmb_font_);
+    txfl->addRow(obsgs_tr("OBSTitles.SizeLabel"),   spn_size_);
     auto *bi_row = new QHBoxLayout();
     bi_row->setContentsMargins(0, 0, 0, 0);
     bi_row->addWidget(chk_bold_);
@@ -3730,123 +3765,123 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     bi_row->addStretch();
     auto *bi_widget = new QWidget(inner);
     bi_widget->setLayout(bi_row);
-    txfl->addRow("Style:",  bi_widget);
-    txfl->addRow("Text Style:", cmb_text_style_);
-    txfl->addRow("Overflow:", cmb_text_overflow_);
-    txfl->addRow("  Min Fit Scale:", spn_text_fit_min_scale_);
+    txfl->addRow(obsgs_tr("OBSTitles.StyleLabel"),  bi_widget);
+    txfl->addRow(obsgs_tr("OBSTitles.TextStyleLabel"), cmb_text_style_);
+    txfl->addRow(obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
+    txfl->addRow(obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
     txfl->addRow("", lbl_text_fit_scale_);
     cmb_text_align_ = new QComboBox(inner);
-    cmb_text_align_->addItem("Align Left", 0);
-    cmb_text_align_->addItem("Align Center", 1);
-    cmb_text_align_->addItem("Align Right", 2);
+    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignLeft"), 0);
+    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignCenter"), 1);
+    cmb_text_align_->addItem(obsgs_tr("OBSTitles.AlignRight"), 2);
     cmb_text_align_->setFixedHeight(22);
     cmb_text_align_->setStyleSheet(control_style);
-    txfl->addRow("Alignment:", cmb_text_align_);
+    txfl->addRow(obsgs_tr("OBSTitles.AlignmentLabel"), cmb_text_align_);
     cmb_text_valign_ = new QComboBox(inner);
-    cmb_text_valign_->addItem("Align Top", 0);
-    cmb_text_valign_->addItem("Align Middle", 1);
-    cmb_text_valign_->addItem("Align Bottom", 2);
+    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignTop"), 0);
+    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignMiddle"), 1);
+    cmb_text_valign_->addItem(obsgs_tr("OBSTitles.AlignBottom"), 2);
     cmb_text_valign_->setFixedHeight(22);
     cmb_text_valign_->setStyleSheet(control_style);
-    txfl->addRow("Vertical Align:", cmb_text_valign_);
-    txfl->addRow("Live edit:", chk_expose_text_);
+    txfl->addRow(obsgs_tr("OBSTitles.VerticalAlignLabel"), cmb_text_valign_);
+    txfl->addRow(obsgs_tr("OBSTitles.LiveEditLabel"), chk_expose_text_);
     btn_text_color_ = new QPushButton(inner);
-    btn_kf_text_color_ = mk_kf_button("Toggle text color keyframe");
-    txfl->addRow("Color:", with_kf(btn_text_color_, btn_kf_text_color_));
+    btn_kf_text_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleTextColorKeyframe"));
+    txfl->addRow(obsgs_tr("OBSTitles.ColorLabel"), with_kf(btn_text_color_, btn_kf_text_color_));
     vl->addWidget(text_box_);
     make_collapsible(text_box_);
 
     /* ── Rectangle ── */
-    rect_box_ = new QGroupBox("Rectangle", inner);
+    rect_box_ = new QGroupBox(obsgs_tr("OBSTitles.Rectangle"), inner);
     rect_box_->setStyleSheet(section_style);
     auto *rfl = new QFormLayout(rect_box_);
     style_form(rfl);
     spn_layer_w_ = mk_dspin(1.0, 9999.0, 10.0);
     spn_layer_h_ = mk_dspin(1.0, 9999.0, 10.0);
     spn_rect_corner_ = mk_dspin(0.0, 1000.0, 1.0);
-    btn_kf_width_ = mk_kf_button("Toggle width keyframe");
-    btn_kf_height_ = mk_kf_button("Toggle height keyframe");
-    rfl->addRow("Width:", with_kf(spn_layer_w_, btn_kf_width_));
-    rfl->addRow("Height:", with_kf(spn_layer_h_, btn_kf_height_));
-    rfl->addRow("Corner:", with_kf(spn_rect_corner_, mk_kf_button("Toggle corner radius keyframe")));
+    btn_kf_width_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleWidthKeyframe"));
+    btn_kf_height_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleHeightKeyframe"));
+    rfl->addRow(obsgs_tr("OBSTitles.WidthLabel"), with_kf(spn_layer_w_, btn_kf_width_));
+    rfl->addRow(obsgs_tr("OBSTitles.HeightLabel"), with_kf(spn_layer_h_, btn_kf_height_));
+    rfl->addRow(obsgs_tr("OBSTitles.CornerLabel"), with_kf(spn_rect_corner_, mk_kf_button(obsgs_tr("OBSTitles.ToggleCornerKeyframe"))));
     btn_fill_color_ = new QPushButton(inner);
-    btn_kf_fill_color_ = mk_kf_button("Toggle fill color keyframe");
+    btn_kf_fill_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleFillColorKeyframe"));
     row_fill_color_ = with_kf(btn_fill_color_, btn_kf_fill_color_);
-    rfl->addRow("Color:", row_fill_color_);
+    rfl->addRow(obsgs_tr("OBSTitles.ColorLabel"), row_fill_color_);
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
-    spn_outline_width_->setToolTip("Outline width for text and shape layers.");
+    spn_outline_width_->setToolTip(obsgs_tr("OBSTitles.OutlineWidthTooltip"));
     btn_outline_color_ = new QPushButton(inner);
     row_outline_color_ = btn_outline_color_;
-    rfl->addRow("Outline Width:", spn_outline_width_);
-    rfl->addRow("Outline Color:", row_outline_color_);
+    rfl->addRow(obsgs_tr("OBSTitles.OutlineWidthLabel"), spn_outline_width_);
+    rfl->addRow(obsgs_tr("OBSTitles.OutlineColorLabel"), row_outline_color_);
     vl->addWidget(rect_box_);
     make_collapsible(rect_box_);
 
     /* ── Outline ── */
-    outline_box_ = new QGroupBox("Outline", inner);
+    outline_box_ = new QGroupBox(obsgs_tr("OBSTitles.Outline"), inner);
     outline_box_->setStyleSheet(section_style);
     auto *outline_form = new QFormLayout(outline_box_);
     style_form(outline_form);
-    chk_outline_enabled_ = new QCheckBox("Enable outline", inner);
+    chk_outline_enabled_ = new QCheckBox(obsgs_tr("OBSTitles.EnableOutline"), inner);
     chk_outline_enabled_->setStyleSheet("color:#ccc;");
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
-    spn_outline_width_->setToolTip("Outline thickness in pixels. Shape outlines are centered on the perimeter.");
+    spn_outline_width_->setToolTip(obsgs_tr("OBSTitles.OutlineThicknessTooltip"));
     btn_outline_color_ = new QPushButton(inner);
     row_outline_color_ = btn_outline_color_;
     spn_outline_opacity_ = mk_dspin(0.0, 1.0, 0.05);
     spn_outline_opacity_->setDecimals(2);
     cmb_outline_join_ = new QComboBox(inner);
-    cmb_outline_join_->addItem("Miter", 0);
-    cmb_outline_join_->addItem("Round", 1);
-    cmb_outline_join_->addItem("Bevel", 2);
+    cmb_outline_join_->addItem(obsgs_tr("OBSTitles.Miter"), 0);
+    cmb_outline_join_->addItem(obsgs_tr("OBSTitles.Round"), 1);
+    cmb_outline_join_->addItem(obsgs_tr("OBSTitles.Bevel"), 2);
     cmb_outline_join_->setFixedHeight(22);
     cmb_outline_join_->setStyleSheet(control_style);
     cmb_outline_position_ = new QComboBox(inner);
-    cmb_outline_position_->addItem("Back", 0);
-    cmb_outline_position_->addItem("Front", 1);
+    cmb_outline_position_->addItem(obsgs_tr("OBSTitles.Back"), 0);
+    cmb_outline_position_->addItem(obsgs_tr("OBSTitles.Front"), 1);
     cmb_outline_position_->setFixedHeight(22);
     cmb_outline_position_->setStyleSheet(control_style);
-    chk_outline_antialias_ = new QCheckBox("Antialias outline", inner);
+    chk_outline_antialias_ = new QCheckBox(obsgs_tr("OBSTitles.AntialiasOutline"), inner);
     chk_outline_antialias_->setStyleSheet("color:#ccc;");
     outline_form->addRow("", chk_outline_enabled_);
-    outline_form->addRow("Color:", btn_outline_color_);
-    outline_form->addRow("Thickness:", spn_outline_width_);
-    outline_form->addRow("Opacity:", spn_outline_opacity_);
-    outline_form->addRow("  Join:", cmb_outline_join_);
-    outline_form->addRow("  Position:", cmb_outline_position_);
+    outline_form->addRow(obsgs_tr("OBSTitles.ColorLabel"), btn_outline_color_);
+    outline_form->addRow(obsgs_tr("OBSTitles.ThicknessLabel"), spn_outline_width_);
+    outline_form->addRow(obsgs_tr("OBSTitles.OpacityLabel"), spn_outline_opacity_);
+    outline_form->addRow(obsgs_tr("OBSTitles.JoinLabel"), cmb_outline_join_);
+    outline_form->addRow(obsgs_tr("OBSTitles.PositionLabelIndented"), cmb_outline_position_);
     outline_form->addRow("", chk_outline_antialias_);
     vl->addWidget(outline_box_);
     make_collapsible(outline_box_);
 
     /* ── Image ── */
-    image_box_ = new QGroupBox("Image", inner);
+    image_box_ = new QGroupBox(obsgs_tr("OBSTitles.Image"), inner);
     image_box_->setStyleSheet(section_style);
     auto *image_form = new QFormLayout(image_box_);
     style_form(image_form);
     edit_image_path_ = new QLineEdit(inner);
     edit_image_path_->setFixedHeight(22);
     edit_image_path_->setStyleSheet(control_style);
-    btn_pick_image_ = new QPushButton("Browse…", inner);
+    btn_pick_image_ = new QPushButton(obsgs_tr("OBSTitles.Browse"), inner);
     btn_pick_image_->setStyleSheet("QPushButton{color:#fff;background:#0078d4;border:none;"
                                      "border-radius:3px;padding:3px 8px;}");
-    spn_layer_w_->setToolTip("For image layers, this is the displayed width.");
-    spn_layer_h_->setToolTip("For image layers, this is the displayed height.");
-    chk_lock_aspect_ = new QCheckBox("Lock aspect ratio", inner);
+    spn_layer_w_->setToolTip(obsgs_tr("OBSTitles.ImageWidthTooltip"));
+    spn_layer_h_->setToolTip(obsgs_tr("OBSTitles.ImageHeightTooltip"));
+    chk_lock_aspect_ = new QCheckBox(obsgs_tr("OBSTitles.LockAspectRatio"), inner);
     chk_lock_aspect_->setStyleSheet("color:#ccc;");
-    image_form->addRow("Path:", edit_image_path_);
+    image_form->addRow(obsgs_tr("OBSTitles.PathLabel"), edit_image_path_);
     image_form->addRow("", btn_pick_image_);
     image_form->addRow("", chk_lock_aspect_);
     vl->addWidget(image_box_);
     make_collapsible(image_box_);
 
-    shadow_box_ = new QGroupBox("Effects · Drop Shadow", inner);
+    shadow_box_ = new QGroupBox(obsgs_tr("OBSTitles.DropShadow"), inner);
     shadow_box_->setStyleSheet(section_style);
     auto *sfl = new QFormLayout(shadow_box_);
     style_form(sfl);
-    chk_shadow_enabled_ = new QCheckBox("Enable shadow", inner);
+    chk_shadow_enabled_ = new QCheckBox(obsgs_tr("OBSTitles.EnableShadow"), inner);
     chk_shadow_enabled_->setStyleSheet("color:#ccc;");
     cmb_shadow_preset_ = new QComboBox(inner);
-    cmb_shadow_preset_->addItems({"Custom", "Soft", "Medium", "Strong", "Broadcast"});
+    cmb_shadow_preset_->addItems({obsgs_tr("OBSTitles.Custom"), obsgs_tr("OBSTitles.Soft"), obsgs_tr("OBSTitles.Medium"), obsgs_tr("OBSTitles.Strong"), obsgs_tr("OBSTitles.Broadcast")});
     cmb_shadow_preset_->setFixedHeight(22);
     cmb_shadow_preset_->setStyleSheet(control_style);
     btn_shadow_color_ = new QPushButton(inner);
@@ -3856,21 +3891,21 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_shadow_angle_ = mk_dspin(-360.0, 360.0, 5.0);
     spn_shadow_blur_ = mk_dspin(0.0, 100.0, 1.0);
     spn_shadow_spread_ = mk_dspin(0.0, 100.0, 1.0);
-    btn_kf_shadow_enabled_ = mk_kf_button("Toggle shadow enabled keyframe");
-    btn_kf_shadow_color_ = mk_kf_button("Toggle shadow color keyframe");
-    btn_kf_shadow_opacity_ = mk_kf_button("Toggle shadow opacity keyframe");
-    btn_kf_shadow_distance_ = mk_kf_button("Toggle shadow distance keyframe");
-    btn_kf_shadow_angle_ = mk_kf_button("Toggle shadow angle keyframe");
-    btn_kf_shadow_blur_ = mk_kf_button("Toggle shadow blur keyframe");
-    btn_kf_shadow_spread_ = mk_kf_button("Toggle shadow spread keyframe");
+    btn_kf_shadow_enabled_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowEnabledKeyframe"));
+    btn_kf_shadow_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowColorKeyframe"));
+    btn_kf_shadow_opacity_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowOpacityKeyframe"));
+    btn_kf_shadow_distance_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowDistanceKeyframe"));
+    btn_kf_shadow_angle_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowAngleKeyframe"));
+    btn_kf_shadow_blur_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowBlurKeyframe"));
+    btn_kf_shadow_spread_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowSpreadKeyframe"));
     sfl->addRow("", with_kf(chk_shadow_enabled_, btn_kf_shadow_enabled_));
-    sfl->addRow("  Preset:", cmb_shadow_preset_);
-    sfl->addRow("Color:", with_kf(btn_shadow_color_, btn_kf_shadow_color_));
-    sfl->addRow("Opacity:", with_kf(spn_shadow_opacity_, btn_kf_shadow_opacity_));
-    sfl->addRow("Distance:", with_kf(spn_shadow_distance_, btn_kf_shadow_distance_));
-    sfl->addRow("Angle:", with_kf(spn_shadow_angle_, btn_kf_shadow_angle_));
-    sfl->addRow("Blur:", with_kf(spn_shadow_blur_, btn_kf_shadow_blur_));
-    sfl->addRow("Spread:", with_kf(spn_shadow_spread_, btn_kf_shadow_spread_));
+    sfl->addRow(obsgs_tr("OBSTitles.PresetLabel"), cmb_shadow_preset_);
+    sfl->addRow(obsgs_tr("OBSTitles.ColorLabel"), with_kf(btn_shadow_color_, btn_kf_shadow_color_));
+    sfl->addRow(obsgs_tr("OBSTitles.OpacityLabel"), with_kf(spn_shadow_opacity_, btn_kf_shadow_opacity_));
+    sfl->addRow(obsgs_tr("OBSTitles.DistanceLabel"), with_kf(spn_shadow_distance_, btn_kf_shadow_distance_));
+    sfl->addRow(obsgs_tr("OBSTitles.AngleLabel"), with_kf(spn_shadow_angle_, btn_kf_shadow_angle_));
+    sfl->addRow(obsgs_tr("OBSTitles.BlurLabel"), with_kf(spn_shadow_blur_, btn_kf_shadow_blur_));
+    sfl->addRow(obsgs_tr("OBSTitles.SpreadLabel"), with_kf(spn_shadow_spread_, btn_kf_shadow_spread_));
     vl->addWidget(shadow_box_);
     make_collapsible(shadow_box_);
 
@@ -3984,7 +4019,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, local_time, emit_change]() {
                 if (!can_edit()) return;
                 QColor initial = color_from_argb(eval_text_color(*layer_, local_time()));
-                QColor picked = QColorDialog::getColor(initial, this, "Text Color",
+                QColor picked = QColorDialog::getColor(initial, this, obsgs_tr("OBSTitles.TextColor"),
                                                         QColorDialog::ShowAlphaChannel);
                 if (!picked.isValid()) return;
                 layer_->text_color = argb_from_color(picked);
@@ -4025,7 +4060,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     });
     connect(btn_shadow_color_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
         if (!can_edit()) return;
-        QColor picked = QColorDialog::getColor(color_from_argb(eval_shadow_color(*layer_, local_time())), this, "Shadow Color", QColorDialog::ShowAlphaChannel);
+        QColor picked = QColorDialog::getColor(color_from_argb(eval_shadow_color(*layer_, local_time())), this, obsgs_tr("OBSTitles.ShadowColor"), QColorDialog::ShowAlphaChannel);
         if (!picked.isValid()) return;
         layer_->shadow_color = argb_from_color(picked);
         set_shadow_color_channels_at(*layer_, local_time(), layer_->shadow_color);
@@ -4108,7 +4143,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, local_time, emit_change]() {
                 if (!can_edit()) return;
                 QColor initial = color_from_argb(eval_fill_color(*layer_, local_time()));
-                QColor picked = QColorDialog::getColor(initial, this, "Fill Color",
+                QColor picked = QColorDialog::getColor(initial, this, obsgs_tr("OBSTitles.FillColor"),
                                                         QColorDialog::ShowAlphaChannel);
                 if (!picked.isValid()) return;
                 layer_->fill_color = argb_from_color(picked);
@@ -4144,7 +4179,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, emit_change]() {
                 if (!can_edit()) return;
                 QColor initial = color_from_argb(layer_->stroke_color);
-                QColor picked = QColorDialog::getColor(initial, this, "Outline Color",
+                QColor picked = QColorDialog::getColor(initial, this, obsgs_tr("OBSTitles.OutlineColor"),
                                                         QColorDialog::ShowAlphaChannel);
                 if (!picked.isValid()) return;
                 layer_->stroke_color = argb_from_color(picked);
@@ -4163,9 +4198,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, local_time, emit_change]() {
                 if (!can_edit()) return;
                 QString path = QFileDialog::getOpenFileName(
-                    this, "Choose Image",
+                    this, obsgs_tr("OBSTitles.ChooseImage"),
                     QString::fromStdString(layer_->image_path),
-                    "Images (*.png *.jpg *.jpeg *.bmp *.gif);;All Files (*)");
+                    obsgs_tr("OBSTitles.ImageFileFilter"));
                 if (path.isEmpty()) return;
                 layer_->image_path = path.toStdString();
                 QImage img(path);
@@ -4372,7 +4407,7 @@ void PropertiesPanel::load_values()
         if (cmb_text_style_) cmb_text_style_->setCurrentIndex(0);
         if (cmb_text_overflow_) cmb_text_overflow_->setCurrentIndex(0);
         if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setValue(0.5);
-        if (lbl_text_fit_scale_) lbl_text_fit_scale_->setText("Scale: 100%");
+        if (lbl_text_fit_scale_) lbl_text_fit_scale_->setText(obsgs_tr("OBSTitles.Scale100"));
         if (cmb_text_align_) cmb_text_align_->setCurrentIndex(1);
         if (cmb_text_valign_) cmb_text_valign_->setCurrentIndex(1);
         if (cmb_anchor_) cmb_anchor_->setCurrentIndex(4);
@@ -4406,8 +4441,8 @@ void PropertiesPanel::load_values()
     const bool is_image = layer_->type == LayerType::Image;
     const bool supports_outline = is_text_like || is_rect;
     text_box_->setVisible(is_text_like);
-    text_box_->setTitle(is_clock ? "Clock" : "Text");
-    txt_content_->setPlaceholderText(is_clock ? "H:i:s" : "Enter text…");
+    text_box_->setTitle(is_clock ? obsgs_tr("OBSTitles.Clock") : obsgs_tr("OBSTitles.Text"));
+    txt_content_->setPlaceholderText(is_clock ? "H:i:s" : obsgs_tr("OBSTitles.EnterTextPlaceholder"));
     if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2);
     if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2);
     if (auto *text_form = qobject_cast<QFormLayout *>(text_box_->layout())) {
@@ -4420,7 +4455,7 @@ void PropertiesPanel::load_values()
         }
     }
     rect_box_->setVisible(is_text_like || is_rect || is_image);
-    rect_box_->setTitle(is_text_like ? (is_clock ? "Clock Box" : "Text Box") : (is_image ? "Image Size" : "Shape · Geometry / Fill"));
+    rect_box_->setTitle(is_text_like ? (is_clock ? obsgs_tr("OBSTitles.ClockBox") : obsgs_tr("OBSTitles.TextBox")) : (is_image ? obsgs_tr("OBSTitles.ImageSize") : obsgs_tr("OBSTitles.ShapeGeometryFill")));
     spn_rect_corner_->setVisible(is_rect);
     btn_fill_color_->setVisible(is_rect);
     btn_kf_text_color_->setVisible(is_text_like);
@@ -4541,7 +4576,7 @@ void PropertiesPanel::load_values()
         apply_text_style_to_font(preview_font, *layer_);
         QRectF preview_rect(0, 0, eval_box_width(*layer_, lt), eval_box_height(*layer_, lt));
         double scale = horizontal_fit_scale(preview_font, preview_rect, display_text_for_style(*layer_), *layer_);
-        lbl_text_fit_scale_->setText(QString("Scale: %1%").arg((int)std::round(scale * 100.0)));
+        lbl_text_fit_scale_->setText(obsgs_tr("OBSTitles.ScalePercentFormat").arg((int)std::round(scale * 100.0)));
     }
     chk_expose_text_->setChecked(layer_->expose_text);
     int ai = cmb_text_align_->findData(layer_->align_h);
@@ -4561,7 +4596,7 @@ void PropertiesPanel::load_values()
     QFontDatabase fdb;
     cmb_font_->setToolTip(fdb.families().contains(QString::fromStdString(layer_->font_family))
         ? QString()
-        : QString("Font '%1' is not installed in Qt; OBS/Pango may substitute it.").arg(QString::fromStdString(layer_->font_family)));
+        : obsgs_tr("OBSTitles.FontMissingWarningFormat").arg(QString::fromStdString(layer_->font_family)));
 
     loading_values_ = false;
 }
