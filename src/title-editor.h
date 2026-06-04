@@ -44,6 +44,8 @@
 #include <QPoint>
 #include <QRectF>
 #include <memory>
+#include <string>
+#include <vector>
 
 /* Forward declarations for sub-widgets */
 class CanvasPreview;
@@ -164,11 +166,13 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void set_playhead(double t);
     void set_selected_layer(const std::string &lid);
+    void set_selected_layers(const std::vector<std::string> &ids);
     void set_safe_guides_visible(bool visible);
     void refresh_preview();
 
 signals:
     void layer_clicked(const std::string &layer_id);
+    void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_geometry_changed();
 
 protected:
@@ -180,10 +184,11 @@ protected:
     void resizeEvent(QResizeEvent *ev) override;
 
 private:
-    enum class DragMode { None, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
+    enum class DragMode { None, Marquee, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
 
     void render_to_pixmap();
     std::shared_ptr<Layer> selected_layer() const;
+    std::vector<std::shared_ptr<Layer>> selected_layers() const;
     QRectF layer_local_rect(const Layer &layer) const;
     double view_scale() const;
     QPointF view_origin() const;
@@ -192,10 +197,15 @@ private:
     QPointF canvas_to_layer(const Layer &layer, const QPointF &canvas_pt) const;
     QPointF layer_to_canvas(const Layer &layer, const QPointF &layer_pt) const;
     DragMode hit_test_selected(const QPointF &view_pt) const;
+    QRectF layer_canvas_bounds(const Layer &layer) const;
+    QRectF selected_canvas_bounds() const;
+    void begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
+    void update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
     void apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
 
     std::shared_ptr<Title> title_;
     std::string sel_layer_id_;
+    std::vector<std::string> selected_layer_ids_;
     double playhead_ = 0.0;
     float  zoom_     = 1.0f;
     QPixmap frame_pixmap_;
@@ -204,6 +214,10 @@ private:
 
     DragMode drag_mode_ = DragMode::None;
     bool drag_changed_ = false;
+    bool marquee_active_ = false;
+    QPointF drag_start_view_;
+    QPointF drag_current_view_;
+    std::vector<std::string> marquee_base_selection_;
     QPointF drag_start_canvas_;
     double drag_start_x_ = 0.0;
     double drag_start_y_ = 0.0;
@@ -211,6 +225,15 @@ private:
     float drag_start_h_ = 1.0f;
     float drag_start_origin_x_ = 0.5f;
     float drag_start_origin_y_ = 0.5f;
+    QRectF drag_start_selection_bounds_;
+    struct LayerDragState {
+        std::string id;
+        double x = 0.0;
+        double y = 0.0;
+        float w = 1.0f;
+        float h = 1.0f;
+    };
+    std::vector<LayerDragState> drag_layer_states_;
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -225,12 +248,14 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void refresh();
     void set_selected_layer(const std::string &layer_id);
+    void set_selected_layers(const std::vector<std::string> &layer_ids);
     void set_layer_clipboard_available(bool available);
     QScrollBar *vertical_scroll_bar() const;
     std::vector<std::string> selected_ids() const;
 
 signals:
     void layer_selected(const std::string &layer_id);
+    void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_visibility_changed(const std::string &layer_id, bool v);
     void layer_lock_changed(const std::string &layer_id, bool locked);
     void layer_expand_changed(const std::string &layer_id, bool expanded);
