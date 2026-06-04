@@ -40,6 +40,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
+#include <QSlider>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QGroupBox>
@@ -186,22 +187,27 @@ static QString format_timecode(double t)
         .arg(frames, 2, 10, QChar('0'));
 }
 
-static QColor layer_color(const Layer &layer, int row)
+static QColor layer_type_color(LayerType type)
 {
-    if (layer.type == LayerType::Text)
+    switch (type) {
+    case LayerType::Text:
         return QColor(0xb4, 0x5a, 0xa0);
-    if (layer.type == LayerType::Clock)
+    case LayerType::Clock:
         return QColor(0x4b, 0x9a, 0xc8);
-    if (layer.type == LayerType::Ticker)
+    case LayerType::Ticker:
         return QColor(0xd8, 0x8a, 0x30);
-    if (layer.type == LayerType::SolidRect || layer.type == LayerType::Shape)
+    case LayerType::SolidRect:
+    case LayerType::Shape:
         return QColor(0x4f, 0x8f, 0x58);
-    if (layer.type == LayerType::Image)
+    case LayerType::Image:
         return QColor(0x7d, 0x8b, 0x7f);
-    static const QColor palette[] = {
-        QColor(0x65, 0x8a, 0xc8), QColor(0xb8, 0x8a, 0x48),
-        QColor(0x8a, 0x70, 0xb8), QColor(0x4e, 0x8c, 0x9a)};
-    return palette[row % 4];
+    }
+    return QColor(0x65, 0x8a, 0xc8);
+}
+
+static QColor layer_color(const Layer &layer, int /*row*/)
+{
+    return layer_type_color(layer.type);
 }
 
 static QString layer_type_short(LayerType type)
@@ -1117,29 +1123,47 @@ void TitleEditor::build_ui()
     upper_split->setStretchFactor(1, 3);
     upper_split->setStretchFactor(2, 1);
 
-    /* ── Lower split: LayerStack | Timeline ── */
-    auto *lower_split = new QSplitter(Qt::Horizontal, this);
+    /* ── Timeline editor: full-width transport | LayerStack + Timeline | full-width zoom ── */
+    auto *timeline_editor = new QWidget(this);
+    auto *timeline_editor_layout = new QVBoxLayout(timeline_editor);
+    timeline_editor_layout->setContentsMargins(0, 0, 0, 0);
+    timeline_editor_layout->setSpacing(0);
+
+    auto *timeline_transport = new QWidget(timeline_editor);
+    timeline_transport->setFixedHeight(34);
+    timeline_transport->setStyleSheet(
+        "QWidget{background:#141414;border-bottom:1px solid #333;}"
+        "QToolButton{color:#ccc;background:transparent;padding:3px 7px;border:none;}"
+        "QToolButton:hover{background:#333;border-radius:2px;}"
+        "QLabel{color:#0af;font-family:monospace;}");
+    auto *transport_layout = new QHBoxLayout(timeline_transport);
+    transport_layout->setContentsMargins(8, 0, 8, 0);
+    transport_layout->setSpacing(2);
+    auto make_transport_button = [timeline_transport](QAction *action) {
+        auto *button = new QToolButton(timeline_transport);
+        button->setDefaultAction(action);
+        button->setIconSize(QSize(14, 14));
+        button->setAutoRaise(true);
+        return button;
+    };
+    transport_layout->addStretch(1);
+    transport_layout->addWidget(make_transport_button(act_rew_));
+    transport_layout->addWidget(make_transport_button(act_prev_kf_));
+    transport_layout->addWidget(make_transport_button(act_play_));
+    transport_layout->addWidget(make_transport_button(act_full_loop_));
+    QAction *step_forward_action = new QAction(obs_icon("step-forward.svg"), obsgs_tr("OBSTitles.StepForward"), timeline_transport);
+    connect(step_forward_action, &QAction::triggered, this, &TitleEditor::step_forward);
+    transport_layout->addWidget(make_transport_button(step_forward_action));
+    transport_layout->addWidget(make_transport_button(act_next_kf_));
+    transport_layout->addStretch(1);
+    timeline_editor_layout->addWidget(timeline_transport);
+
+    auto *lower_split = new QSplitter(Qt::Horizontal, timeline_editor);
 
     auto *layers_panel = new QWidget(lower_split);
     auto *layers_layout = new QVBoxLayout(layers_panel);
     layers_layout->setContentsMargins(0, 0, 0, 0);
     layers_layout->setSpacing(0);
-
-    auto *layer_transport = new QToolBar(layers_panel);
-    layer_transport->setMovable(false);
-    layer_transport->setFixedHeight(34);
-    layer_transport->setIconSize(QSize(14, 14));
-    layer_transport->setStyleSheet(
-        "QToolBar{background:#141414;border-bottom:1px solid #333;spacing:1px;}"
-        "QToolButton{color:#ccc;background:transparent;padding:3px 5px;border:none;}"
-        "QToolButton:hover{background:#333;border-radius:2px;}");
-    layer_transport->addAction(act_rew_);
-    layer_transport->addAction(act_prev_kf_);
-    layer_transport->addAction(act_play_);
-    layer_transport->addAction(act_full_loop_);
-    layer_transport->addAction(obs_icon("step-forward.svg"), obsgs_tr("OBSTitles.StepForward"), this, &TitleEditor::step_forward);
-    layer_transport->addAction(act_next_kf_);
-    layers_layout->addWidget(layer_transport);
 
     layers_ = new LayerStack(layers_panel);
     layers_->setMinimumHeight(140);
@@ -1160,11 +1184,63 @@ void TitleEditor::build_ui()
     lower_split->setStretchFactor(1, 3);
     lower_split->setCollapsible(0, false);
     lower_split->setCollapsible(1, false);
+    timeline_editor_layout->addWidget(lower_split, 1);
+
+    auto *timeline_zoom_bar = new QWidget(timeline_editor);
+    timeline_zoom_bar->setFixedHeight(34);
+    timeline_zoom_bar->setStyleSheet(
+        "QWidget{background:#171717;border-top:1px solid #333;}"
+        "QLabel{color:#9a9a9a;}"
+        "QPushButton{color:#ddd;background:#2a2a2a;border:1px solid #3f3f3f;border-radius:3px;padding:3px 8px;}"
+        "QPushButton:hover{background:#343434;}"
+        "QSlider::groove:horizontal{height:4px;background:#303030;border-radius:2px;}"
+        "QSlider::handle:horizontal{width:12px;margin:-5px 0;background:#bfc7d5;border-radius:6px;}"
+        "QSlider::sub-page:horizontal{background:#0078d4;border-radius:2px;}");
+    auto *zoom_layout = new QHBoxLayout(timeline_zoom_bar);
+    zoom_layout->setContentsMargins(10, 0, 10, 0);
+    zoom_layout->setSpacing(8);
+    auto *zoom_label = new QLabel(obsgs_tr("OBSTitles.TimelineZoomLabel"), timeline_zoom_bar);
+    auto *zoom_out = new QPushButton(timeline_zoom_bar);
+    zoom_out->setIcon(obs_icon("zoom-out.svg"));
+    zoom_out->setFixedWidth(30);
+    auto *zoom_slider = new QSlider(Qt::Horizontal, timeline_zoom_bar);
+    zoom_slider->setRange(5, 1200);
+    zoom_slider->setValue(timeline_->zoom_percent());
+    zoom_slider->setMinimumWidth(220);
+    auto *zoom_in = new QPushButton(timeline_zoom_bar);
+    zoom_in->setIcon(obs_icon("zoom-in.svg"));
+    zoom_in->setFixedWidth(30);
+    auto *zoom_value = new QLabel(QStringLiteral("%1%").arg(timeline_->zoom_percent()), timeline_zoom_bar);
+    zoom_value->setFixedWidth(54);
+    zoom_value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    auto *fit_timeline = new QPushButton(obsgs_tr("OBSTitles.FitTimeline"), timeline_zoom_bar);
+    zoom_layout->addStretch(1);
+    zoom_layout->addWidget(zoom_label);
+    zoom_layout->addWidget(zoom_out);
+    zoom_layout->addWidget(zoom_slider);
+    zoom_layout->addWidget(zoom_in);
+    zoom_layout->addWidget(zoom_value);
+    zoom_layout->addWidget(fit_timeline);
+    zoom_layout->addStretch(1);
+    connect(zoom_slider, &QSlider::valueChanged, timeline_, &TimelineWidget::set_zoom_percent);
+    connect(timeline_, &TimelineWidget::zoom_percent_changed, this, [zoom_slider, zoom_value](int percent) {
+        QSignalBlocker blocker(zoom_slider);
+        zoom_slider->setValue(percent);
+        zoom_value->setText(QStringLiteral("%1%").arg(percent));
+    });
+    connect(zoom_out, &QPushButton::clicked, this, [this]() {
+        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() / 1.18));
+    });
+    connect(zoom_in, &QPushButton::clicked, this, [this]() {
+        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() * 1.18));
+    });
+    connect(fit_timeline, &QPushButton::clicked, timeline_, &TimelineWidget::fit_timeline);
+    timeline_editor_layout->addWidget(timeline_zoom_bar);
 
     /* ── Outer vertical split ── */
     auto *vsplit = new QSplitter(Qt::Vertical, this);
     vsplit->addWidget(upper_split);
-    vsplit->addWidget(lower_split);
+    vsplit->addWidget(timeline_editor);
     vsplit->setStretchFactor(0, 3);
     vsplit->setStretchFactor(1, 2);
     root->addWidget(vsplit, 1);
@@ -2932,7 +3008,7 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
 
 
     QWidget *columns = new QWidget(this);
-    columns->setFixedHeight(38);
+    columns->setFixedHeight(72);
     columns->setStyleSheet("background:#141414;border-top:1px solid #292929;border-bottom:1px solid #292929;");
     auto *ch = new QHBoxLayout(columns);
     ch->setContentsMargins(4, 0, 4, 0);
@@ -3229,7 +3305,7 @@ void LayerStack::populate()
             QLabel *diamond_indicator = new QLabel("◇", prop_widget);
             diamond_indicator->setFixedWidth(18);
             diamond_indicator->setAlignment(Qt::AlignCenter);
-            diamond_indicator->setStyleSheet("color:#9aa5b1;");
+            diamond_indicator->setStyleSheet(QString("color:%1;").arg(layer_color(*l, row).name()));
             ph->addWidget(diamond_indicator);
             QLabel *prop_name = new QLabel(label, prop_widget);
             prop_name->setStyleSheet("color:#b8b8b8;");
@@ -3418,12 +3494,8 @@ void TimelineWidget::set_selected_layer(const std::string &lid)
 void TimelineWidget::set_playhead(double t)
 {
     playhead_ = snap_time(t);
-    if (title_) {
-        int phx = time_to_x(playhead_);
-        if (phx < 24) scroll_x_ = std::max(0, (int)(playhead_ * pixels_per_sec_) - 24);
-        if (phx > width() - 24) scroll_x_ = std::max(0, (int)(playhead_ * pixels_per_sec_) - width() + 24);
-        clamp_scroll();
-    }
+    if (title_)
+        keep_playhead_visible();
     update();
 }
 
@@ -3432,6 +3504,49 @@ void TimelineWidget::set_vertical_scroll(int scroll_y)
     scroll_y_ = scroll_y;
     clamp_vertical_scroll();
     update();
+}
+
+void TimelineWidget::set_pixels_per_sec(double pixels_per_sec, double anchor_time, int anchor_x)
+{
+    pixels_per_sec_ = std::clamp(pixels_per_sec, 5.0, 1200.0);
+    scroll_x_ = (int)std::round(anchor_time * pixels_per_sec_) - anchor_x;
+    clamp_scroll();
+    keep_playhead_visible();
+    update();
+    emit zoom_percent_changed(zoom_percent());
+}
+
+void TimelineWidget::set_zoom_percent(int percent)
+{
+    int clamped = std::clamp(percent, 5, 1200);
+    double anchor_time = title_ ? std::clamp(playhead_, 0.0, title_->duration) : playhead_;
+    int anchor_x = std::clamp(time_to_x(anchor_time), 24, std::max(24, width() - 24));
+    set_pixels_per_sec((double)clamped, anchor_time, anchor_x);
+}
+
+int TimelineWidget::zoom_percent() const
+{
+    return (int)std::round(pixels_per_sec_);
+}
+
+void TimelineWidget::fit_timeline()
+{
+    double dur = title_ ? std::max(obs_frame_duration(), title_->duration) : 10.0;
+    double fitted = (double)std::max(1, width() - 40) / dur;
+    set_pixels_per_sec(fitted, 0.0, 0);
+}
+
+bool TimelineWidget::keep_playhead_visible()
+{
+    if (!title_) return false;
+    int phx = time_to_x(playhead_);
+    int old_scroll = scroll_x_;
+    if (phx < 24)
+        scroll_x_ = std::max(0, (int)std::round(playhead_ * pixels_per_sec_) - 24);
+    if (phx > width() - 24)
+        scroll_x_ = std::max(0, (int)std::round(playhead_ * pixels_per_sec_) - width() + 24);
+    clamp_scroll();
+    return old_scroll != scroll_x_;
 }
 
 double TimelineWidget::x_to_time(int x) const
@@ -3588,8 +3703,8 @@ void TimelineWidget::paintEvent(QPaintEvent *)
                         << QPoint(kx + 5, ky)
                         << QPoint(kx,     ky + 5)
                         << QPoint(kx - 5, ky);
-                p.setBrush(keyframe_color(kf.easing));
-                p.setPen(QPen(QColor(0x10, 0x10, 0x10), 1));
+                p.setBrush(layer_color(*layer, row));
+                p.setPen(QPen(keyframe_color(kf.easing), 1));
                 p.drawPolygon(diamond);
             }
         };
@@ -3667,6 +3782,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     AnimatedProperty *hit_prop = nullptr;
     int hit_idx = -1;
     if (!hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr)) return;
+    if (layer && layer->locked) return;
 
     const bool has_previous_segment = hit_idx > 0;
     const bool has_next_segment = hit_idx + 1 < (int)hit_prop->keyframes.size();
@@ -3791,7 +3907,7 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
         return;
     }
 
-    if (!(ev->modifiers() & Qt::ControlModifier)) {
+    if (ev->modifiers() & Qt::AltModifier) {
         int delta = angle.y() != 0 ? -angle.y() : -angle.x();
         if (delta != 0) {
             emit vertical_scroll_delta_requested(delta);
@@ -3810,10 +3926,7 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
     if (delta == 0) return;
 
     double factor = std::pow(1.0015, delta);
-    pixels_per_sec_ = std::clamp(pixels_per_sec_ * factor, 25.0, 1200.0);
-    scroll_x_ = (int)std::round(anchor_time * pixels_per_sec_) - cursor_x;
-    clamp_scroll();
-    update();
+    set_pixels_per_sec(pixels_per_sec_ * factor, anchor_time, cursor_x);
     ev->accept();
 }
 
@@ -3872,6 +3985,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
     AnimatedProperty *hit_prop = nullptr;
     int hit_idx = -1;
     if (hit_keyframe(ev->pos(), &hit_layer, &hit_prop, &hit_idx, nullptr)) {
+        if (hit_layer && hit_layer->locked) {
+            ev->accept();
+            return;
+        }
         drag_mode_ = DragMode::Keyframe;
         drag_layer_id_ = hit_layer->id;
         drag_prop_name_ = hit_prop->name;
@@ -3885,6 +4002,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
     int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
     if (row >= 0 && row < (int)rows.size() && !rows[row].is_property) {
         auto layer = rows[row].layer;
+        if (!layer || layer->locked) {
+            ev->accept();
+            return;
+        }
         int x0 = time_to_x(layer->in_time);
         int x1 = time_to_x(layer->out_time);
         constexpr int kTrimHit = 7;
@@ -3945,7 +4066,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
 
     if (drag_mode_ == DragMode::Keyframe) {
         auto layer = title_->find_layer(drag_layer_id_);
-        if (!layer) return;
+        if (!layer || layer->locked) return;
         for (auto *prop : timeline_properties(*layer)) {
             if (prop->name != drag_prop_name_) continue;
             if (drag_keyframe_index_ < 0 || drag_keyframe_index_ >= (int)prop->keyframes.size()) return;
@@ -3958,7 +4079,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
 
     if (drag_mode_ == DragMode::TrimIn || drag_mode_ == DragMode::TrimOut) {
         auto layer = title_->find_layer(drag_layer_id_);
-        if (!layer) return;
+        if (!layer || layer->locked) return;
         if (drag_mode_ == DragMode::TrimIn)
             layer->in_time = std::clamp(t, 0.0, std::max(0.0, layer->out_time - obs_frame_duration()));
         else
@@ -3969,7 +4090,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
 
     if (drag_mode_ == DragMode::Layer) {
         auto layer = title_->find_layer(drag_layer_id_);
-        if (!layer) return;
+        if (!layer || layer->locked) return;
         double duration = std::max(obs_frame_duration(), drag_start_out_ - drag_start_in_);
         double new_in = drag_start_in_ + (t - drag_start_time_);
         new_in = std::clamp(new_in, 0.0, std::max(0.0, title_->duration - duration));
@@ -3982,6 +4103,10 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
     auto rows = timeline_rows(title_);
     int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
     if (row >= 0 && row < (int)rows.size() && !rows[row].is_property) {
+        if (!rows[row].layer || rows[row].layer->locked) {
+            unsetCursor();
+            return;
+        }
         int x0 = time_to_x(rows[row].layer->in_time);
         int x1 = time_to_x(rows[row].layer->out_time);
         if (std::abs(ev->pos().x() - x0) <= 7 || std::abs(ev->pos().x() - x1) <= 7)
@@ -4006,11 +4131,13 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent *)
                    drag_mode_ == DragMode::PauseMarker;
     if (drag_mode_ == DragMode::Keyframe && title_) {
         if (auto layer = title_->find_layer(drag_layer_id_)) {
-            for (auto *prop : timeline_properties(*layer)) {
-                if (prop->name != drag_prop_name_) continue;
-                std::sort(prop->keyframes.begin(), prop->keyframes.end(),
-                          [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
-                break;
+            if (!layer->locked) {
+                for (auto *prop : timeline_properties(*layer)) {
+                    if (prop->name != drag_prop_name_) continue;
+                    std::sort(prop->keyframes.begin(), prop->keyframes.end(),
+                              [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
+                    break;
+                }
             }
         }
     }
