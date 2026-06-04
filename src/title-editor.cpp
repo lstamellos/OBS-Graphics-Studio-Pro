@@ -2235,19 +2235,25 @@ QRectF CanvasPreview::layer_canvas_bounds(const Layer &layer) const
 {
     QRectF r = layer_local_rect(layer);
     const QPointF corners[] = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
-    QRectF bounds;
-    bool have_bounds = false;
+
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+
     for (const QPointF &corner : corners) {
         QPointF canvas = layer_to_canvas(layer, corner);
-        QRectF point_rect(canvas, QSizeF(0, 0));
-        if (!have_bounds) {
-            bounds = point_rect;
-            have_bounds = true;
-        } else {
-            bounds |= point_rect;
-        }
+        min_x = std::min(min_x, canvas.x());
+        min_y = std::min(min_y, canvas.y());
+        max_x = std::max(max_x, canvas.x());
+        max_y = std::max(max_y, canvas.y());
     }
-    return bounds.normalized();
+
+    if (!std::isfinite(min_x) || !std::isfinite(min_y) ||
+        !std::isfinite(max_x) || !std::isfinite(max_y))
+        return QRectF();
+
+    return QRectF(QPointF(min_x, min_y), QPointF(max_x, max_y)).normalized();
 }
 
 QRectF CanvasPreview::selected_canvas_bounds() const
@@ -2257,11 +2263,12 @@ QRectF CanvasPreview::selected_canvas_bounds() const
     for (auto &layer : selected_layers()) {
         if (!layer || !layer->visible) continue;
         QRectF layer_bounds = layer_canvas_bounds(*layer);
+        if (!layer_bounds.isValid()) continue;
         if (!have_bounds) {
             bounds = layer_bounds;
             have_bounds = true;
         } else {
-            bounds |= layer_bounds;
+            bounds = bounds.united(layer_bounds);
         }
     }
     return bounds.normalized();
@@ -2877,6 +2884,7 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
     if (ev->button() != Qt::LeftButton || drag_mode_ == DragMode::None) return;
 
     if (drag_mode_ == DragMode::Marquee) {
+        update_marquee(ev->pos(), ev->modifiers());
         if (!marquee_active_)
             emit layers_selected(std::vector<std::string>{});
         drag_mode_ = DragMode::None;
