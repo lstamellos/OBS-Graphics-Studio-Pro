@@ -244,6 +244,14 @@ struct Title {
     void move_layer(const std::string &layer_id, int delta);
 };
 
+struct TitleTemplateExportMetadata {
+    std::string title;
+    std::string description;
+    std::string creator;
+    std::string creation_date;
+    std::string screenshot_png_base64;
+};
+
 /* ══════════════════════════════════════════════════════════════════
  *  TitleDataStore  (singleton)
  * ══════════════════════════════════════════════════════════════════ */
@@ -260,6 +268,10 @@ public:
                                         const std::string &name);
     bool                   export_title(const std::string &id,
                                         const std::string &path,
+                                        std::string *error = nullptr) const;
+    bool                   export_title(const std::string &id,
+                                        const std::string &path,
+                                        const TitleTemplateExportMetadata &metadata,
                                         std::string *error = nullptr) const;
     std::shared_ptr<Title> import_title(const std::string &path,
                                         std::string *error = nullptr);

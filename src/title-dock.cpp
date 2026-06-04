@@ -12,13 +12,18 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
+#include <QBuffer>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QInputDialog>
+#include <QIODevice>
 #include <QItemSelectionModel>
 #include <QMenu>
+#include <QTextEdit>
 #include <QMessageBox>
 #include <QVBoxLayout>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QStyle>
@@ -244,6 +249,68 @@ private:
 static LiveTextCueHeader *live_text_cue_header(QTableWidget *table)
 {
     return table ? dynamic_cast<LiveTextCueHeader *>(table->horizontalHeader()) : nullptr;
+}
+
+static QString title_screenshot_png_base64(const Title &title)
+{
+    const double midpoint = std::max(0.0, title.duration * 0.5);
+    QImage screenshot = render_title_to_image(title, midpoint);
+    if (screenshot.isNull())
+        return QString();
+
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    if (!screenshot.save(&buffer, "PNG"))
+        return QString();
+    return QString::fromLatin1(png.toBase64());
+}
+
+static bool prompt_template_export_metadata(QWidget *parent, const Title &title,
+                                            TitleTemplateExportMetadata &metadata)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(obsgs_tr("OBSTitles.ExportTemplateDetails"));
+    dialog.setModal(true);
+    dialog.resize(520, 320);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(obs_layout_spacing(&dialog));
+
+    auto *form = new QFormLayout();
+    auto *title_edit = new QLineEdit(QString::fromStdString(title.name), &dialog);
+    auto *description_edit = new QTextEdit(&dialog);
+    description_edit->setAcceptRichText(false);
+    description_edit->setMinimumHeight(96);
+    auto *creator_edit = new QLineEdit(&dialog);
+
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportTitleLabel"), title_edit);
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportDescriptionLabel"), description_edit);
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportCreatorLabel"), creator_edit);
+    layout->addLayout(form);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        if (title_edit->text().trimmed().isEmpty()) {
+            QMessageBox::warning(&dialog, obsgs_tr("OBSTitles.ExportTemplateDetails"),
+                                 obsgs_tr("OBSTitles.TemplateExportTitleRequired"));
+            return;
+        }
+        dialog.accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    metadata.title = title_edit->text().trimmed().toStdString();
+    metadata.description = description_edit->toPlainText().trimmed().toStdString();
+    metadata.creator = creator_edit->text().trimmed().toStdString();
+    metadata.creation_date = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+    metadata.screenshot_png_base64 = title_screenshot_png_base64(title).toStdString();
+    return true;
 }
 
 struct TemplateLibraryEntry {
@@ -1239,7 +1306,17 @@ void TitleDock::on_export()
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) return;
 
-    QString safe_name = QString::fromStdString(title->name).trimmed();
+    TitleTemplateExportMetadata metadata;
+    if (!prompt_template_export_metadata(this, *title, metadata))
+        return;
+
+    if (metadata.screenshot_png_base64.empty()) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
+                             obsgs_tr("OBSTitles.TemplateScreenshotFailed"));
+        return;
+    }
+
+    QString safe_name = QString::fromStdString(metadata.title).trimmed();
     if (safe_name.isEmpty()) safe_name = obsgs_tr("OBSTitles.TemplateFileDialogTitle");
     safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
 
@@ -1252,7 +1329,7 @@ void TitleDock::on_export()
         path += QStringLiteral(".ogspt");
 
     std::string error;
-    if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), &error)) {
+    if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), metadata, &error)) {
         QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
                              QString::fromStdString(error));
         return;

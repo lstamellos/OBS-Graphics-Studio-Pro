@@ -1032,6 +1032,14 @@ void TitleDataStore::save() const
 
 bool TitleDataStore::export_title(const std::string &id, const std::string &path, std::string *error) const
 {
+    TitleTemplateExportMetadata metadata;
+    return export_title(id, path, metadata, error);
+}
+
+bool TitleDataStore::export_title(const std::string &id, const std::string &path,
+                                  const TitleTemplateExportMetadata &metadata,
+                                  std::string *error) const
+{
     if (error) error->clear();
     auto t = get_title(id);
     if (!t) {
@@ -1041,7 +1049,22 @@ bool TitleDataStore::export_title(const std::string &id, const std::string &path
 
     json root;
     root["format"] = "obs-graphics-studio-pro-title-template";
-    root["version"] = 2;
+    root["version"] = 3;
+    root["template_title"] = metadata.title;
+    root["description"] = metadata.description;
+    root["creator"] = metadata.creator;
+    root["creation_date"] = metadata.creation_date;
+    root["screenshot"] = {
+        {"mime_type", "image/png"},
+        {"data_base64", metadata.screenshot_png_base64},
+    };
+    root["metadata"] = {
+        {"title", metadata.title},
+        {"description", metadata.description},
+        {"creator", metadata.creator},
+        {"creation_date", metadata.creation_date},
+        {"screenshot", root["screenshot"]},
+    };
     json exported_title = title_to_json(*t, true, true, error);
     if ((error && !error->empty()) || exported_title.empty()) {
         if (error && error->empty())
