@@ -28,6 +28,7 @@ static void on_frontend_event(obs_frontend_event event, void *priv);
 /* ── module globals ─────────────────────────────────────────────── */
 static TitleDock *g_dock = nullptr;
 static QAction *g_dock_menu_action = nullptr;
+static bool g_frontend_ready = false;
 
 
 static QMenu *find_docks_menu(QMainWindow *main)
@@ -73,7 +74,7 @@ bool obs_module_load(void)
     title_source_register();
     title_hotkeys_register();
 
-    /* 3. Defer dock creation until the OBS UI is ready */
+    /* 3. Defer dock and hotkey creation until the OBS UI is ready */
     obs_frontend_add_event_callback(on_frontend_event, nullptr);
 
     blog(LOG_INFO, "[OBS Graphics Studio Pro] Plugin loaded.");
@@ -83,6 +84,7 @@ bool obs_module_load(void)
 /* ── module unload ──────────────────────────────────────────────── */
 void obs_module_unload(void)
 {
+    title_hotkeys_unregister();
     TitleDataStore::instance().save();
     obs_frontend_remove_event_callback(on_frontend_event, nullptr);
     title_hotkeys_unregister();
@@ -107,10 +109,22 @@ static void on_frontend_event(obs_frontend_event event, void * /*priv*/)
 
         obs_frontend_add_custom_qdock("obs-graphics-studio-pro-dock", g_dock);
         add_docks_menu_entry(main);
-        blog(LOG_INFO, "[OBS Graphics Studio Pro] Dock registered.");
+        g_frontend_ready = true;
+        title_hotkeys_register();
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] Dock and title cue hotkeys registered.");
+    }
+
+    if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP) {
+        title_hotkeys_unregister();
+    }
+
+    if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED && g_frontend_ready) {
+        title_hotkeys_register();
     }
 
     if (event == OBS_FRONTEND_EVENT_EXIT) {
+        g_frontend_ready = false;
+        title_hotkeys_unregister();
         TitleDataStore::instance().save();
     }
 }

@@ -43,6 +43,7 @@ std::vector<HotkeySection> g_sections;
 std::vector<HotkeyRegistration> g_hotkeys;
 std::string g_hotkey_signature;
 bool g_hotkeys_active = false;
+bool g_change_callback_registered = false;
 
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
@@ -341,7 +342,10 @@ void title_hotkeys_register()
     if (g_hotkeys_active) return;
     g_hotkeys_active = true;
     refresh_hotkeys();
-    TitleDataStore::instance().on_change([]() { refresh_hotkeys(); });
+    if (!g_change_callback_registered) {
+        TitleDataStore::instance().on_change([]() { refresh_hotkeys(); });
+        g_change_callback_registered = true;
+    }
 }
 
 void title_hotkeys_unregister()
