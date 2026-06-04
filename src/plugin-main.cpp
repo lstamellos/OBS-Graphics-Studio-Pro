@@ -6,6 +6,7 @@
 #include "plugin-main.h"
 #include "title-source.h"
 #include "title-dock.h"
+#include "title-hotkeys.h"
 #include "title-data.h"
 #include "title-localization.h"
 #include <obs-module.h>
@@ -68,8 +69,9 @@ bool obs_module_load(void)
     /* 1. Initialise persistent title store */
     TitleDataStore::instance().load();
 
-    /* 2. Register the renderable source type */
+    /* 2. Register the renderable source type and title cue hotkeys */
     title_source_register();
+    title_hotkeys_register();
 
     /* 3. Defer dock creation until the OBS UI is ready */
     obs_frontend_add_event_callback(on_frontend_event, nullptr);
@@ -83,6 +85,7 @@ void obs_module_unload(void)
 {
     TitleDataStore::instance().save();
     obs_frontend_remove_event_callback(on_frontend_event, nullptr);
+    title_hotkeys_unregister();
     if (g_dock_menu_action) {
         delete g_dock_menu_action;
         g_dock_menu_action = nullptr;
