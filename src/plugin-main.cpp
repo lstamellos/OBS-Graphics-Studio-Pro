@@ -14,6 +14,7 @@
 #include <QDockWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QSignalBlocker>
 #include <QString>
 
 OBS_DECLARE_MODULE()
@@ -48,10 +49,14 @@ static void add_docks_menu_entry(QMainWindow *main)
     g_dock_menu_action->setObjectName("obs-graphics-studio-pro-docks-menu-action");
     g_dock_menu_action->setCheckable(true);
     g_dock_menu_action->setChecked(g_dock->isVisible());
-    QObject::connect(g_dock_menu_action, &QAction::toggled, g_dock,
+    QObject::connect(g_dock_menu_action, &QAction::triggered, g_dock,
                      [](bool visible) { if (g_dock) g_dock->setVisible(visible); });
     QObject::connect(g_dock, &QDockWidget::visibilityChanged, g_dock_menu_action,
-                     [](bool visible) { if (g_dock_menu_action) g_dock_menu_action->setChecked(visible); });
+                     [](bool visible) {
+                         if (!g_dock_menu_action) return;
+                         QSignalBlocker blocker(g_dock_menu_action);
+                         g_dock_menu_action->setChecked(visible);
+                     });
 }
 
 /* ── module load ────────────────────────────────────────────────── */
