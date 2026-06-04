@@ -12,6 +12,7 @@
 #include "title-source.h"
 #include "title-data.h"
 #include "plugin-main.h"
+#include "title-localization.h"
 
 #include <obs-module.h>
 #include <graphics/graphics.h>
@@ -20,13 +21,18 @@
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
 #include <QImage>
+#include <QImageReader>
+#include <QSize>
+#include <QSvgRenderer>
 #include <QString>
+#include <QStringList>
 #include <QLocale>
 #include <QPointF>
 #include <QPainter>
 #include <QPainterPath>
 #include <QFont>
 #include <QFontMetrics>
+#include <QFontDatabase>
 #include <QTextLayout>
 #include <QTextOption>
 #include <QDateTime>
@@ -43,6 +49,38 @@
 
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
+
+static bool image_path_is_svg(const QString &path)
+{
+    return path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive) ||
+           path.endsWith(QStringLiteral(".svgz"), Qt::CaseInsensitive);
+}
+
+static QImage load_layer_image(const QString &path, const QSize &fallback_size = QSize())
+{
+    if (image_path_is_svg(path)) {
+        QSvgRenderer renderer(path);
+        if (!renderer.isValid()) return QImage();
+
+        QSize size = fallback_size.isValid() && !fallback_size.isEmpty()
+            ? fallback_size
+            : renderer.defaultSize();
+        if (!size.isValid() || size.isEmpty())
+            size = renderer.viewBox().size();
+        if (!size.isValid() || size.isEmpty())
+            size = QSize(256, 256);
+
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        renderer.render(&painter);
+        return image;
+    }
+
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    return reader.read();
+}
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -68,6 +106,7 @@ struct TitleSourceData {
     std::chrono::steady_clock::time_point last_tick;
     std::chrono::steady_clock::time_point last_clock_refresh;
     bool        first_tick   = true;
+    bool        waiting_for_cue = true;
 
     /* GPU texture */
     gs_texture_t *texture    = nullptr;
@@ -124,6 +163,15 @@ static bool title_has_clock_layer(const std::shared_ptr<Title> &title)
                        });
 }
 
+static bool title_has_ticker_layer(const std::shared_ptr<Title> &title)
+{
+    if (!title) return false;
+    return std::any_of(title->layers.begin(), title->layers.end(),
+                       [](const std::shared_ptr<Layer> &layer) {
+                           return layer && layer->type == LayerType::Ticker;
+                       });
+}
+
 static bool title_has_animation(const std::shared_ptr<Title> &title)
 {
     if (!title) return false;
@@ -138,7 +186,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
-        if (layer->type == LayerType::Text && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
     return exposed;
@@ -167,16 +215,24 @@ static void unpack_color(uint32_t c,
 
 static double eval_box_width(const Layer &layer, double t)
 {
-    return std::max(1.0, layer.box_width.is_animated()
-                         ? layer.box_width.evaluate(t)
-                         : (double)layer.rect_width);
+    const double width = layer.box_width.is_animated()
+        ? layer.box_width.evaluate(t)
+        : static_cast<double>(layer.rect_width);
+    return width < 1.0 ? 1.0 : width;
 }
 
 static double eval_box_height(const Layer &layer, double t)
 {
-    return std::max(1.0, layer.box_height.is_animated()
-                         ? layer.box_height.evaluate(t)
-                         : (double)layer.rect_height);
+    const double height = layer.box_height.is_animated()
+        ? layer.box_height.evaluate(t)
+        : static_cast<double>(layer.rect_height);
+    return height < 1.0 ? 1.0 : height;
+}
+
+static int shadow_pass_count(double blur)
+{
+    const int passes = static_cast<int>(std::ceil(blur / 3.0));
+    return passes < 1 ? 1 : passes;
 }
 
 static double eval_origin_x(const Layer &layer, double t)
@@ -403,6 +459,53 @@ static void apply_text_style_to_font(QFont &font, const Layer &layer)
         font.setPixelSize(std::max(1, (int)std::round(font.pixelSize() * 0.65)));
 }
 
+static QFont font_for_layer(const Layer &layer)
+{
+    const QString family = QString::fromStdString(layer.font_family);
+    const QString style = QString::fromStdString(layer.font_style);
+    QFontDatabase fdb;
+    QFont font = !style.isEmpty()
+        ? fdb.font(family, style, layer.font_size)
+        : QFont(family);
+    font.setFamily(family);
+    font.setPixelSize(layer.font_size);
+    if (!style.isEmpty())
+        font.setStyleName(style);
+    font.setBold(layer.font_bold);
+    font.setItalic(layer.font_italic);
+    font.setUnderline(layer.text_underline);
+    font.setStrikeOut(layer.text_strikethrough);
+    font.setKerning(layer.kerning_mode != 2 && layer.font_kerning);
+    const float effective_tracking = layer.char_tracking + (layer.kerning_mode == 2 ? layer.manual_kerning : 0.0f);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, effective_tracking);
+    font.setStretch(std::clamp((int)std::round(layer.char_scale_x * 100.0f), 1, 4000));
+    apply_text_style_to_font(font, layer);
+    return font;
+}
+
+static QPainterPath apply_vertical_character_scale(const QPainterPath &path, const QRectF &rect,
+                                                   Qt::Alignment alignment, const Layer &layer)
+{
+    double scale_y = std::clamp((double)layer.char_scale_y, 0.1, 5.0);
+    if (std::abs(scale_y - 1.0) < 0.0001)
+        return path;
+
+    QRectF bounds = path.boundingRect();
+    double anchor_y = bounds.top();
+    if (alignment & Qt::AlignVCenter)
+        anchor_y = bounds.center().y();
+    else if (alignment & Qt::AlignBottom)
+        anchor_y = bounds.bottom();
+    else if (!bounds.isEmpty())
+        anchor_y = rect.top();
+
+    QTransform xf;
+    xf.translate(0.0, anchor_y);
+    xf.scale(1.0, scale_y);
+    xf.translate(0.0, -anchor_y);
+    return xf.map(path);
+}
+
 static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
 {
     if (layer.text_style == 3)
@@ -428,7 +531,8 @@ static double horizontal_fit_scale(const QFont &font, const QRectF &rect,
 {
     if (layer.text_overflow_mode != 2) return 1.0;
     QFontMetricsF metrics(font);
-    double natural_width = std::max(1.0, metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    const double text_width = static_cast<double>(metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    double natural_width = std::max(1.0, text_width);
     if (natural_width <= rect.width()) return 1.0;
     return std::clamp(rect.width() / natural_width,
                       std::clamp((double)layer.text_fit_min_scale, 0.05, 1.0),
@@ -488,7 +592,12 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
         layout.endLayout();
     }
     double total_height = 0.0;
-    for (const auto &line : lines) total_height += line.height;
+    const double leading = std::clamp((double)layer.text_leading, -200.0, 500.0);
+    for (size_t i = 0; i < lines.size(); ++i) {
+        total_height += lines[i].height;
+        if (i + 1 < lines.size())
+            total_height += leading;
+    }
     double y = rect.top();
     if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - total_height) / 2.0;
     else if (alignment & Qt::AlignBottom) y = rect.bottom() - total_height;
@@ -497,7 +606,89 @@ static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
         if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line.width) / 2.0;
         else if (alignment & Qt::AlignRight) x = rect.right() - line.width;
         path.addText(QPointF(x, y + line.ascent), font, line.text);
-        y += line.height;
+        y += line.height + leading;
+    }
+    return path;
+}
+
+
+static double ticker_time_seconds()
+{
+    return QDateTime::currentMSecsSinceEpoch() / 1000.0;
+}
+
+static QStringList ticker_lines(const QString &text)
+{
+    QString normalized = text;
+    normalized.replace('\r', '\n');
+    QStringList raw_lines = normalized.split('\n');
+    QStringList lines;
+    for (const QString &line : raw_lines) {
+        if (!line.trimmed().isEmpty())
+            lines << line;
+    }
+    if (lines.isEmpty()) lines << QString();
+    return lines;
+}
+
+static QPainterPath ticker_text_path(const QFont &font, const QRectF &rect,
+                                     Qt::Alignment alignment, const QString &text,
+                                     const Layer &layer)
+{
+    QPainterPath path;
+    QFontMetricsF metrics(font);
+    const double speed = std::max(1.0, layer.ticker_speed);
+    const double now = ticker_time_seconds();
+
+    if (layer.ticker_style == 0) {
+        QString single = text;
+        single.replace('\r', ' ');
+        single.replace('\n', QStringLiteral("     •     "));
+        QRectF bounds = metrics.boundingRect(single);
+        const double text_w = std::max(1.0, bounds.width());
+        const double travel = rect.width() + text_w;
+        const double progress = std::fmod(now * speed, travel);
+        const double x = layer.ticker_direction == 0
+            ? rect.left() - text_w + progress
+            : rect.right() - progress;
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(x, y), font, single);
+        return path;
+    }
+
+    const QStringList lines = ticker_lines(text);
+    const int line_count = std::max(1, static_cast<int>(lines.size()));
+    const double line_h = std::max(1.0, metrics.lineSpacing() + std::clamp((double)layer.text_leading, -200.0, 500.0));
+    if (layer.ticker_style == 1) {
+        const double hold = std::max(0.1, layer.ticker_line_hold);
+        int idx = (int)std::floor(now / hold) % line_count;
+        if (layer.ticker_direction == 0) idx = line_count - 1 - idx;
+        QString line = lines.at(idx);
+        double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        QRectF bounds = metrics.boundingRect(line);
+        double y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        path.addText(QPointF(x, y), font, line);
+        return path;
+    }
+
+    const double content_h = line_count * line_h;
+    const double travel = rect.height() + content_h;
+    const double progress = std::fmod(now * speed, travel);
+    double y = layer.ticker_direction == 0
+        ? rect.top() - content_h + progress
+        : rect.bottom() - progress;
+    for (const QString &line : lines) {
+        double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        path.addText(QPointF(x, y + metrics.ascent()), font, line);
+        y += line_h;
     }
     return path;
 }
@@ -537,15 +728,12 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     text_image.fill(Qt::transparent);
 
     QPainter painter(&text_image);
+    const bool previous_shape_aa = painter.testRenderHint(QPainter::Antialiasing);
+    const bool previous_text_aa = painter.testRenderHint(QPainter::TextAntialiasing);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
-    QFont font(QString::fromStdString(layer.font_family));
-    font.setPixelSize(layer.font_size);
-    font.setBold(layer.font_bold);
-    font.setItalic(layer.font_italic);
-    font.setKerning(true);
-    apply_text_style_to_font(font, layer);
+    QFont font = font_for_layer(layer);
     painter.setFont(font);
 
     QRectF text_rect = text_rect_for_style(QRectF(pad, pad, box_w, box_h), layer);
@@ -557,12 +745,17 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (layer.align_h == 2) align = (align & ~Qt::AlignHorizontal_Mask) | Qt::AlignRight;
     if (layer.align_v == 0) align = (align & ~Qt::AlignVertical_Mask) | Qt::AlignTop;
     if (layer.align_v == 2) align = (align & ~Qt::AlignVertical_Mask) | Qt::AlignBottom;
-    QPainterPath text_path = text_overflow_path(font, text_rect, align, text, layer);
+    QPainterPath text_path = layer.type == LayerType::Ticker
+        ? ticker_text_path(font, text_rect, align, text, layer)
+        : text_overflow_path(font, text_rect, align, text, layer);
+    text_path = apply_vertical_character_scale(text_path, text_rect, align, layer);
+    if (std::abs(layer.baseline_shift) > 0.0001)
+        text_path.translate(0.0, -layer.baseline_shift);
 
     if (eval_shadow_enabled(layer, t)) {
         QColor shadow = color_from_argb(eval_shadow_color(layer, t));
         shadow.setAlphaF(std::clamp((double)shadow.alphaF() * eval_shadow_opacity(layer, t), 0.0, 1.0));
-        int passes = std::max(1, (int)std::ceil(blur / 3.0));
+        int passes = shadow_pass_count(blur);
         for (int pass = passes; pass >= 1; --pass) {
             QColor pass_color = shadow;
             pass_color.setAlphaF(shadow.alphaF() / passes);
@@ -597,6 +790,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (!eval_outline_on_front(layer, t)) draw_text_outline();
     draw_text_fill();
     if (eval_outline_on_front(layer, t)) draw_text_outline();
+    painter.setRenderHint(QPainter::TextAntialiasing, previous_text_aa);
+    painter.setRenderHint(QPainter::Antialiasing, previous_shape_aa);
     painter.restore();
     painter.end();
 
@@ -645,7 +840,7 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
     if (eval_shadow_enabled(layer, t)) {
         double sr, sg, sb, sa;
         unpack_color(eval_shadow_color(layer, t), sr, sg, sb, sa);
-        int passes = std::max(1, (int)std::ceil(blur / 3.0));
+        int passes = shadow_pass_count(blur);
         for (int pass = passes; pass >= 1; --pass) {
             double radius = blur * pass / passes;
             double grow = spread + radius;
@@ -713,11 +908,6 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
 {
     if (layer.image_path.empty()) return;
 
-    QImage image(QString::fromStdString(layer.image_path));
-    if (image.isNull()) return;
-
-    QImage argb = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-
     double px = layer.pos_x.evaluate(t);
     double py = layer.pos_y.evaluate(t);
     double sx = layer.scale_x.evaluate(t);
@@ -726,6 +916,16 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
     double alpha = layer.opacity.evaluate(t);
     double w = eval_box_width(layer, t);
     double h = eval_box_height(layer, t);
+    if (w <= 0.0 || h <= 0.0) return;
+
+    QImage image = load_layer_image(QString::fromStdString(layer.image_path),
+                                    QSize(std::max(1, (int)std::ceil(w)),
+                                          std::max(1, (int)std::ceil(h))));
+    if (image.isNull()) return;
+
+    QImage argb = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    if (argb.width() <= 0 || argb.height() <= 0) return;
+
 
     cairo_surface_t *img_surface = cairo_image_surface_create_for_data(
         argb.bits(), CAIRO_FORMAT_ARGB32,
@@ -790,6 +990,7 @@ static void render_title_frame(TitleSourceData *data,
         switch (layer->type) {
         case LayerType::Text:
         case LayerType::Clock:
+        case LayerType::Ticker:
             render_layer_text(cr, *layer, lt, (int)w, (int)h);
             break;
         case LayerType::SolidRect:
@@ -823,7 +1024,7 @@ static void render_title_frame(TitleSourceData *data,
  * ══════════════════════════════════════════════════════════════════ */
 static const char *source_get_name(void *)
 {
-    return "OBS Graphics Studio Pro";
+    return obsgs_tr_c("OBSTitles.SourceName");
 }
 
 static void *source_create(obs_data_t *settings, obs_source_t *source)
@@ -835,6 +1036,11 @@ static void *source_create(obs_data_t *settings, obs_source_t *source)
     data->speed     = (float)obs_data_get_double(settings, PROP_SPEED);
     data->last_tick = std::chrono::steady_clock::now();
     data->last_clock_refresh = data->last_tick;
+    if (auto title = TitleDataStore::instance().get_title(data->title_id))
+        data->seen_cue_revision = title->cue_revision;
+    data->playing = false;
+    data->waiting_for_cue = true;
+    data->dirty = true;
     return data;
 }
 
@@ -855,7 +1061,13 @@ static void source_update(void *priv, obs_data_t *settings)
     data->speed    = (float)obs_data_get_double(settings, PROP_SPEED);
     data->playhead = 0.0;
     data->playback_reverse = false;
-    data->playing = true;
+    data->cue_phase = TitleSourceData::CuePhase::FreeRun;
+    data->playing = false;
+    data->waiting_for_cue = true;
+    if (auto title = TitleDataStore::instance().get_title(data->title_id))
+        data->seen_cue_revision = title->cue_revision;
+    else
+        data->seen_cue_revision = 0;
     data->last_clock_refresh = std::chrono::steady_clock::now();
     data->dirty    = true;
 }
@@ -910,11 +1122,13 @@ static void source_video_tick(void *priv, float seconds)
         }
         data->seen_cue_revision = title->cue_revision;
         data->playback_reverse = false;
+        data->waiting_for_cue = false;
         data->playing = true;
         data->dirty = true;
     }
 
     const bool has_clock_layer = title_has_clock_layer(title);
+    const bool has_ticker_layer = title_has_ticker_layer(title);
     const bool has_timeline_animation = title_has_animation(title);
     const bool static_clock_title = has_clock_layer && !has_timeline_animation;
 
@@ -999,7 +1213,10 @@ static void source_video_tick(void *priv, float seconds)
     }
 
 
-    if (static_clock_title || (!data->playing && has_clock_layer)) {
+    if (!data->waiting_for_cue && has_ticker_layer)
+        data->dirty = true;
+
+    if (!data->waiting_for_cue && (static_clock_title || (!data->playing && has_clock_layer))) {
         auto now = std::chrono::steady_clock::now();
         if (now - data->last_clock_refresh >= std::chrono::seconds(1)) {
             data->last_clock_refresh = now;
@@ -1037,16 +1254,16 @@ static obs_properties_t *source_get_properties(void * /*priv*/)
 
     /* Title selector */
     obs_property_t *p = obs_properties_add_list(
-        props, PROP_TITLE_ID, "Title",
+        props, PROP_TITLE_ID, obsgs_tr_c("OBSTitles.TitleID"),
         OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 
-    obs_property_list_add_string(p, "(none)", "");
+    obs_property_list_add_string(p, obsgs_tr_c("OBSTitles.NoTitle"), "");
     for (auto &t : TitleDataStore::instance().titles())
         obs_property_list_add_string(p, t->name.c_str(), t->id.c_str());
 
-    obs_properties_add_bool(props,   PROP_LOOP,  "Loop");
+    obs_properties_add_bool(props,   PROP_LOOP,  obsgs_tr_c("OBSTitles.Loop"));
     obs_properties_add_float_slider(props, PROP_SPEED,
-        "Playback Speed", 0.1, 4.0, 0.05);
+        obsgs_tr_c("OBSTitles.Speed"), 0.1, 4.0, 0.05);
 
     return props;
 }

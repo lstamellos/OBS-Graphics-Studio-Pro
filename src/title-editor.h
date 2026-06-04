@@ -44,6 +44,8 @@
 #include <QPoint>
 #include <QRectF>
 #include <memory>
+#include <string>
+#include <vector>
 
 /* Forward declarations for sub-widgets */
 class CanvasPreview;
@@ -54,8 +56,10 @@ class TitlePropertiesPanel;
 class QEvent;
 class QKeyEvent;
 class QContextMenuEvent;
+class QResizeEvent;
 class QAction;
 class QToolButton;
+class QScrollBar;
 
 /* ══════════════════════════════════════════════════════════════════
  *  TitleEditor  – main editor window
@@ -92,6 +96,7 @@ protected:
 
 private slots:
     void tick();
+    void show_about();
 
 private:
     void build_ui();
@@ -142,7 +147,7 @@ private:
     QAction         *act_safe_guides_ = nullptr;
     QAction         *act_undo_ = nullptr;
     QAction         *act_redo_ = nullptr;
-    int              alignment_target_ = 2; /* 0=selection, 2=artboard/canvas */
+    int              alignment_target_ = 3; /* 0=selection, 1=title safe guides, 2=action safe guides, 3=artboard/canvas */
     std::vector<std::shared_ptr<Title>> undo_stack_;
     int              undo_index_ = -1;
     bool             restoring_undo_ = false;
@@ -161,12 +166,19 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void set_playhead(double t);
     void set_selected_layer(const std::string &lid);
+    void set_selected_layers(const std::vector<std::string> &ids);
     void set_safe_guides_visible(bool visible);
     void refresh_preview();
+    void set_zoom_percent(int percent);
+    int zoom_percent() const;
+    void fit_canvas(bool up_to_100 = false);
+    void set_checkerboard_pattern(int pattern);
 
 signals:
     void layer_clicked(const std::string &layer_id);
+    void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_geometry_changed();
+    void zoom_percent_changed(int percent);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -177,30 +189,49 @@ protected:
     void resizeEvent(QResizeEvent *ev) override;
 
 private:
-    enum class DragMode { None, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
+    enum class DragMode { None, Marquee, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
 
     void render_to_pixmap();
     std::shared_ptr<Layer> selected_layer() const;
+    std::vector<std::shared_ptr<Layer>> selected_layers() const;
     QRectF layer_local_rect(const Layer &layer) const;
+    double fit_scale() const;
     double view_scale() const;
+    QPointF centered_view_origin() const;
     QPointF view_origin() const;
     QPointF view_to_canvas(const QPointF &view_pt) const;
     QPointF canvas_to_view(const QPointF &canvas_pt) const;
     QPointF canvas_to_layer(const Layer &layer, const QPointF &canvas_pt) const;
     QPointF layer_to_canvas(const Layer &layer, const QPointF &layer_pt) const;
     DragMode hit_test_selected(const QPointF &view_pt) const;
+    QRectF layer_canvas_bounds(const Layer &layer) const;
+    QRectF selected_canvas_bounds() const;
+    void begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
+    void update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
     void apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
 
     std::shared_ptr<Title> title_;
     std::string sel_layer_id_;
+    std::vector<std::string> selected_layer_ids_;
     double playhead_ = 0.0;
-    float  zoom_     = 1.0f;
+    int zoom_percent_ = 100;
+    bool fit_zoom_active_ = true;
+    bool fit_zoom_up_to_100_ = false;
+    QPointF pan_offset_;
+    bool panning_ = false;
+    QPointF pan_start_view_;
+    QPointF pan_start_offset_;
     QPixmap frame_pixmap_;
     bool dirty_ = true;
     bool safe_guides_visible_ = false;
+    int checkerboard_pattern_ = 1;
 
     DragMode drag_mode_ = DragMode::None;
     bool drag_changed_ = false;
+    bool marquee_active_ = false;
+    QPointF drag_start_view_;
+    QPointF drag_current_view_;
+    std::vector<std::string> marquee_base_selection_;
     QPointF drag_start_canvas_;
     double drag_start_x_ = 0.0;
     double drag_start_y_ = 0.0;
@@ -208,6 +239,15 @@ private:
     float drag_start_h_ = 1.0f;
     float drag_start_origin_x_ = 0.5f;
     float drag_start_origin_y_ = 0.5f;
+    QRectF drag_start_selection_bounds_;
+    struct LayerDragState {
+        std::string id;
+        double x = 0.0;
+        double y = 0.0;
+        float w = 1.0f;
+        float h = 1.0f;
+    };
+    std::vector<LayerDragState> drag_layer_states_;
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -222,11 +262,14 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void refresh();
     void set_selected_layer(const std::string &layer_id);
+    void set_selected_layers(const std::vector<std::string> &layer_ids);
     void set_layer_clipboard_available(bool available);
+    QScrollBar *vertical_scroll_bar() const;
     std::vector<std::string> selected_ids() const;
 
 signals:
     void layer_selected(const std::string &layer_id);
+    void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_visibility_changed(const std::string &layer_id, bool v);
     void layer_lock_changed(const std::string &layer_id, bool locked);
     void layer_expand_changed(const std::string &layer_id, bool expanded);
@@ -239,9 +282,13 @@ signals:
     void paste_layer_requested(const std::string &layer_id);
     void delete_layer_requested(const std::string &layer_id);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private slots:
     void on_add_text();
     void on_add_clock();
+    void on_add_ticker();
     void on_add_rect();
     void on_add_image();
     void on_move_up();
@@ -277,6 +324,10 @@ public:
     void set_title(std::shared_ptr<Title> t);
     void set_selected_layer(const std::string &lid);
     void set_playhead(double t);
+    void set_vertical_scroll(int scroll_y);
+    void set_zoom_percent(int percent);
+    int zoom_percent() const;
+    void fit_timeline();
 
 signals:
     void playhead_changed(double t);
@@ -285,6 +336,9 @@ signals:
     void keyframe_moved(const std::string &layer_id,
                         const std::string &prop_name, int kf_idx, double new_t);
     void keyframe_easing_changed();
+    void vertical_scroll_delta_requested(int delta);
+    void zoom_percent_changed(int percent);
+    void layer_selected(const std::string &layer_id);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -293,21 +347,27 @@ protected:
     void mouseReleaseEvent(QMouseEvent *ev) override;
     void contextMenuEvent(QContextMenuEvent *ev) override;
     void wheelEvent(QWheelEvent *ev) override;
+    void resizeEvent(QResizeEvent *ev) override;
 
 private:
     double x_to_time(int x) const;
     int    time_to_x(double t) const;
     int    ruler_height() const { return 72; }
-    int    row_height()   const { return 24; }
+    int    row_height()   const { return 28; }
     double snap_time(double t) const;
     void   clamp_scroll();
+    void   clamp_vertical_scroll();
+    int    max_vertical_scroll() const;
     bool   hit_keyframe(const QPoint &pos, std::shared_ptr<Layer> *layer,
                         AnimatedProperty **prop, int *kf_idx, int *row_idx) const;
+    bool   keep_playhead_visible();
+    void   set_pixels_per_sec(double pixels_per_sec, double anchor_time, int anchor_x);
 
     enum class DragMode { None, Playhead, Keyframe, TrimIn, TrimOut, Layer, LoopStart, LoopEnd, PauseMarker };
 
     std::shared_ptr<Title> title_;
     std::string sel_layer_id_;
+    bool fit_on_next_resize_ = false;
     double playhead_  = 0.0;
     DragMode drag_mode_ = DragMode::None;
     std::string drag_layer_id_;
@@ -318,6 +378,7 @@ private:
     double drag_start_out_ = 0.0;
     double pixels_per_sec_ = 80.0;
     int    scroll_x_       = 0;
+    int    scroll_y_       = 0;
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -341,7 +402,6 @@ private:
     QComboBox      *cmb_playback_mode_ = nullptr;
     QComboBox      *cmb_loop_type_ = nullptr;
     QSpinBox       *spn_pause_frame_ = nullptr;
-    QDoubleSpinBox *spn_pause_time_ = nullptr;
     QDoubleSpinBox *spn_duration_ = nullptr;
     QDoubleSpinBox *spn_loop_start_ = nullptr;
     QDoubleSpinBox *spn_loop_end_ = nullptr;
@@ -375,18 +435,46 @@ private:
     bool loading_values_ = false;
 
     QGroupBox       *text_box_     = nullptr;
+    QGroupBox       *type_options_box_ = nullptr;
+    QGroupBox       *paragraph_box_ = nullptr;
+    QGroupBox       *dynamic_text_box_ = nullptr;
+    QGroupBox       *bullets_box_ = nullptr;
     QGroupBox       *rect_box_     = nullptr;
     QGroupBox       *image_box_    = nullptr;
 
     /* Text controls */
     QTextEdit       *txt_content_  = nullptr;
     QComboBox       *cmb_font_     = nullptr;
+    QComboBox       *cmb_font_style_ = nullptr;
     QSpinBox        *spn_size_     = nullptr;
-    QCheckBox       *chk_bold_     = nullptr;
-    QCheckBox       *chk_italic_   = nullptr;
+    QToolButton     *chk_bold_     = nullptr;
+    QToolButton     *chk_italic_   = nullptr;
+    QToolButton     *chk_font_kerning_ = nullptr;
+    QComboBox       *cmb_kerning_mode_ = nullptr;
+    QDoubleSpinBox  *spn_kerning_value_ = nullptr;
+    QDoubleSpinBox  *spn_text_leading_ = nullptr;
+    QDoubleSpinBox  *spn_char_tracking_ = nullptr;
+    QDoubleSpinBox  *spn_char_scale_x_ = nullptr;
+    QDoubleSpinBox  *spn_char_scale_y_ = nullptr;
+    QDoubleSpinBox  *spn_baseline_shift_ = nullptr;
+    QComboBox       *cmb_language_ = nullptr;
     QComboBox       *cmb_text_style_ = nullptr;
+    QToolButton     *btn_all_caps_ = nullptr;
+    QToolButton     *btn_small_caps_ = nullptr;
+    QToolButton     *btn_superscript_ = nullptr;
+    QToolButton     *btn_subscript_ = nullptr;
+    QToolButton     *btn_underline_ = nullptr;
+    QToolButton     *btn_strikethrough_ = nullptr;
+    QToolButton     *btn_ligatures_ = nullptr;
+    QToolButton     *btn_stylistic_alternates_ = nullptr;
+    QToolButton     *btn_fractions_ = nullptr;
+    QToolButton     *btn_opentype_features_ = nullptr;
     QComboBox       *cmb_text_overflow_ = nullptr;
     QDoubleSpinBox  *spn_text_fit_min_scale_ = nullptr;
+    QComboBox       *cmb_ticker_style_ = nullptr;
+    QDoubleSpinBox  *spn_ticker_speed_ = nullptr;
+    QDoubleSpinBox  *spn_ticker_line_hold_ = nullptr;
+    QComboBox       *cmb_ticker_direction_ = nullptr;
     QLabel          *lbl_text_fit_scale_ = nullptr;
     QCheckBox       *chk_expose_text_ = nullptr;
     QComboBox       *cmb_text_align_ = nullptr;

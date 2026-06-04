@@ -81,6 +81,7 @@ enum class LayerType {
     Image,
     Shape,      /* future: polygon / ellipse */
     Clock,
+    Ticker,
 };
 
 /* ══════════════════════════════════════════════════════════════════
@@ -112,12 +113,39 @@ struct Layer {
     std::string clock_format  = "H:i:s";  /* PHP date()-style format for clock layers */
     bool        expose_text    = false;
     std::string font_family   = "Helvetica Neue";
+    std::string font_style    = "Regular";
     int         font_size     = 72;
     bool        font_bold     = false;
     bool        font_italic   = false;
+    bool        font_kerning  = true;
+    int         kerning_mode  = 0;  /* 0=metrics, 1=optical, 2=manual */
+    float       manual_kerning = 0.0f;
+    float       text_leading  = 0.0f;
+    float       char_tracking = 0.0f;
+    float       char_scale_x  = 1.0f;
+    float       char_scale_y  = 1.0f;
+    float       baseline_shift = 0.0f;
     int         text_style    = 0;  /* 0=normal, 1=all caps, 2=small caps, 3=superscript, 4=subscript */
+    bool        text_underline = false;
+    bool        text_strikethrough = false;
+    bool        text_ligatures = true;
+    bool        text_stylistic_alternates = false;
+    bool        text_fractions = false;
+    bool        text_opentype_features = false;
+    std::string text_language = "English";
     int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
     float       text_fit_min_scale = 0.5f;
+
+    /* ----- Ticker-specific -----
+     * style: 0=horizontal scrolling, 1=vertical line-by-line, 2=vertical smooth.
+     * direction: horizontal 0=left-to-right, 1=right-to-left; vertical 0=top-to-bottom, 1=bottom-to-top.
+     * speed is pixels/second. line_hold is seconds between line-by-line moves.
+     */
+    int         ticker_style = 0;
+    double      ticker_speed = 120.0;
+    double      ticker_line_hold = 2.0;
+    int         ticker_direction = 1;
+
     uint32_t    text_color    = 0xFFFFFFFF;  /* ARGB */
 
     /* ----- Outline shared by text and solid/shape layers ----- */

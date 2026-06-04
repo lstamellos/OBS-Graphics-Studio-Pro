@@ -6,17 +6,21 @@
 #include "title-editor.h"
 #include "title-data.h"
 #include "title-source.h"
+#include "title-assets.h"
+#include "title-localization.h"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QMenu>
 #include <QMessageBox>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QStyle>
+#include <QStyleOptionButton>
 #include <QToolButton>
 #include <QToolBar>
 #include <QPushButton>
@@ -26,12 +30,17 @@
 #include <QStringList>
 #include <QHeaderView>
 #include <QLineEdit>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QTableWidgetItem>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <algorithm>
+#include <functional>
+#include <numeric>
 
 namespace {
 
@@ -40,7 +49,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
-        if (layer->type == LayerType::Text && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
     return exposed;
@@ -48,11 +57,11 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
 
 static QString live_text_layer_header(const std::shared_ptr<Layer> &layer)
 {
-    if (!layer) return QStringLiteral("Text");
+    if (!layer) return obsgs_tr("OBSTitles.Text");
     QString name = QString::fromStdString(layer->name).trimmed();
     if (!name.isEmpty()) return name;
     name = QString::fromStdString(layer->text_content).trimmed();
-    return name.isEmpty() ? QStringLiteral("Text") : name;
+    return name.isEmpty() ? obsgs_tr("OBSTitles.Text") : name;
 }
 
 static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
@@ -73,20 +82,14 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
     }
 }
 
-static void move_live_row_marker(int &marker, int from, int to)
+static QIcon obs_icon(const char *file_name)
 {
-    if (marker == from) marker = to;
-    else if (marker == to) marker = from;
+    return obsgs_icon(file_name);
 }
 
-
-static QIcon obs_icon(QWidget *widget, const QStringList &names, QStyle::StandardPixmap fallback)
+static std::string obs_text_std(const char *key)
 {
-    for (const QString &name : names) {
-        QIcon icon = QIcon::fromTheme(name);
-        if (!icon.isNull()) return icon;
-    }
-    return widget ? widget->style()->standardIcon(fallback) : QIcon();
+    return obsgs_tr(key).toStdString();
 }
 
 static int obs_toolbar_icon_extent(QWidget *widget)
@@ -145,13 +148,106 @@ static void set_bold_label(QLabel *label)
     label->setFont(font);
 }
 
+
+class LiveTextCueTable : public QTableWidget {
+public:
+    explicit LiveTextCueTable(QWidget *parent = nullptr)
+        : QTableWidget(parent)
+    {
+        setMouseTracking(false);
+        viewport()->setMouseTracking(false);
+    }
+
+protected:
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (event && event->buttons() == Qt::NoButton)
+            return;
+        QTableWidget::mouseMoveEvent(event);
+    }
+};
+
+class LiveTextCueHeader : public QHeaderView {
+public:
+    explicit LiveTextCueHeader(QWidget *parent = nullptr)
+        : QHeaderView(Qt::Horizontal, parent)
+    {
+        setSectionsMovable(true);
+        setSectionsClickable(true);
+        setSectionResizeMode(QHeaderView::Interactive);
+    }
+
+    void set_select_all_checked(bool checked)
+    {
+        if (select_all_checked_ == checked) return;
+        select_all_checked_ = checked;
+        viewport()->update();
+    }
+
+    void set_select_all_visible(bool visible)
+    {
+        if (select_all_visible_ == visible) return;
+        select_all_visible_ = visible;
+        viewport()->update();
+    }
+
+    std::function<void(bool)> select_all_toggled;
+
+protected:
+    void paintSection(QPainter *painter, const QRect &rect, int logicalIndex) const override
+    {
+        QHeaderView::paintSection(painter, rect, logicalIndex);
+        if (logicalIndex != 0 || !select_all_visible_) return;
+
+        QStyleOptionButton option;
+        option.state = QStyle::State_Enabled | (select_all_checked_ ? QStyle::State_On : QStyle::State_Off);
+        option.rect = checkbox_rect(rect);
+        style()->drawControl(QStyle::CE_CheckBox, &option, painter, this);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (select_all_visible_ && event && event->button() == Qt::LeftButton && logicalIndexAt(event->pos()) == 0) {
+            const QRect section_rect(sectionViewportPosition(0), 0, sectionSize(0), height());
+            if (checkbox_rect(section_rect).contains(event->pos())) {
+                select_all_checked_ = !select_all_checked_;
+                viewport()->update();
+                if (select_all_toggled)
+                    select_all_toggled(select_all_checked_);
+                return;
+            }
+        }
+
+        QHeaderView::mousePressEvent(event);
+    }
+
+private:
+    QRect checkbox_rect(const QRect &section_rect) const
+    {
+        const int indicator_width = style()->pixelMetric(QStyle::PM_IndicatorWidth, nullptr, this);
+        const int indicator_height = style()->pixelMetric(QStyle::PM_IndicatorHeight, nullptr, this);
+        return QRect(section_rect.x() + (section_rect.width() - indicator_width) / 2,
+                     section_rect.y() + (section_rect.height() - indicator_height) / 2,
+                     indicator_width,
+                     indicator_height);
+    }
+
+    bool select_all_checked_ = false;
+    bool select_all_visible_ = true;
+};
+
+static LiveTextCueHeader *live_text_cue_header(QTableWidget *table)
+{
+    return table ? dynamic_cast<LiveTextCueHeader *>(table->horizontalHeader()) : nullptr;
+}
+
 } // namespace
 
 /* ══════════════════════════════════════════════════════════════════
  *  Constructor
  * ══════════════════════════════════════════════════════════════════ */
 TitleDock::TitleDock(QWidget *parent)
-    : QDockWidget("OBS Graphics Studio Pro", parent)
+    : QDockWidget(obsgs_tr("OBSTitles.DockName"), parent)
 {
     setFeatures(QDockWidget::DockWidgetMovable |
                 QDockWidget::DockWidgetFloatable);
@@ -200,41 +296,47 @@ void TitleDock::build_ui()
     template_layout->setSpacing(obs_layout_spacing(template_section));
 
     /* ── header toolbar ── */
-    auto *toolbar = make_obs_dock_toolbar(template_section);
+    auto *template_toolbar = make_obs_dock_toolbar(template_section);
 
-    btn_add_ = make_obs_dock_tool_button(toolbar, "Add", obs_icon(toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
-                                         "Add a blank title or create one from a template");
-    btn_import_ = make_obs_dock_tool_button(toolbar, "Import", obs_icon(toolbar, {"document-open", "go-down"}, QStyle::SP_DialogOpenButton),
-                                            "Import a title template file");
-    btn_dup_ = make_obs_dock_tool_button(toolbar, "Duplicate", obs_icon(toolbar, {"edit-copy"}, QStyle::SP_FileDialogDetailedView),
-                                         "Duplicate");
-    btn_del_ = make_obs_dock_tool_button(toolbar, "Delete", obs_icon(toolbar, {"edit-delete", "user-trash"}, QStyle::SP_TrashIcon),
-                                         "Delete");
-    btn_rename_ = make_obs_dock_tool_button(toolbar, "Rename", obs_icon(toolbar, {"edit-rename", "document-edit"}, QStyle::SP_FileDialogInfoView),
-                                            "Rename selected title template");
-    btn_export_ = make_obs_dock_tool_button(toolbar, "Export", obs_icon(toolbar, {"document-save", "go-up"}, QStyle::SP_DialogSaveButton),
-                                            "Export selected title template to a file");
-    btn_edit_ = make_obs_dock_tool_button(toolbar, "Edit", obs_icon(toolbar, {"document-edit"}, QStyle::SP_FileDialogDetailedView),
-                                          "Open title editor");
-    btn_scene_ = make_obs_dock_tool_button(toolbar, "Add to Scene", obs_icon(toolbar, {"media-playback-start", "list-add"}, QStyle::SP_MediaPlay),
-                                           "Add selected title to current scene");
+    btn_add_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Add"), obs_icon("add.svg"),
+                                         obsgs_tr("OBSTitles.AddTooltip"));
+    btn_import_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Import"), obs_icon("import.svg"),
+                                            obsgs_tr("OBSTitles.ImportTooltip"));
+    btn_dup_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Duplicate"), obs_icon("duplicate.svg"),
+                                         obsgs_tr("OBSTitles.Duplicate"));
+    btn_del_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Delete"), obs_icon("delete.svg"),
+                                         obsgs_tr("OBSTitles.Delete"));
+    btn_rename_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Rename"), obs_icon("rename.svg"),
+                                            obsgs_tr("OBSTitles.RenameTooltip"));
+    btn_export_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Export"), obs_icon("export.svg"),
+                                            obsgs_tr("OBSTitles.ExportTooltip"));
+    btn_edit_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.Edit"), obs_icon("edit.svg"),
+                                          obsgs_tr("OBSTitles.EditTooltip"));
+    btn_scene_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.AddToScene"), obs_icon("add-to-scene.svg"),
+                                           obsgs_tr("OBSTitles.AddToSceneTooltip"));
 
-    toolbar->addWidget(btn_add_);
-    toolbar->addWidget(btn_import_);
-    toolbar->addSeparator();
-    toolbar->addWidget(btn_dup_);
-    toolbar->addWidget(btn_del_);
-    toolbar->addWidget(toolbar_spacer(toolbar));
-    toolbar->addWidget(btn_rename_);
-    toolbar->addWidget(btn_export_);
-    toolbar->addWidget(btn_edit_);
-    toolbar->addWidget(btn_scene_);
-    template_layout->addWidget(toolbar);
+    template_toolbar->addWidget(btn_add_);
+    template_toolbar->addWidget(btn_import_);
+    template_toolbar->addSeparator();
+    template_toolbar->addWidget(btn_dup_);
+    template_toolbar->addWidget(btn_del_);
+    template_toolbar->addWidget(toolbar_spacer(template_toolbar));
+    template_toolbar->addWidget(btn_rename_);
+    template_toolbar->addWidget(btn_export_);
+    template_toolbar->addWidget(btn_edit_);
+    template_toolbar->addWidget(btn_scene_);
 
     /* ── template/title section ── */
-    auto *template_lbl = new QLabel("Title templates", template_section);
+    auto *template_header = new QHBoxLayout();
+    template_header->setContentsMargins(0, 0, 0, 0);
+    template_header->setSpacing(0);
+
+    auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
     set_bold_label(template_lbl);
-    template_layout->addWidget(template_lbl);
+    template_header->addWidget(template_lbl);
+    template_header->addStretch();
+    template_header->addWidget(template_toolbar);
+    template_layout->addLayout(template_header);
 
     list_ = new QListWidget(template_section);
     list_->setAlternatingRowColors(true);
@@ -252,36 +354,43 @@ void TitleDock::build_ui()
     live_header->setSpacing(0);
 
     /* ── exposed text section ── */
-    text_editor_lbl_ = new QLabel("Live text", live_section);
+    text_editor_lbl_ = new QLabel(obsgs_tr("OBSTitles.LiveText"), live_section);
     set_bold_label(text_editor_lbl_);
 
     auto *live_toolbar = make_obs_dock_toolbar(live_section);
-    btn_row_up_ = make_obs_dock_tool_button(live_toolbar, "Move Up", obs_icon(live_toolbar, {"go-up", "arrow-up"}, QStyle::SP_ArrowUp),
-                                            "Move selected cue row up");
-    btn_row_down_ = make_obs_dock_tool_button(live_toolbar, "Move Down", obs_icon(live_toolbar, {"go-down", "arrow-down"}, QStyle::SP_ArrowDown),
-                                              "Move selected cue row down");
-    btn_add_text_row_ = make_obs_dock_tool_button(live_toolbar, "Add Row", obs_icon(live_toolbar, {"list-add", "document-new"}, QStyle::SP_FileIcon),
-                                                  "Add another live text cue row");
+    btn_add_text_row_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.AddRow"), obs_icon("add.svg"),
+                                                  obsgs_tr("OBSTitles.AddCueRowTooltip"));
+    btn_delete_text_row_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.Delete"), obs_icon("delete.svg"),
+                                                     obsgs_tr("OBSTitles.DeleteCueTooltip"));
+    btn_row_up_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.MoveUp"), obs_icon("move-up.svg"),
+                                            obsgs_tr("OBSTitles.MoveCueUpTooltip"));
+    btn_row_down_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.MoveDown"), obs_icon("move-down.svg"),
+                                              obsgs_tr("OBSTitles.MoveCueDownTooltip"));
+    live_toolbar->addWidget(btn_add_text_row_);
+    live_toolbar->addWidget(btn_delete_text_row_);
     live_toolbar->addWidget(btn_row_up_);
     live_toolbar->addWidget(btn_row_down_);
-    live_toolbar->addWidget(btn_add_text_row_);
 
     live_header->addWidget(text_editor_lbl_);
     live_header->addStretch();
-    live_header->addWidget(live_toolbar);
     live_layout->addLayout(live_header);
 
-    text_table_ = new QTableWidget(live_section);
+    text_table_ = new LiveTextCueTable(live_section);
+    auto *live_text_header = new LiveTextCueHeader(text_table_);
+    live_text_header->select_all_toggled = [this](bool checked) { set_all_live_text_rows_checked(checked); };
+    text_table_->setHorizontalHeader(live_text_header);
     text_table_->setMinimumHeight(96);
     text_table_->setAlternatingRowColors(false);
     text_table_->verticalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     text_table_->verticalHeader()->setDefaultSectionSize(30);
     text_table_->horizontalHeader()->setStretchLastSection(false);
-    text_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    text_table_->horizontalHeader()->setSectionsMovable(true);
+    text_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     text_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    text_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    text_table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     text_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     live_layout->addWidget(text_table_, 1);
+    live_layout->addWidget(live_toolbar);
 
     sections->addWidget(template_section);
     sections->addWidget(live_section);
@@ -289,7 +398,7 @@ void TitleDock::build_ui()
     sections->setStretchFactor(1, 1);
 
     /* ── status ── */
-    status_lbl_ = new QLabel("No title selected", container_);
+    status_lbl_ = new QLabel(obsgs_tr("OBSTitles.NoTitleSelected"), container_);
     status_lbl_->setAlignment(Qt::AlignCenter);
     QFont sf = status_lbl_->font();
     sf.setPointSize(std::max(1, sf.pointSize() - 1));
@@ -300,13 +409,14 @@ void TitleDock::build_ui()
 
     /* ── connections ── */
     auto *add_menu = new QMenu(btn_add_);
-    add_menu->addAction("Add Blank Title", this, &TitleDock::on_add);
+    add_menu->addAction(obsgs_tr("OBSTitles.AddBlankTitle"), this, &TitleDock::on_add);
     add_menu->addSeparator();
-    add_menu->addAction("Lower Third", this, &TitleDock::on_add_template_lower_third);
-    add_menu->addAction("Centered Title", this, &TitleDock::on_add_template_center_title);
-    add_menu->addAction("Ticker / Strap", this, &TitleDock::on_add_template_ticker);
+    add_menu->addAction(obsgs_tr("OBSTitles.TemplateLowerThird"), this, &TitleDock::on_add_template_lower_third);
+    add_menu->addAction(obsgs_tr("OBSTitles.TemplateCenteredTitle"), this, &TitleDock::on_add_template_center_title);
+    add_menu->addAction(obsgs_tr("OBSTitles.TemplateTickerStrap"), this, &TitleDock::on_add_template_ticker);
     btn_add_->setMenu(add_menu);
     btn_add_->setPopupMode(QToolButton::InstantPopup);
+    btn_add_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
 
     connect(btn_dup_,   &QToolButton::clicked, this, &TitleDock::on_duplicate);
     connect(btn_rename_, &QToolButton::clicked, this, &TitleDock::on_rename);
@@ -316,8 +426,17 @@ void TitleDock::build_ui()
     connect(btn_edit_,  &QToolButton::clicked, this, &TitleDock::on_edit);
     connect(btn_scene_, &QToolButton::clicked, this, &TitleDock::on_add_to_scene);
     connect(btn_add_text_row_, &QToolButton::clicked, this, &TitleDock::on_add_live_text_row);
+    connect(btn_delete_text_row_, &QToolButton::clicked, this, &TitleDock::on_delete_live_text_rows);
     connect(btn_row_up_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_up);
     connect(btn_row_down_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_down);
+    connect(text_table_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
+        if (item && item->column() == 0)
+            update_live_text_select_all_state();
+    });
+    connect(text_table_->horizontalHeader(), &QHeaderView::sectionMoved,
+            this, [this](int, int, int) { save_live_text_header_state(); });
+    connect(text_table_->horizontalHeader(), &QHeaderView::sectionResized,
+            this, [this](int, int, int) { save_live_text_header_state(); });
     connect(list_, &QListWidget::itemSelectionChanged,
             this, &TitleDock::on_selection_changed);
     connect(list_, &QListWidget::itemDoubleClicked,
@@ -340,7 +459,7 @@ void TitleDock::populate_list()
         item->setData(Qt::UserRole, QString::fromStdString(t->id));
         // Layer count hint as tooltip
         item->setToolTip(
-            QString("%1 layer(s)  |  %.1fs").arg(t->layers.size()).arg(t->duration));
+            obsgs_tr("OBSTitles.LayerCountTooltipFormat").arg(t->layers.size()).arg(t->duration));
         list_->addItem(item);
     }
 
@@ -386,32 +505,151 @@ void TitleDock::on_selection_changed()
         auto t = TitleDataStore::instance().get_title(selected_id());
         if (t)
             status_lbl_->setText(
-                QString("%1 layers  ·  %2s")
+                obsgs_tr("OBSTitles.StatusLayerCountFormat")
                     .arg(t->layers.size())
                     .arg(t->duration, 0, 'f', 1));
     } else {
         status_lbl_->setText(list_->count() == 0
-            ? "Use Add to create a blank title or template"
-            : "No title selected");
+            ? obsgs_tr("OBSTitles.UseAddHint")
+            : obsgs_tr("OBSTitles.NoTitleSelected"));
     }
     populate_exposed_text();
+}
+
+
+
+void TitleDock::save_live_text_header_state()
+{
+    if (!text_table_ || text_table_->columnCount() <= 0) return;
+    live_text_header_states_[text_table_->columnCount()] = text_table_->horizontalHeader()->saveState();
+}
+
+bool TitleDock::restore_live_text_header_state()
+{
+    if (!text_table_ || text_table_->columnCount() <= 0) return false;
+    auto it = live_text_header_states_.find(text_table_->columnCount());
+    if (it == live_text_header_states_.end()) return false;
+    return text_table_->horizontalHeader()->restoreState(it->second);
+}
+
+bool TitleDock::has_checked_live_text_rows() const
+{
+    if (!text_table_) return false;
+    for (int row = 0; row < text_table_->rowCount(); ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (item && item->checkState() == Qt::Checked)
+            return true;
+    }
+    return false;
+}
+
+void TitleDock::apply_live_text_row_selection(const std::vector<int> &rows, bool checked)
+{
+    if (!text_table_) return;
+
+    QSignalBlocker block(text_table_);
+    text_table_->clearSelection();
+    for (int row = 0; row < text_table_->rowCount(); ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (item)
+            item->setCheckState(Qt::Unchecked);
+    }
+
+    auto *selection_model = text_table_->selectionModel();
+    for (int row : rows) {
+        if (row < 0 || row >= text_table_->rowCount()) continue;
+        if (checked) {
+            auto *item = text_table_->item(row, 0);
+            if (item)
+                item->setCheckState(Qt::Checked);
+        }
+        if (selection_model && text_table_->columnCount() > 0) {
+            const QModelIndex left = text_table_->model()->index(row, 0);
+            const QModelIndex right = text_table_->model()->index(row, text_table_->columnCount() - 1);
+            selection_model->select(QItemSelection(left, right),
+                                    QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        }
+    }
+    if (!rows.empty() && selection_model)
+        selection_model->setCurrentIndex(text_table_->model()->index(rows.front(), 0), QItemSelectionModel::NoUpdate);
+    update_live_text_select_all_state();
+}
+
+void TitleDock::set_all_live_text_rows_checked(bool checked)
+{
+    if (!text_table_) return;
+
+    QSignalBlocker block(text_table_);
+    for (int row = 0; row < text_table_->rowCount(); ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (item)
+            item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+    }
+    update_live_text_select_all_state();
+}
+
+void TitleDock::update_live_text_select_all_state()
+{
+    auto *header = live_text_cue_header(text_table_);
+    if (!header || !text_table_) return;
+
+    const int row_count = text_table_->rowCount();
+    bool all_checked = row_count > 0;
+    for (int row = 0; row < row_count; ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (!item || item->checkState() != Qt::Checked) {
+            all_checked = false;
+            break;
+        }
+    }
+    header->set_select_all_checked(all_checked);
+}
+
+std::vector<int> TitleDock::selected_live_text_rows() const
+{
+    std::vector<int> rows;
+    if (!text_table_) return rows;
+
+    for (int row = 0; row < text_table_->rowCount(); ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (item && item->checkState() == Qt::Checked)
+            rows.push_back(row);
+    }
+
+    if (rows.empty()) {
+        for (const auto *item : text_table_->selectedItems()) {
+            if (!item) continue;
+            int row = item->row();
+            if (std::find(rows.begin(), rows.end(), row) == rows.end())
+                rows.push_back(row);
+        }
+    }
+
+    std::sort(rows.begin(), rows.end());
+    return rows;
 }
 
 void TitleDock::populate_exposed_text()
 {
     if (!text_table_) return;
     QSignalBlocker block(text_table_);
+    QSignalBlocker header_block(text_table_->horizontalHeader());
     text_table_->clear();
     text_table_->setRowCount(0);
     text_table_->setColumnCount(0);
 
+    auto *header = live_text_cue_header(text_table_);
+
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) {
-        text_editor_lbl_->setText("Live text — select a title");
+        if (header) header->set_select_all_visible(false);
+        text_editor_lbl_->setText(obsgs_tr("OBSTitles.LiveTextSelectTitle"));
         text_table_->setEnabled(false);
         if (btn_add_text_row_) btn_add_text_row_->setEnabled(false);
+        if (btn_delete_text_row_) btn_delete_text_row_->setEnabled(false);
         if (btn_row_up_) btn_row_up_->setEnabled(false);
         if (btn_row_down_) btn_row_down_->setEnabled(false);
+        update_live_text_select_all_state();
         return;
     }
 
@@ -419,34 +657,74 @@ void TitleDock::populate_exposed_text()
     normalize_live_text_rows(title, exposed);
 
     const bool has_exposed = !exposed.empty();
-    text_table_->setEnabled(has_exposed);
+    text_table_->setEnabled(true);
     if (btn_add_text_row_) btn_add_text_row_->setEnabled(has_exposed);
+    if (btn_delete_text_row_) btn_delete_text_row_->setEnabled(has_exposed);
     if (btn_row_up_) btn_row_up_->setEnabled(has_exposed);
     if (btn_row_down_) btn_row_down_->setEnabled(has_exposed);
-    text_editor_lbl_->setText(has_exposed
-        ? "Live text cues"
-        : "Live text — expose text layers in the editor");
-    if (!has_exposed) return;
+    text_editor_lbl_->setText(obsgs_tr("OBSTitles.LiveTextCues"));
+    if (header) header->set_select_all_visible(has_exposed);
+    if (!has_exposed) {
+        text_table_->setRowCount(1);
+        text_table_->setColumnCount(2);
+        text_table_->setHorizontalHeaderLabels(QStringList()
+                                               << obsgs_tr("OBSTitles.Title")
+                                               << QString());
+        text_table_->horizontalHeader()->setSectionsMovable(false);
+        text_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        text_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        text_table_->setVerticalHeaderItem(0, new QTableWidgetItem(QStringLiteral("1")));
+
+        auto *title_item = new QTableWidgetItem(QString::fromStdString(title->name));
+        title_item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        text_table_->setItem(0, 0, title_item);
+
+        auto *cue = new QPushButton("▶", text_table_);
+        cue->setToolTip(obsgs_tr("OBSTitles.PlayCueTooltip"));
+        cue->setStyleSheet("QPushButton{background:#2a2a2a;color:#ddd;border:none;border-radius:3px;font-weight:bold;}"
+                           "QPushButton:hover{background:#3a3a3a;}");
+        connect(cue, &QPushButton::clicked, this, [this, title]() {
+            updating_exposed_text_ = true;
+            title->current_cue_row = -1;
+            title->pending_cue_row = -1;
+            ++title->cue_revision;
+            TitleDataStore::instance().save();
+            TitleDataStore::instance().notify_change();
+            updating_exposed_text_ = false;
+            populate_exposed_text();
+        });
+        text_table_->setCellWidget(0, 1, cue);
+        update_live_text_select_all_state();
+        return;
+    }
 
     text_table_->setRowCount((int)title->live_text_rows.size());
     text_table_->setColumnCount((int)exposed.size() + 2);
 
     QStringList headers;
+    headers << "";
     for (const auto &layer : exposed)
         headers << live_text_layer_header(layer);
-    headers << "" << "";
+    headers << "";
     text_table_->setHorizontalHeaderLabels(headers);
     for (int col = 0; col < (int)exposed.size(); ++col) {
-        if (auto *item = text_table_->horizontalHeaderItem(col))
+        if (auto *item = text_table_->horizontalHeaderItem(col + 1))
             item->setToolTip(live_text_layer_header(exposed[col]));
     }
-    for (int col = 0; col < (int)exposed.size(); ++col)
-        text_table_->horizontalHeader()->setSectionResizeMode(col, QHeaderView::Stretch);
-    text_table_->horizontalHeader()->setSectionResizeMode((int)exposed.size(), QHeaderView::ResizeToContents);
-    text_table_->horizontalHeader()->setSectionResizeMode((int)exposed.size() + 1, QHeaderView::ResizeToContents);
+    text_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    text_table_->horizontalHeader()->setSectionsMovable(true);
+    if (!restore_live_text_header_state()) {
+        text_table_->resizeColumnToContents(0);
+        text_table_->resizeColumnToContents((int)exposed.size() + 1);
+    }
 
     for (int row = 0; row < (int)title->live_text_rows.size(); ++row) {
         text_table_->setVerticalHeaderItem(row, new QTableWidgetItem(QString::number(row + 1)));
+        auto *select_item = new QTableWidgetItem();
+        select_item->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        select_item->setCheckState(Qt::Unchecked);
+        select_item->setTextAlignment(Qt::AlignCenter);
+        text_table_->setItem(row, 0, select_item);
         for (int col = 0; col < (int)exposed.size(); ++col) {
             auto *edit = new QLineEdit(QString::fromStdString(title->live_text_rows[row][col]), text_table_);
             edit->setPlaceholderText(live_text_layer_header(exposed[col]));
@@ -461,11 +739,11 @@ void TitleDock::populate_exposed_text()
                 seen_store_revision_ = TitleDataStore::instance().revision();
                 updating_exposed_text_ = false;
             });
-            text_table_->setCellWidget(row, col, edit);
+            text_table_->setCellWidget(row, col + 1, edit);
         }
 
         auto *cue = new QPushButton("▶", text_table_);
-        cue->setToolTip("Play this row and run the intro/loop/outro animation");
+        cue->setToolTip(obsgs_tr("OBSTitles.PlayCueTooltip"));
         QString cue_style;
         if (row == title->current_cue_row) {
             cue_style = "QPushButton{background:#b02020;color:white;border:none;border-radius:3px;font-weight:bold;}"
@@ -500,31 +778,9 @@ void TitleDock::populate_exposed_text()
             updating_exposed_text_ = false;
             populate_exposed_text();
         });
-        text_table_->setCellWidget(row, (int)exposed.size(), cue);
-
-        auto *del = new QPushButton("✕", text_table_);
-        del->setToolTip("Delete this live text row");
-        connect(del, &QPushButton::clicked, this, [this, title, row]() {
-            if (row < 0 || row >= (int)title->live_text_rows.size()) return;
-            updating_exposed_text_ = true;
-            title->live_text_rows.erase(title->live_text_rows.begin() + row);
-            if (title->current_cue_row == row)
-                title->current_cue_row = -1;
-            else if (title->current_cue_row > row)
-                --title->current_cue_row;
-            if (title->pending_cue_row == row)
-                title->pending_cue_row = -1;
-            else if (title->pending_cue_row > row)
-                --title->pending_cue_row;
-            auto exposed_now = exposed_text_layers(title);
-            normalize_live_text_rows(title, exposed_now);
-            TitleDataStore::instance().save();
-            TitleDataStore::instance().notify_change();
-            updating_exposed_text_ = false;
-            populate_exposed_text();
-        });
-        text_table_->setCellWidget(row, (int)exposed.size() + 1, del);
+        text_table_->setCellWidget(row, (int)exposed.size() + 1, cue);
     }
+    update_live_text_select_all_state();
 }
 
 void TitleDock::on_add_live_text_row()
@@ -534,44 +790,162 @@ void TitleDock::on_add_live_text_row()
     auto exposed = exposed_text_layers(title);
     if (exposed.empty()) return;
 
-    std::vector<std::string> row;
-    for (const auto &layer : exposed)
-        row.push_back(layer->text_content);
+    auto selected_rows = selected_live_text_rows();
+    std::vector<std::string> row(exposed.size());
+    if (selected_rows.size() == 1) {
+        const int source_row = selected_rows.front();
+        if (source_row >= 0 && source_row < (int)title->live_text_rows.size())
+            row = title->live_text_rows[source_row];
+    }
+    row.resize(exposed.size());
+
     title->live_text_rows.push_back(std::move(row));
+    const int added_row = (int)title->live_text_rows.size() - 1;
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
     populate_exposed_text();
-    text_table_->selectRow((int)title->live_text_rows.size() - 1);
+    apply_live_text_row_selection({added_row}, false);
+}
+
+void TitleDock::on_delete_live_text_rows()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title || !text_table_) return;
+
+    auto rows = selected_live_text_rows();
+    if (rows.empty()) return;
+
+    updating_exposed_text_ = true;
+    int next_row = rows.front();
+    for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+        const int row = *it;
+        if (row < 0 || row >= (int)title->live_text_rows.size())
+            continue;
+        title->live_text_rows.erase(title->live_text_rows.begin() + row);
+        if (title->current_cue_row == row)
+            title->current_cue_row = -1;
+        else if (title->current_cue_row > row)
+            --title->current_cue_row;
+        if (title->pending_cue_row == row)
+            title->pending_cue_row = -1;
+        else if (title->pending_cue_row > row)
+            --title->pending_cue_row;
+    }
+
+    auto exposed_now = exposed_text_layers(title);
+    normalize_live_text_rows(title, exposed_now);
+    TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
+    updating_exposed_text_ = false;
+    populate_exposed_text();
+    if (!title->live_text_rows.empty())
+        text_table_->selectRow(std::min(next_row, (int)title->live_text_rows.size() - 1));
 }
 
 void TitleDock::on_move_live_text_row_up()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title || !text_table_) return;
-    int row = text_table_->currentRow();
-    if (row <= 0 || row >= (int)title->live_text_rows.size()) return;
-    std::swap(title->live_text_rows[row], title->live_text_rows[row - 1]);
-    move_live_row_marker(title->current_cue_row, row, row - 1);
-    move_live_row_marker(title->pending_cue_row, row, row - 1);
+
+    auto rows = selected_live_text_rows();
+    if (rows.empty()) return;
+
+    const bool restore_checked = has_checked_live_text_rows();
+    const int row_count = (int)title->live_text_rows.size();
+    std::vector<bool> selected(row_count, false);
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            selected[row] = true;
+    }
+
+    std::vector<int> order(row_count);
+    std::iota(order.begin(), order.end(), 0);
+    bool moved = false;
+    for (int visual = 1; visual < row_count; ++visual) {
+        if (selected[order[visual]] && !selected[order[visual - 1]]) {
+            std::swap(order[visual], order[visual - 1]);
+            moved = true;
+        }
+    }
+    if (!moved) return;
+
+    std::vector<std::vector<std::string>> reordered;
+    reordered.reserve(title->live_text_rows.size());
+    std::vector<int> new_index(row_count, -1);
+    for (int visual = 0; visual < row_count; ++visual) {
+        new_index[order[visual]] = visual;
+        reordered.push_back(std::move(title->live_text_rows[order[visual]]));
+    }
+    title->live_text_rows = std::move(reordered);
+    if (title->current_cue_row >= 0 && title->current_cue_row < row_count)
+        title->current_cue_row = new_index[title->current_cue_row];
+    if (title->pending_cue_row >= 0 && title->pending_cue_row < row_count)
+        title->pending_cue_row = new_index[title->pending_cue_row];
+
+    std::vector<int> moved_rows;
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            moved_rows.push_back(new_index[row]);
+    }
+    std::sort(moved_rows.begin(), moved_rows.end());
+
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
     populate_exposed_text();
-    text_table_->selectRow(row - 1);
+    apply_live_text_row_selection(moved_rows, restore_checked);
 }
 
 void TitleDock::on_move_live_text_row_down()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title || !text_table_) return;
-    int row = text_table_->currentRow();
-    if (row < 0 || row + 1 >= (int)title->live_text_rows.size()) return;
-    std::swap(title->live_text_rows[row], title->live_text_rows[row + 1]);
-    move_live_row_marker(title->current_cue_row, row, row + 1);
-    move_live_row_marker(title->pending_cue_row, row, row + 1);
+
+    auto rows = selected_live_text_rows();
+    if (rows.empty()) return;
+
+    const bool restore_checked = has_checked_live_text_rows();
+    const int row_count = (int)title->live_text_rows.size();
+    std::vector<bool> selected(row_count, false);
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            selected[row] = true;
+    }
+
+    std::vector<int> order(row_count);
+    std::iota(order.begin(), order.end(), 0);
+    bool moved = false;
+    for (int visual = row_count - 2; visual >= 0; --visual) {
+        if (selected[order[visual]] && !selected[order[visual + 1]]) {
+            std::swap(order[visual], order[visual + 1]);
+            moved = true;
+        }
+    }
+    if (!moved) return;
+
+    std::vector<std::vector<std::string>> reordered;
+    reordered.reserve(title->live_text_rows.size());
+    std::vector<int> new_index(row_count, -1);
+    for (int visual = 0; visual < row_count; ++visual) {
+        new_index[order[visual]] = visual;
+        reordered.push_back(std::move(title->live_text_rows[order[visual]]));
+    }
+    title->live_text_rows = std::move(reordered);
+    if (title->current_cue_row >= 0 && title->current_cue_row < row_count)
+        title->current_cue_row = new_index[title->current_cue_row];
+    if (title->pending_cue_row >= 0 && title->pending_cue_row < row_count)
+        title->pending_cue_row = new_index[title->pending_cue_row];
+
+    std::vector<int> moved_rows;
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            moved_rows.push_back(new_index[row]);
+    }
+    std::sort(moved_rows.begin(), moved_rows.end());
+
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
     populate_exposed_text();
-    text_table_->selectRow(row + 1);
+    apply_live_text_row_selection(moved_rows, restore_checked);
 }
 
 
@@ -651,30 +1025,40 @@ std::shared_ptr<Title> TitleDock::create_template_title(const std::string &name,
     };
 
     switch (template_id) {
-    case 1: /* Lower third */
+    case 1: { /* Lower third */
         title->duration = 8.0;
-        add_rect("Lower Third Backplate", 640, 835, 1120, 155, 0xD0161B24, 18.0f);
-        add_rect("Accent Bar", 120, 835, 18, 155, 0xFF00A3FF, 9.0f);
-        add_text("Name", name, 670, 800, 58, 0xFFFFFFFF, true, 0, 1);
-        add_text("Subtitle", "Subtitle / role", 670, 872, 34, 0xFFE8E8E8, false, 0, 1);
+        add_rect(obs_text_std("OBSTitles.LayerLowerThirdBackplate"), 640, 835, 1120, 155, 0xD0161B24, 18.0f);
+        add_rect(obs_text_std("OBSTitles.LayerAccentBar"), 120, 835, 18, 155, 0xFF00A3FF, 9.0f);
+        add_text(obs_text_std("OBSTitles.LayerName"), name, 670, 800, 58, 0xFFFFFFFF, true, 0, 1);
+        add_text(obs_text_std("OBSTitles.LayerSubtitle"), obs_text_std("OBSTitles.TemplateSubtitleRole"), 670, 872, 34, 0xFFE8E8E8, false, 0, 1);
         break;
-    case 2: /* Center title */
+    }
+    case 2: { /* Center title */
         title->duration = 6.0;
-        add_rect("Soft Panel", 960, 540, 1280, 270, 0xB0101018, 28.0f);
-        add_rect("Top Accent", 960, 395, 520, 10, 0xFF00A3FF, 5.0f);
-        add_text("Main Title", name, 960, 505, 86, 0xFFFFFFFF, true, 1, 1);
-        add_text("Subtitle", "Editable subtitle", 960, 610, 42, 0xFFE0E0E0, false, 1, 1);
+        add_rect(obs_text_std("OBSTitles.LayerSoftPanel"), 960, 540, 1280, 270, 0xB0101018, 28.0f);
+        add_rect(obs_text_std("OBSTitles.LayerTopAccent"), 960, 395, 520, 10, 0xFF00A3FF, 5.0f);
+        add_text(obs_text_std("OBSTitles.LayerMainTitle"), name, 960, 505, 86, 0xFFFFFFFF, true, 1, 1);
+        add_text(obs_text_std("OBSTitles.LayerSubtitle"), obs_text_std("OBSTitles.TemplateEditableSubtitle"), 960, 610, 42, 0xFFE0E0E0, false, 1, 1);
         break;
-    case 3: /* Ticker / strap */
+    }
+    case 3: { /* Ticker / strap */
         title->duration = 12.0;
-        add_rect("Ticker Background", 960, 1010, 1920, 110, 0xE0101010, 0.0f);
-        add_rect("Ticker Accent", 125, 1010, 250, 110, 0xFF0078D4, 0.0f);
-        add_text("Ticker Label", "LIVE", 125, 1010, 44, 0xFFFFFFFF, true, 1, 1);
-        add_text("Ticker Text", name, 1030, 1010, 44, 0xFFFFFFFF, false, 0, 1);
+        add_rect(obs_text_std("OBSTitles.LayerTickerBackground"), 960, 1010, 1920, 110, 0xE0101010, 0.0f);
+        add_rect(obs_text_std("OBSTitles.LayerTickerAccent"), 125, 1010, 250, 110, 0xFF0078D4, 0.0f);
+        add_text(obs_text_std("OBSTitles.LayerTickerLabel"), obs_text_std("OBSTitles.TemplateLive"), 125, 1010, 44, 0xFFFFFFFF, true, 1, 1);
+        auto ticker = add_text(obs_text_std("OBSTitles.LayerTickerText"), name, 1030, 1010, 44, 0xFFFFFFFF, false, 0, 1);
+        ticker->type = LayerType::Ticker;
+        ticker->rect_width = 1640.0f;
+        ticker->box_width.static_value = ticker->rect_width;
+        ticker->ticker_style = 0;
+        ticker->ticker_direction = 1;
+        ticker->ticker_speed = 140.0;
         break;
-    default:
-        add_text("Title Text", name, 960, 540, 72, 0xFFFFFFFF, true, 1, 1);
+    }
+    default: {
+        add_text(obs_text_std("OBSTitles.TemplateTitleText"), name, 960, 540, 72, 0xFFFFFFFF, true, 1, 1);
         break;
+    }
     }
 
     for (auto &layer : title->layers)
@@ -690,7 +1074,7 @@ void TitleDock::create_title_from_template(const std::string &default_name,
 {
     bool ok = false;
     QString name = QInputDialog::getText(
-        this, "New Template Title", "Title text:", QLineEdit::Normal,
+        this, obsgs_tr("OBSTitles.NewTemplateTitle"), obsgs_tr("OBSTitles.TitleTextPrompt"), QLineEdit::Normal,
         QString::fromStdString(default_name), &ok);
     if (!ok || name.trimmed().isEmpty()) return;
 
@@ -706,28 +1090,29 @@ void TitleDock::on_add()
 {
     bool ok;
     QString name = QInputDialog::getText(
-        this, "New Title", "Title name:", QLineEdit::Normal, "New Title", &ok);
+        this, obsgs_tr("OBSTitles.NewTitle"), obsgs_tr("OBSTitles.TitleNamePrompt"), QLineEdit::Normal, obsgs_tr("OBSTitles.NewTitle"), &ok);
     if (!ok || name.trimmed().isEmpty()) return;
 
     auto title = TitleDataStore::instance().create_title(name.trimmed().toStdString());
     TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
     select_title(title->id);
     on_edit();
 }
 
 void TitleDock::on_add_template_lower_third()
 {
-    create_title_from_template("Speaker Name", 1);
+    create_title_from_template(obs_text_std("OBSTitles.TemplateSpeakerName"), 1);
 }
 
 void TitleDock::on_add_template_center_title()
 {
-    create_title_from_template("Program Title", 2);
+    create_title_from_template(obs_text_std("OBSTitles.TemplateProgramTitle"), 2);
 }
 
 void TitleDock::on_add_template_ticker()
 {
-    create_title_from_template("Breaking news headline goes here", 3);
+    create_title_from_template(obs_text_std("OBSTitles.TemplateBreakingNews"), 3);
 }
 
 void TitleDock::on_duplicate()
@@ -736,7 +1121,7 @@ void TitleDock::on_duplicate()
     if (!src) return;
 
     /* Deep copy by round-tripping through data store */
-    auto dup = TitleDataStore::instance().create_title(src->name + " (copy)");
+    auto dup = TitleDataStore::instance().create_title(src->name + obs_text_std("OBSTitles.CopySuffix"));
     dup->duration  = src->duration;
     dup->bg_color  = src->bg_color;
     dup->width     = src->width;
@@ -760,13 +1145,14 @@ void TitleDock::on_rename()
 
     bool ok = false;
     QString name = QInputDialog::getText(
-        this, "Rename Title Template", "Template name:", QLineEdit::Normal,
+        this, obsgs_tr("OBSTitles.RenameTitleTemplate"), obsgs_tr("OBSTitles.TemplateNamePrompt"), QLineEdit::Normal,
         QString::fromStdString(title->name), &ok);
     name = name.trimmed();
     if (!ok || name.isEmpty()) return;
 
     TitleDataStore::instance().rename_title(title->id, name.toStdString());
     TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
     select_title(title->id);
 }
 
@@ -776,12 +1162,12 @@ void TitleDock::on_export()
     if (!title) return;
 
     QString safe_name = QString::fromStdString(title->name).trimmed();
-    if (safe_name.isEmpty()) safe_name = QStringLiteral("OBS Graphics Studio Pro Template");
+    if (safe_name.isEmpty()) safe_name = obsgs_tr("OBSTitles.TemplateFileDialogTitle");
     safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
 
     QString path = QFileDialog::getSaveFileName(
-        this, "Export Title Template", safe_name + QStringLiteral(".ogspt"),
-        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        this, obsgs_tr("OBSTitles.ExportTitleTemplate"), safe_name + QStringLiteral(".ogspt"),
+        obsgs_tr("OBSTitles.TemplateFileFilter"));
     if (path.isEmpty()) return;
 
     if (QFileInfo(path).suffix().isEmpty())
@@ -789,31 +1175,31 @@ void TitleDock::on_export()
 
     std::string error;
     if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), &error)) {
-        QMessageBox::warning(this, "Export Title Template",
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
                              QString::fromStdString(error));
         return;
     }
 
-    status_lbl_->setText(QString("Exported %1").arg(QFileInfo(path).fileName()));
+    status_lbl_->setText(obsgs_tr("OBSTitles.ExportedStatusFormat").arg(QFileInfo(path).fileName()));
 }
 
 void TitleDock::on_import()
 {
     QString path = QFileDialog::getOpenFileName(
-        this, "Import Title Template", QString(),
-        "OBS Graphics Studio Pro Templates (*.ogspt *.otpt *.json);;JSON Files (*.json);;All Files (*)");
+        this, obsgs_tr("OBSTitles.ImportTitleTemplate"), QString(),
+        obsgs_tr("OBSTitles.TemplateFileFilter"));
     if (path.isEmpty()) return;
 
     std::string error;
     auto imported = TitleDataStore::instance().import_title(path.toStdString(), &error);
     if (!imported) {
-        QMessageBox::warning(this, "Import Title Template",
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportTitleTemplate"),
                              QString::fromStdString(error));
         return;
     }
 
     select_title(imported->id);
-    status_lbl_->setText(QString("Imported %1").arg(QString::fromStdString(imported->name)));
+    status_lbl_->setText(obsgs_tr("OBSTitles.ImportedStatusFormat").arg(QString::fromStdString(imported->name)));
 }
 
 void TitleDock::on_delete()
@@ -825,13 +1211,14 @@ void TitleDock::on_delete()
     if (!t) return;
 
     auto reply = QMessageBox::question(
-        this, "Delete Title",
-        QString("Delete \"%1\"?").arg(QString::fromStdString(t->name)),
+        this, obsgs_tr("OBSTitles.DeleteTitle"),
+        obsgs_tr("OBSTitles.DeleteTitleQuestionFormat").arg(QString::fromStdString(t->name)),
         QMessageBox::Yes | QMessageBox::No);
 
     if (reply == QMessageBox::Yes) {
         TitleDataStore::instance().delete_title(id);
         TitleDataStore::instance().save();
+        TitleDataStore::instance().notify_change();
     }
 }
 
@@ -866,8 +1253,8 @@ void TitleDock::on_add_to_scene()
 
     obs_source_t *scene_source = obs_frontend_get_current_scene();
     if (!scene_source) {
-        QMessageBox::warning(this, "No Scene",
-                             "There is no active scene to add the title to.");
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.NoScene"),
+                             obsgs_tr("OBSTitles.NoActiveScene"));
         return;
     }
 
@@ -897,10 +1284,10 @@ void TitleDock::on_add_to_scene()
             obs_sceneitem_set_visible(item, true);
         }
         obs_source_release(source);
-        status_lbl_->setText("Added to scene");
+        status_lbl_->setText(obsgs_tr("OBSTitles.AddedToScene"));
     } else {
-        QMessageBox::warning(this, "Add Title Source",
-                             "OBS could not create the Title source.");
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.AddTitleSource"),
+                             obsgs_tr("OBSTitles.CreateSourceFailed"));
     }
 
     obs_data_release(settings);
