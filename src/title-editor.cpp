@@ -84,6 +84,10 @@ static const QColor C_BG_MID   { 0x252525 };
 static const QColor C_BG_LIGHT { 0x2e2e2e };
 static const QColor C_ACCENT   { 0x0078d4 };
 
+/* OBS safe area margins: Rec. ITU-R BT.1848-1 / EBU R 95. */
+static constexpr double OBS_ACTION_SAFE_PERCENT = 0.035;
+static constexpr double OBS_GRAPHICS_SAFE_PERCENT = 0.05;
+
 static bool editor_image_path_is_svg(const QString &path)
 {
     return path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive) ||
@@ -1106,9 +1110,118 @@ void TitleEditor::build_ui()
     global_panel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     upper_split->addWidget(global_panel);
 
-    canvas_ = new CanvasPreview(upper_split);
+    auto *canvas_panel = new QWidget(upper_split);
+    auto *canvas_layout = new QVBoxLayout(canvas_panel);
+    canvas_layout->setContentsMargins(0, 0, 0, 0);
+    canvas_layout->setSpacing(0);
+    canvas_ = new CanvasPreview(canvas_panel);
     canvas_->setMinimumSize(300, 200);
-    upper_split->addWidget(canvas_);
+    canvas_layout->addWidget(canvas_, 1);
+
+    auto *canvas_zoom_bar = new QWidget(canvas_panel);
+    canvas_zoom_bar->setFixedHeight(34);
+    canvas_zoom_bar->setStyleSheet(
+        "QWidget{background:#171717;border-top:1px solid #333;}"
+        "QPushButton,QToolButton{color:#ddd;background:#2a2a2a;border:1px solid #3f3f3f;border-radius:3px;padding:3px 8px;}"
+        "QPushButton:hover,QToolButton:hover{background:#343434;}"
+        "QToolButton::menu-indicator{image:none;}"
+        "QSpinBox{color:#ddd;background:#202020;border:1px solid #3f3f3f;border-radius:3px;padding:2px 6px;}"
+        "QSpinBox::up-button,QSpinBox::down-button{width:0;border:none;}"
+        "QSlider::groove:horizontal{height:4px;background:#303030;border-radius:2px;}"
+        "QSlider::handle:horizontal{width:12px;margin:-5px 0;background:#bfc7d5;border-radius:6px;}"
+        "QSlider::sub-page:horizontal{background:#0078d4;border-radius:2px;}");
+    auto *canvas_zoom_layout = new QHBoxLayout(canvas_zoom_bar);
+    canvas_zoom_layout->setContentsMargins(10, 0, 10, 0);
+    canvas_zoom_layout->setSpacing(8);
+    auto *canvas_zoom_out = new QPushButton(canvas_zoom_bar);
+    canvas_zoom_out->setIcon(obs_icon("zoom-out.svg"));
+    canvas_zoom_out->setFixedWidth(30);
+    auto *canvas_zoom_slider = new QSlider(Qt::Horizontal, canvas_zoom_bar);
+    canvas_zoom_slider->setRange(5, 1600);
+    canvas_zoom_slider->setValue(canvas_->zoom_percent());
+    canvas_zoom_slider->setMinimumWidth(220);
+    canvas_zoom_slider->setMaximumWidth(360);
+    auto *canvas_zoom_in = new QPushButton(canvas_zoom_bar);
+    canvas_zoom_in->setIcon(obs_icon("zoom-in.svg"));
+    canvas_zoom_in->setFixedWidth(30);
+    auto *canvas_zoom_percent = new QSpinBox(canvas_zoom_bar);
+    canvas_zoom_percent->setRange(5, 1600);
+    canvas_zoom_percent->setSuffix("%");
+    canvas_zoom_percent->setAlignment(Qt::AlignCenter);
+    canvas_zoom_percent->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    canvas_zoom_percent->setFixedWidth(72);
+    canvas_zoom_percent->setValue(canvas_->zoom_percent());
+    auto *fit_canvas = new QToolButton(canvas_zoom_bar);
+    fit_canvas->setText("Fit");
+    fit_canvas->setPopupMode(QToolButton::InstantPopup);
+    auto *fit_canvas_menu = new QMenu(fit_canvas);
+    auto add_canvas_zoom_action = [fit_canvas_menu](const QString &text, int percent) {
+        QAction *action = fit_canvas_menu->addAction(text);
+        action->setData(percent);
+        return action;
+    };
+    QAction *fit_action = fit_canvas_menu->addAction("Fit");
+    fit_action->setData(-1);
+    QAction *fit_100_action = fit_canvas_menu->addAction("Fit up to 100%");
+    fit_100_action->setData(-2);
+    add_canvas_zoom_action("50%", 50);
+    add_canvas_zoom_action("100%", 100);
+    add_canvas_zoom_action("200%", 200);
+    add_canvas_zoom_action("400%", 400);
+    add_canvas_zoom_action("800%", 800);
+    add_canvas_zoom_action("1600%", 1600);
+    fit_canvas->setMenu(fit_canvas_menu);
+    auto *checkerboard = new QToolButton(canvas_zoom_bar);
+    checkerboard->setText("Checkerboard: Medium");
+    checkerboard->setPopupMode(QToolButton::InstantPopup);
+    auto *checkerboard_menu = new QMenu(checkerboard);
+    auto add_checkerboard_action = [checkerboard_menu](const QString &text, int pattern) {
+        QAction *action = checkerboard_menu->addAction(text);
+        action->setData(pattern);
+        return action;
+    };
+    add_checkerboard_action("Light", 0);
+    add_checkerboard_action("Medium", 1);
+    add_checkerboard_action("Dark", 2);
+    checkerboard->setMenu(checkerboard_menu);
+    canvas_zoom_layout->addWidget(canvas_zoom_out);
+    canvas_zoom_layout->addWidget(canvas_zoom_slider);
+    canvas_zoom_layout->addWidget(canvas_zoom_in);
+    canvas_zoom_layout->addWidget(canvas_zoom_percent);
+    canvas_zoom_layout->addWidget(fit_canvas);
+    canvas_zoom_layout->addWidget(checkerboard);
+    auto *safe_guides = new QToolButton(canvas_zoom_bar);
+    safe_guides->setDefaultAction(act_safe_guides_);
+    safe_guides->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    canvas_zoom_layout->addWidget(safe_guides);
+    canvas_zoom_layout->addStretch(1);
+    canvas_layout->addWidget(canvas_zoom_bar);
+    connect(canvas_zoom_slider, &QSlider::valueChanged, canvas_, &CanvasPreview::set_zoom_percent);
+    connect(canvas_zoom_percent, qOverload<int>(&QSpinBox::valueChanged), canvas_, &CanvasPreview::set_zoom_percent);
+    connect(canvas_, &CanvasPreview::zoom_percent_changed, this, [canvas_zoom_slider, canvas_zoom_percent](int percent) {
+        QSignalBlocker slider_blocker(canvas_zoom_slider);
+        QSignalBlocker spin_blocker(canvas_zoom_percent);
+        canvas_zoom_slider->setValue(percent);
+        canvas_zoom_percent->setValue(percent);
+    });
+    connect(canvas_zoom_out, &QPushButton::clicked, this, [this]() {
+        canvas_->set_zoom_percent((int)std::round(canvas_->zoom_percent() / 1.18));
+    });
+    connect(canvas_zoom_in, &QPushButton::clicked, this, [this]() {
+        canvas_->set_zoom_percent((int)std::round(canvas_->zoom_percent() * 1.18));
+    });
+    connect(fit_canvas_menu, &QMenu::triggered, this, [this, fit_canvas](QAction *action) {
+        int value = action->data().toInt();
+        fit_canvas->setText(action->text());
+        if (value == -1) canvas_->fit_canvas(false);
+        else if (value == -2) canvas_->fit_canvas(true);
+        else canvas_->set_zoom_percent(value);
+    });
+    connect(checkerboard_menu, &QMenu::triggered, this, [this, checkerboard](QAction *action) {
+        checkerboard->setText(QString("Checkerboard: %1").arg(action->text()));
+        canvas_->set_checkerboard_pattern(action->data().toInt());
+    });
+    upper_split->addWidget(canvas_panel);
 
     auto *side_panel = new QWidget(upper_split);
     auto *side_layout = new QVBoxLayout(side_panel);
@@ -1518,7 +1631,7 @@ void TitleEditor::align_selected_layers(int x_mode, int y_mode)
     double target_bottom = max_bottom;
 
     if (alignment_target_ == 1 || alignment_target_ == 2) {
-        const double safe_inset = alignment_target_ == 1 ? 0.10 : 0.05;
+        const double safe_inset = alignment_target_ == 1 ? OBS_GRAPHICS_SAFE_PERCENT : OBS_ACTION_SAFE_PERCENT;
         target_left = title_->width * safe_inset;
         target_hcenter = title_->width / 2.0;
         target_right = title_->width * (1.0 - safe_inset);
@@ -1585,24 +1698,6 @@ void TitleEditor::build_toolbar()
     toolbar_->addWidget(time_lbl_);
 
     toolbar_->addSeparator();
-
-    /* Zoom controls */
-    auto *zoom_lbl = new QLabel(obsgs_tr("OBSTitles.ZoomLabel"), toolbar_);
-    zoom_lbl->setStyleSheet("color:#888;");
-    toolbar_->addWidget(zoom_lbl);
-
-    auto *zoom_in  = new QPushButton("+", toolbar_);
-    auto *zoom_out = new QPushButton("−", toolbar_);
-    zoom_in->setIcon(obs_icon("zoom-in.svg"));
-    zoom_out->setIcon(obs_icon("zoom-out.svg"));
-    zoom_in->setFixedWidth(22);
-    zoom_out->setFixedWidth(22);
-    zoom_in->setStyleSheet("color:#ccc; background:#2a2a2a; border:none; border-radius:2px;");
-    zoom_out->setStyleSheet(zoom_in->styleSheet());
-    toolbar_->addWidget(zoom_out);
-    toolbar_->addWidget(zoom_in);
-
-    toolbar_->addSeparator();
     auto *align_target = new QToolButton(toolbar_);
     align_target->setIcon(obs_icon("alignment-target.svg"));
     align_target->setText(obsgs_tr("OBSTitles.AlignmentTargetShort"));
@@ -1657,7 +1752,7 @@ void TitleEditor::build_toolbar()
     add_align_action("align-bottom.svg", obsgs_tr("OBSTitles.AlignBottom"), -1, 2);
     add_align_action("align-center-artboard.svg", obsgs_tr("OBSTitles.AlignCenterToArtboard"), 1, 1);
 
-    act_safe_guides_ = toolbar_->addAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"));
+    act_safe_guides_ = new QAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"), this);
     act_safe_guides_->setCheckable(true);
     act_safe_guides_->setToolTip(obsgs_tr("OBSTitles.SafeTooltip"));
     connect(act_safe_guides_, &QAction::toggled, this, [this](bool visible) {
@@ -2182,7 +2277,11 @@ CanvasPreview::CanvasPreview(QWidget *parent) : QWidget(parent)
 
 void CanvasPreview::set_title(std::shared_ptr<Title> t)
 {
-    title_ = t; dirty_ = true; update();
+    title_ = t;
+    dirty_ = true;
+    pan_offset_ = QPointF(0, 0);
+    if (title_) fit_canvas(fit_zoom_up_to_100_);
+    else update();
 }
 
 void CanvasPreview::set_playhead(double t)
@@ -2214,6 +2313,42 @@ void CanvasPreview::set_safe_guides_visible(bool visible)
 void CanvasPreview::refresh_preview()
 {
     dirty_ = true;
+    update();
+}
+
+void CanvasPreview::set_zoom_percent(int percent)
+{
+    int clamped = std::clamp(percent, 5, 1600);
+    if (zoom_percent_ == clamped && !fit_zoom_active_) return;
+    zoom_percent_ = clamped;
+    fit_zoom_active_ = false;
+    emit zoom_percent_changed(zoom_percent_);
+    update();
+}
+
+int CanvasPreview::zoom_percent() const
+{
+    return zoom_percent_;
+}
+
+void CanvasPreview::set_checkerboard_pattern(int pattern)
+{
+    checkerboard_pattern_ = std::clamp(pattern, 0, 2);
+    update();
+}
+
+void CanvasPreview::fit_canvas(bool up_to_100)
+{
+    fit_zoom_active_ = true;
+    fit_zoom_up_to_100_ = up_to_100;
+    pan_offset_ = QPointF(0, 0);
+    double scale = fit_scale();
+    if (up_to_100) scale = std::min(scale, 1.0);
+    int next_percent = std::clamp((int)std::round(scale * 100.0), 5, 1600);
+    if (zoom_percent_ != next_percent) {
+        zoom_percent_ = next_percent;
+        emit zoom_percent_changed(zoom_percent_);
+    }
     update();
 }
 
@@ -2249,19 +2384,29 @@ QRectF CanvasPreview::layer_local_rect(const Layer &layer) const
     return QRectF(-ox * w, -oy * h, w, h);
 }
 
-double CanvasPreview::view_scale() const
+double CanvasPreview::fit_scale() const
 {
-    if (!title_) return 1.0;
+    if (!title_ || title_->width <= 0 || title_->height <= 0) return 1.0;
     return std::min((double)width() / title_->width,
-                    (double)height() / title_->height) * zoom_;
+                    (double)height() / title_->height);
 }
 
-QPointF CanvasPreview::view_origin() const
+double CanvasPreview::view_scale() const
+{
+    return std::max(0.05, (double)zoom_percent_ / 100.0);
+}
+
+QPointF CanvasPreview::centered_view_origin() const
 {
     if (!title_) return QPointF(0, 0);
     double scale = view_scale();
     return QPointF((width() - title_->width * scale) / 2.0,
                    (height() - title_->height * scale) / 2.0);
+}
+
+QPointF CanvasPreview::view_origin() const
+{
+    return centered_view_origin() + pan_offset_;
 }
 
 QPointF CanvasPreview::view_to_canvas(const QPointF &view_pt) const
@@ -2776,8 +2921,18 @@ void CanvasPreview::paintEvent(QPaintEvent *)
     int ox = (int)origin.x();
     int oy = (int)origin.y();
 
-    p.setBrush(QBrush(QColor(0x44, 0x44, 0x44)));
+    auto checkerboard_colors = [this]() {
+        if (checkerboard_pattern_ == 0)
+            return std::pair<QColor, QColor>(QColor(0xee, 0xee, 0xee), QColor(0xc8, 0xc8, 0xc8));
+        if (checkerboard_pattern_ == 2)
+            return std::pair<QColor, QColor>(QColor(0x1f, 0x1f, 0x1f), QColor(0x36, 0x36, 0x36));
+        return std::pair<QColor, QColor>(QColor(0x33, 0x33, 0x33), QColor(0x4a, 0x4a, 0x4a));
+    };
+    const auto [checker_a, checker_b] = checkerboard_colors();
     p.setPen(Qt::NoPen);
+    p.setBrush(QBrush(checker_a));
+    p.drawRect(ox, oy, dw, dh);
+    p.setBrush(QBrush(checker_b));
     for (int cy = oy; cy < oy + dh; cy += 12)
         for (int cx = ox; cx < ox + dw; cx += 12)
             if ((((cx - ox) / 12) + ((cy - oy) / 12)) % 2 == 0)
@@ -2792,8 +2947,8 @@ void CanvasPreview::paintEvent(QPaintEvent *)
             p.setPen(QPen(color, 1.0, Qt::DashLine));
             p.drawRect(r);
         };
-        draw_guide(0.05, QColor(0, 200, 255, 190));
-        draw_guide(0.10, QColor(255, 220, 0, 190));
+        draw_guide(OBS_ACTION_SAFE_PERCENT, QColor(0, 200, 255, 190));
+        draw_guide(OBS_GRAPHICS_SAFE_PERCENT, QColor(255, 220, 0, 190));
     }
 
     auto layers = selected_layers();
@@ -2866,7 +3021,18 @@ void CanvasPreview::paintEvent(QPaintEvent *)
 }
 void CanvasPreview::mousePressEvent(QMouseEvent *ev)
 {
-    if (!title_ || ev->button() != Qt::LeftButton) return;
+    if (!title_) return;
+
+    if (ev->button() == Qt::MiddleButton) {
+        panning_ = true;
+        pan_start_view_ = QPointF(ev->pos());
+        pan_start_offset_ = pan_offset_;
+        setCursor(Qt::ClosedHandCursor);
+        ev->accept();
+        return;
+    }
+
+    if (ev->button() != Qt::LeftButton) return;
 
     drag_mode_ = hit_test_selected(ev->pos());
     if (drag_mode_ == DragMode::None) {
@@ -2948,6 +3114,14 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
 
 void CanvasPreview::mouseMoveEvent(QMouseEvent *ev)
 {
+    if (panning_ && (ev->buttons() & Qt::MiddleButton)) {
+        pan_offset_ = pan_start_offset_ + (QPointF(ev->pos()) - pan_start_view_);
+        fit_zoom_active_ = false;
+        update();
+        ev->accept();
+        return;
+    }
+
     if (drag_mode_ != DragMode::None && (ev->buttons() & Qt::LeftButton)) {
         apply_drag(ev->pos(), ev->modifiers());
         ev->accept();
@@ -2966,6 +3140,13 @@ void CanvasPreview::mouseMoveEvent(QMouseEvent *ev)
 
 void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
 {
+    if (ev->button() == Qt::MiddleButton && panning_) {
+        panning_ = false;
+        unsetCursor();
+        ev->accept();
+        return;
+    }
+
     if (ev->button() != Qt::LeftButton || drag_mode_ == DragMode::None) return;
 
     if (drag_mode_ == DragMode::Marquee) {
@@ -2994,12 +3175,28 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
 
 void CanvasPreview::wheelEvent(QWheelEvent *ev)
 {
-    if (ev->angleDelta().y() > 0) zoom_ = std::min(zoom_ * 1.1f, 4.0f);
-    else zoom_ = std::max(zoom_ / 1.1f, 0.1f);
+    if (!title_) return;
+    QPointF anchor_canvas = view_to_canvas(ev->position());
+    int next = zoom_percent_;
+    if (ev->angleDelta().y() > 0)
+        next = (int)std::round(next * 1.1);
+    else
+        next = (int)std::round(next / 1.1);
+    zoom_percent_ = std::clamp(next, 5, 1600);
+    fit_zoom_active_ = false;
+    QPointF origin_without_pan = centered_view_origin();
+    double scale = view_scale();
+    pan_offset_ = ev->position() - origin_without_pan - QPointF(anchor_canvas.x() * scale, anchor_canvas.y() * scale);
+    emit zoom_percent_changed(zoom_percent_);
     update();
+    ev->accept();
 }
 
-void CanvasPreview::resizeEvent(QResizeEvent *) { dirty_ = true; }
+void CanvasPreview::resizeEvent(QResizeEvent *)
+{
+    dirty_ = true;
+    if (fit_zoom_active_) fit_canvas(fit_zoom_up_to_100_);
+}
 
 /* ══════════════════════════════════════════════════════════════════
  *  LayerStack
