@@ -11,6 +11,7 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <iterator>
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
@@ -18,11 +19,14 @@
 #include <stdexcept>
 #include <cstdio>
 #include <limits>
+#include <utility>
+#include <cctype>
 
 using json = nlohmann::json;
 
 namespace {
-constexpr std::streamoff kMaxJsonFileBytes = 10 * 1024 * 1024;
+constexpr std::streamoff kMaxJsonFileBytes = 512 * 1024 * 1024;
+constexpr std::streamoff kMaxEmbeddedAssetBytes = 100 * 1024 * 1024;
 constexpr size_t kMaxTitles = 256;
 constexpr size_t kMaxLayersPerTitle = 256;
 constexpr size_t kMaxKeyframesPerProperty = 2048;
@@ -96,6 +100,215 @@ static uint32_t json_color(const json &j, const char *key, uint32_t fallback)
         return parsed >= 0 && parsed <= UINT32_MAX ? (uint32_t)parsed : fallback;
     }
     return fallback;
+}
+
+
+static bool file_exists(const std::string &path)
+{
+    std::ifstream f(path, std::ios::binary);
+    return f.is_open();
+}
+
+static std::string file_name_from_path(const std::string &path)
+{
+    const size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+static std::string sanitize_asset_file_name(const std::string &file_name)
+{
+    std::string sanitized;
+    sanitized.reserve(file_name.size());
+    for (unsigned char ch : file_name) {
+        if (std::isalnum(ch) || ch == '.' || ch == '-' || ch == '_')
+            sanitized.push_back((char)ch);
+        else
+            sanitized.push_back('_');
+    }
+    while (!sanitized.empty() && sanitized.front() == '.')
+        sanitized.erase(sanitized.begin());
+    if (sanitized.empty())
+        sanitized = "image.bin";
+    if (sanitized.size() > 160)
+        sanitized.resize(160);
+    return sanitized;
+}
+
+static std::string lower_extension(const std::string &file_name)
+{
+    const size_t dot = file_name.find_last_of('.');
+    if (dot == std::string::npos)
+        return {};
+    std::string ext = file_name.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
+    return ext;
+}
+
+static std::string mime_type_for_file_name(const std::string &file_name)
+{
+    const std::string ext = lower_extension(file_name);
+    if (ext == "png") return "image/png";
+    if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
+    if (ext == "gif") return "image/gif";
+    if (ext == "webp") return "image/webp";
+    if (ext == "bmp") return "image/bmp";
+    if (ext == "svg" || ext == "svgz") return "image/svg+xml";
+    return "application/octet-stream";
+}
+
+static bool read_binary_file(const std::string &path, std::string &out, std::streamoff max_bytes, std::string *error)
+{
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) {
+        if (error) *error = "Could not open asset file: " + path;
+        return false;
+    }
+
+    f.seekg(0, std::ios::end);
+    const std::streamoff size = f.tellg();
+    if (size < 0 || size > max_bytes) {
+        if (error) *error = "Asset file is too large to embed: " + path;
+        return false;
+    }
+    f.seekg(0, std::ios::beg);
+
+    out.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (!f.good() && !f.eof()) {
+        if (error) *error = "Failed while reading asset file: " + path;
+        return false;
+    }
+    return true;
+}
+
+static std::string base64_encode(const std::string &data)
+{
+    static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    encoded.reserve(((data.size() + 2) / 3) * 4);
+
+    int value = 0;
+    int bits = -6;
+    for (unsigned char ch : data) {
+        value = (value << 8) + ch;
+        bits += 8;
+        while (bits >= 0) {
+            encoded.push_back(table[(value >> bits) & 0x3F]);
+            bits -= 6;
+        }
+    }
+    if (bits > -6)
+        encoded.push_back(table[((value << 8) >> (bits + 8)) & 0x3F]);
+    while (encoded.size() % 4)
+        encoded.push_back('=');
+    return encoded;
+}
+
+static bool base64_decode(const std::string &encoded, std::string &out)
+{
+    static const std::string table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<int> reverse(256, -1);
+    for (int i = 0; i < (int)table.size(); ++i)
+        reverse[(unsigned char)table[i]] = i;
+
+    out.clear();
+    int value = 0;
+    int bits = -8;
+    for (unsigned char ch : encoded) {
+        if (std::isspace(ch))
+            continue;
+        if (ch == '=')
+            break;
+        if (reverse[ch] == -1)
+            return false;
+        value = (value << 6) + reverse[ch];
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back((char)((value >> bits) & 0xFF));
+            bits -= 8;
+        }
+    }
+    return true;
+}
+
+static uint64_t fnv1a_64(const std::string &data)
+{
+    uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char ch : data) {
+        hash ^= ch;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static std::string hex_u64(uint64_t value)
+{
+    std::ostringstream ss;
+    ss << std::hex << std::setfill('0') << std::setw(16) << value;
+    return ss.str();
+}
+
+static std::string embedded_assets_dir()
+{
+    char *cfg_dir = obs_module_config_path("");
+    std::string dir(cfg_dir);
+    bfree(cfg_dir);
+    const std::string assets = dir + "/assets";
+    os_mkdirs(assets.c_str());
+    return assets;
+}
+
+static bool attach_embedded_image_asset(const Layer &layer, json &j, bool required, std::string *error)
+{
+    if (layer.type != LayerType::Image || layer.image_path.empty())
+        return true;
+
+    std::string data;
+    if (!read_binary_file(layer.image_path, data, kMaxEmbeddedAssetBytes, error))
+        return !required;
+
+    const std::string file_name = sanitize_asset_file_name(file_name_from_path(layer.image_path));
+    json asset;
+    asset["file_name"] = file_name;
+    asset["mime_type"] = mime_type_for_file_name(file_name);
+    asset["size"] = data.size();
+    asset["hash"] = hex_u64(fnv1a_64(data));
+    asset["data_base64"] = base64_encode(data);
+    j["embedded_image"] = std::move(asset);
+    return true;
+}
+
+static bool restore_embedded_image_asset(const json &j, std::string &image_path)
+{
+    const json *asset = object_member(j, "embedded_image");
+    if (!asset || !asset->is_object())
+        return false;
+
+    const std::string data64 = bounded_string(*asset, "data_base64", "", (size_t)kMaxEmbeddedAssetBytes * 2);
+    if (data64.empty())
+        return false;
+
+    std::string data;
+    if (!base64_decode(data64, data) || data.empty() || (std::streamoff)data.size() > kMaxEmbeddedAssetBytes)
+        return false;
+
+    std::string file_name = sanitize_asset_file_name(bounded_string(*asset, "file_name", "image.bin", kMaxNameLength));
+    const std::string hash = hex_u64(fnv1a_64(data));
+    file_name = hash + "-" + file_name;
+
+    const std::string path = embedded_assets_dir() + "/" + file_name;
+    if (!file_exists(path)) {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (!f.is_open())
+            return false;
+        f.write(data.data(), (std::streamsize)data.size());
+        if (!f.good()) {
+            std::remove(path.c_str());
+            return false;
+        }
+    }
+
+    image_path = path;
+    return true;
 }
 
 static bool read_json_file(const std::string &path, json &out, std::string *error)
@@ -446,7 +659,9 @@ static AnimatedProperty aprop_from_json(const json &j, const std::string &name)
     return p;
 }
 
-static json layer_to_json(const Layer &l)
+static json layer_to_json(const Layer &l, bool include_embedded_assets = true,
+                          bool require_embedded_assets = false, std::string *error = nullptr,
+                          bool *asset_embed_failed = nullptr)
 {
     json j;
     j["id"]       = l.id;
@@ -543,11 +758,16 @@ static json layer_to_json(const Layer &l)
     j["fill_color_g"]  = aprop_to_json(l.fill_color_g);
     j["fill_color_b"]  = aprop_to_json(l.fill_color_b);
     j["image_path"]    = l.image_path;
+    if (include_embedded_assets && !attach_embedded_image_asset(l, j, require_embedded_assets, error)) {
+        if (asset_embed_failed)
+            *asset_embed_failed = true;
+    }
     j["lock_aspect_ratio"] = l.lock_aspect_ratio;
     return j;
 }
 
-static std::shared_ptr<Layer> layer_from_json(const json &j)
+static std::shared_ptr<Layer> layer_from_json(const json &j, bool require_embedded_assets = false,
+                                               std::string *error = nullptr)
 {
     auto l = std::make_shared<Layer>();
     if (!j.is_object())
@@ -555,7 +775,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
 
     l->id       = bounded_string(j, "id", "", kMaxNameLength);
     l->name     = bounded_string(j, "name", "Layer", kMaxNameLength);
-    l->type     = (LayerType)std::clamp(json_int(j, "type", 0), 0, (int)LayerType::Clock);
+    l->type     = (LayerType)std::clamp(json_int(j, "type", 0), 0, (int)LayerType::Ticker);
     l->visible  = json_bool(j, "visible", true);
     l->locked   = json_bool(j, "locked", false);
     l->properties_expanded = json_bool(j, "properties_expanded", false);
@@ -577,12 +797,32 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     l->clock_format  = bounded_string(j, "clock_format", "H:i:s", kMaxNameLength);
     l->expose_text   = json_bool(j, "expose_text", false);
     l->font_family   = bounded_string(j, "font_family", "Helvetica Neue", kMaxNameLength);
+    l->font_style    = bounded_string(j, "font_style", "Regular", kMaxNameLength);
     l->font_size     = std::clamp(json_int(j, "font_size", 72), 1, 512);
     l->font_bold     = json_bool(j, "font_bold", false);
     l->font_italic   = json_bool(j, "font_italic", false);
+    l->font_kerning  = json_bool(j, "font_kerning", true);
+    l->kerning_mode  = std::clamp(json_int(j, "kerning_mode", 0), 0, 2);
+    l->manual_kerning = (float)std::clamp(finite_or(json_double(j, "manual_kerning", 0.0), 0.0), -1000.0, 1000.0);
+    l->text_leading  = (float)std::clamp(finite_or(json_double(j, "text_leading", 0.0), 0.0), -1000.0, 1000.0);
+    l->char_tracking = (float)std::clamp(finite_or(json_double(j, "char_tracking", 0.0), 0.0), -1000.0, 1000.0);
+    l->char_scale_x  = (float)std::clamp(finite_or(json_double(j, "char_scale_x", 1.0), 1.0), 0.01, 100.0);
+    l->char_scale_y  = (float)std::clamp(finite_or(json_double(j, "char_scale_y", 1.0), 1.0), 0.01, 100.0);
+    l->baseline_shift = (float)std::clamp(finite_or(json_double(j, "baseline_shift", 0.0), 0.0), -1000.0, 1000.0);
     l->text_style    = std::clamp(json_int(j, "text_style", 0), 0, 4);
+    l->text_underline = json_bool(j, "text_underline", false);
+    l->text_strikethrough = json_bool(j, "text_strikethrough", false);
+    l->text_ligatures = json_bool(j, "text_ligatures", true);
+    l->text_stylistic_alternates = json_bool(j, "text_stylistic_alternates", false);
+    l->text_fractions = json_bool(j, "text_fractions", false);
+    l->text_opentype_features = json_bool(j, "text_opentype_features", false);
+    l->text_language = bounded_string(j, "text_language", "English", kMaxNameLength);
     l->text_overflow_mode = std::clamp(json_int(j, "text_overflow_mode", 0), 0, 2);
-    l->text_fit_min_scale = std::clamp(finite_or(json_double(j, "text_fit_min_scale", 0.5), 0.5), 0.05, 1.0);
+    l->text_fit_min_scale = (float)std::clamp(finite_or(json_double(j, "text_fit_min_scale", 0.5), 0.5), 0.05, 1.0);
+    l->ticker_style = std::clamp(json_int(j, "ticker_style", 0), 0, 2);
+    l->ticker_speed = std::clamp(finite_or(json_double(j, "ticker_speed", 120.0), 120.0), 0.0, 10000.0);
+    l->ticker_line_hold = std::clamp(finite_or(json_double(j, "ticker_line_hold", 2.0), 2.0), 0.0, kMaxDuration);
+    l->ticker_direction = std::clamp(json_int(j, "ticker_direction", 1), 0, 1);
     l->text_color    = json_color(j, "text_color", (uint32_t)0xFFFFFFFF);
     l->stroke_color  = json_color(j, "stroke_color", (uint32_t)0xFF000000);
     l->stroke_width  = std::clamp(finite_or(json_double(j, "stroke_width", 0.0), 0.0), 0.0, 512.0);
@@ -650,11 +890,15 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     if (j.contains("fill_color_g")) l->fill_color_g = aprop_from_json(j["fill_color_g"], "fill_color_g");
     if (j.contains("fill_color_b")) l->fill_color_b = aprop_from_json(j["fill_color_b"], "fill_color_b");
     l->image_path    = bounded_string(j, "image_path", "", 4096);
+    if (object_member(j, "embedded_image") && !restore_embedded_image_asset(j, l->image_path) && require_embedded_assets) {
+        if (error) *error = "Could not restore an embedded image asset from the template file.";
+    }
     l->lock_aspect_ratio = json_bool(j, "lock_aspect_ratio", true);
     return l;
 }
 
-static json title_to_json(const Title &t)
+static json title_to_json(const Title &t, bool include_embedded_assets = true,
+                          bool require_embedded_assets = false, std::string *error = nullptr)
 {
     json jt;
     jt["id"]       = t.id;
@@ -669,8 +913,15 @@ static json title_to_json(const Title &t)
     jt["width"]    = t.width;
     jt["height"]   = t.height;
     json layers = json::array();
-    for (auto &l : t.layers)
-        layers.push_back(layer_to_json(*l));
+    for (auto &l : t.layers) {
+        bool asset_embed_failed = false;
+        layers.push_back(layer_to_json(*l, include_embedded_assets, require_embedded_assets, error, &asset_embed_failed));
+        if (require_embedded_assets && asset_embed_failed) {
+            if (error && error->empty())
+                *error = "Could not embed an image asset in the template file.";
+            return {};
+        }
+    }
     jt["layers"] = layers;
     json live_rows = json::array();
     for (const auto &row : t.live_text_rows)
@@ -679,7 +930,8 @@ static json title_to_json(const Title &t)
     return jt;
 }
 
-static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_ids)
+static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_ids,
+                                               bool require_embedded_assets = false, std::string *error = nullptr)
 {
     auto t = std::make_shared<Title>();
     if (!jt.is_object())
@@ -699,8 +951,11 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
     if (jt.contains("layers") && jt["layers"].is_array()) {
         const size_t count = std::min(jt["layers"].size(), kMaxLayersPerTitle);
         t->layers.reserve(count);
-        for (size_t i = 0; i < count; ++i)
-            t->layers.push_back(layer_from_json(jt["layers"][i]));
+        for (size_t i = 0; i < count; ++i) {
+            t->layers.push_back(layer_from_json(jt["layers"][i], require_embedded_assets, error));
+            if (require_embedded_assets && error && !error->empty())
+                return t;
+        }
     }
     if (jt.contains("live_text_rows") && jt["live_text_rows"].is_array()) {
         const size_t row_count = std::min(jt["live_text_rows"].size(), kMaxLiveTextRows);
@@ -777,6 +1032,15 @@ void TitleDataStore::save() const
 
 bool TitleDataStore::export_title(const std::string &id, const std::string &path, std::string *error) const
 {
+    TitleTemplateExportMetadata metadata;
+    return export_title(id, path, metadata, error);
+}
+
+bool TitleDataStore::export_title(const std::string &id, const std::string &path,
+                                  const TitleTemplateExportMetadata &metadata,
+                                  std::string *error) const
+{
+    if (error) error->clear();
     auto t = get_title(id);
     if (!t) {
         if (error) *error = "No title template is selected.";
@@ -785,10 +1049,31 @@ bool TitleDataStore::export_title(const std::string &id, const std::string &path
 
     json root;
     root["format"] = "obs-graphics-studio-pro-title-template";
-    root["version"] = 1;
-    root["title"] = title_to_json(*t);
+    root["version"] = 3;
+    root["template_title"] = metadata.title;
+    root["description"] = metadata.description;
+    root["creator"] = metadata.creator;
+    root["creation_date"] = metadata.creation_date;
+    root["screenshot"] = {
+        {"mime_type", "image/png"},
+        {"data_base64", metadata.screenshot_png_base64},
+    };
+    root["metadata"] = {
+        {"title", metadata.title},
+        {"description", metadata.description},
+        {"creator", metadata.creator},
+        {"creation_date", metadata.creation_date},
+        {"screenshot", root["screenshot"]},
+    };
+    json exported_title = title_to_json(*t, true, true, error);
+    if ((error && !error->empty()) || exported_title.empty()) {
+        if (error && error->empty())
+            *error = "Could not embed all title assets in the export file.";
+        return false;
+    }
+    root["title"] = std::move(exported_title);
 
-    std::ofstream f(path);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
     if (!f.is_open()) {
         if (error) *error = "Could not open the export file for writing.";
         return false;
@@ -803,6 +1088,7 @@ bool TitleDataStore::export_title(const std::string &id, const std::string &path
 
 std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std::string *error)
 {
+    if (error) error->clear();
     try {
         json root;
         if (!read_json_file(path, root, error))
@@ -817,7 +1103,9 @@ std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std
         else
             throw std::runtime_error("Unsupported template file format.");
 
-        auto imported = title_from_json(jt, true);
+        auto imported = title_from_json(jt, true, true, error);
+        if (error && !error->empty())
+            throw std::runtime_error(*error);
         if (!imported || imported->layers.empty())
             throw std::runtime_error("Template data was empty.");
         std::unordered_set<std::string> seen_ids;
