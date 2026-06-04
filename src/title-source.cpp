@@ -21,6 +21,8 @@
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
 #include <QImage>
+#include <QSize>
+#include <QSvgRenderer>
 #include <QString>
 #include <QStringList>
 #include <QLocale>
@@ -45,6 +47,36 @@
 
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
+
+static bool image_path_is_svg(const QString &path)
+{
+    return path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive) ||
+           path.endsWith(QStringLiteral(".svgz"), Qt::CaseInsensitive);
+}
+
+static QImage load_layer_image(const QString &path, const QSize &fallback_size = QSize())
+{
+    if (image_path_is_svg(path)) {
+        QSvgRenderer renderer(path);
+        if (!renderer.isValid()) return QImage();
+
+        QSize size = fallback_size.isValid() && !fallback_size.isEmpty()
+            ? fallback_size
+            : renderer.defaultSize();
+        if (!size.isValid() || size.isEmpty())
+            size = renderer.viewBox().size();
+        if (!size.isValid() || size.isEmpty())
+            size = QSize(256, 256);
+
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        renderer.render(&painter);
+        return image;
+    }
+
+    return QImage(path);
+}
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -817,11 +849,6 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
 {
     if (layer.image_path.empty()) return;
 
-    QImage image(QString::fromStdString(layer.image_path));
-    if (image.isNull()) return;
-
-    QImage argb = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-
     double px = layer.pos_x.evaluate(t);
     double py = layer.pos_y.evaluate(t);
     double sx = layer.scale_x.evaluate(t);
@@ -830,6 +857,16 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
     double alpha = layer.opacity.evaluate(t);
     double w = eval_box_width(layer, t);
     double h = eval_box_height(layer, t);
+    if (w <= 0.0 || h <= 0.0) return;
+
+    QImage image = load_layer_image(QString::fromStdString(layer.image_path),
+                                    QSize(std::max(1, (int)std::ceil(w)),
+                                          std::max(1, (int)std::ceil(h))));
+    if (image.isNull()) return;
+
+    QImage argb = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    if (argb.width() <= 0 || argb.height() <= 0) return;
+
 
     cairo_surface_t *img_surface = cairo_image_surface_create_for_data(
         argb.bits(), CAIRO_FORMAT_ARGB32,
