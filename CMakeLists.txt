@@ -330,6 +330,9 @@ add_custom_command(TARGET obs-graphics-studio-pro POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_SOURCE_DIR}/data/locale"
             "${OBS_TITLES_PACKAGE_DIR}/data/locale"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${CMAKE_SOURCE_DIR}/data/icons"
+            "${OBS_TITLES_PACKAGE_DIR}/data/icons"
     COMMENT "Staging OBS plugin data files")
 
 if(WIN32)
