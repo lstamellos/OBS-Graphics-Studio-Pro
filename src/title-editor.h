@@ -246,6 +246,7 @@ signals:
 private slots:
     void on_add_text();
     void on_add_clock();
+    void on_add_ticker();
     void on_add_rect();
     void on_add_image();
     void on_move_up();
@@ -397,6 +398,10 @@ private:
     QComboBox       *cmb_text_style_ = nullptr;
     QComboBox       *cmb_text_overflow_ = nullptr;
     QDoubleSpinBox  *spn_text_fit_min_scale_ = nullptr;
+    QComboBox       *cmb_ticker_style_ = nullptr;
+    QDoubleSpinBox  *spn_ticker_speed_ = nullptr;
+    QDoubleSpinBox  *spn_ticker_line_hold_ = nullptr;
+    QComboBox       *cmb_ticker_direction_ = nullptr;
     QLabel          *lbl_text_fit_scale_ = nullptr;
     QCheckBox       *chk_expose_text_ = nullptr;
     QComboBox       *cmb_text_align_ = nullptr;

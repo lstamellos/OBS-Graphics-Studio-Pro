@@ -428,6 +428,10 @@ static json layer_to_json(const Layer &l)
     j["text_style"]    = l.text_style;
     j["text_overflow_mode"] = l.text_overflow_mode;
     j["text_fit_min_scale"] = l.text_fit_min_scale;
+    j["ticker_style"] = l.ticker_style;
+    j["ticker_speed"] = l.ticker_speed;
+    j["ticker_line_hold"] = l.ticker_line_hold;
+    j["ticker_direction"] = l.ticker_direction;
     j["text_color"]    = l.text_color;
     j["outline_enabled"] = l.outline_enabled;
     j["stroke_color"]  = l.stroke_color;
@@ -487,7 +491,7 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
 
     l->id       = bounded_string(j, "id", "", kMaxNameLength);
     l->name     = bounded_string(j, "name", "Layer", kMaxNameLength);
-    l->type     = (LayerType)std::clamp(j.value("type", 0), 0, (int)LayerType::Clock);
+    l->type     = (LayerType)std::clamp(j.value("type", 0), 0, (int)LayerType::Ticker);
     l->visible  = j.value("visible",  true);
     l->locked   = j.value("locked",   false);
     l->properties_expanded = j.value("properties_expanded", false);
@@ -515,6 +519,10 @@ static std::shared_ptr<Layer> layer_from_json(const json &j)
     l->text_style    = std::clamp(j.value("text_style", 0), 0, 4);
     l->text_overflow_mode = std::clamp(j.value("text_overflow_mode", 0), 0, 2);
     l->text_fit_min_scale = std::clamp(finite_or(j.value("text_fit_min_scale", 0.5f), 0.5), 0.05, 1.0);
+    l->ticker_style = std::clamp(j.value("ticker_style", 0), 0, 2);
+    l->ticker_speed = std::clamp(finite_or(j.value("ticker_speed", 120.0), 120.0), 1.0, 5000.0);
+    l->ticker_line_hold = std::clamp(finite_or(j.value("ticker_line_hold", 2.0), 2.0), 0.1, 60.0);
+    l->ticker_direction = std::clamp(j.value("ticker_direction", 1), 0, 1);
     l->text_color    = j.value("text_color",    (uint32_t)0xFFFFFFFF);
     l->stroke_color  = j.value("stroke_color",  (uint32_t)0xFF000000);
     l->stroke_width  = std::clamp(finite_or(j.value("stroke_width",  0.0f), 0.0), 0.0, 512.0);
