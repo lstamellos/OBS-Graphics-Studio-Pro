@@ -40,6 +40,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
+#include <QSlider>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QGroupBox>
@@ -141,9 +142,23 @@ static const QColor C_RULER    { 0x1e1e1e };
 static const QColor C_KF_DOT   { 0xf0a020 };
 static const QColor C_PLAYHEAD { 0xff4444 };
 
-static QIcon keyframe_diamond_icon(bool active)
+static QIcon keyframe_diamond_icon(bool active, bool outlined = false)
 {
-    return obsgs_icon(active ? "keyframe-active.svg" : "keyframe-inactive.svg");
+    if (active)
+        return obsgs_icon("keyframe-active.svg");
+    if (!outlined)
+        return obsgs_icon("keyframe-inactive.svg");
+
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor(0xff, 0xd2, 0x3f), 2));
+    QPolygon diamond;
+    diamond << QPoint(12, 5) << QPoint(19, 12) << QPoint(12, 19) << QPoint(5, 12);
+    painter.drawPolygon(diamond);
+    return QIcon(pixmap);
 }
 
 
@@ -186,22 +201,27 @@ static QString format_timecode(double t)
         .arg(frames, 2, 10, QChar('0'));
 }
 
-static QColor layer_color(const Layer &layer, int row)
+static QColor layer_type_color(LayerType type)
 {
-    if (layer.type == LayerType::Text)
+    switch (type) {
+    case LayerType::Text:
         return QColor(0xb4, 0x5a, 0xa0);
-    if (layer.type == LayerType::Clock)
+    case LayerType::Clock:
         return QColor(0x4b, 0x9a, 0xc8);
-    if (layer.type == LayerType::Ticker)
+    case LayerType::Ticker:
         return QColor(0xd8, 0x8a, 0x30);
-    if (layer.type == LayerType::SolidRect || layer.type == LayerType::Shape)
+    case LayerType::SolidRect:
+    case LayerType::Shape:
         return QColor(0x4f, 0x8f, 0x58);
-    if (layer.type == LayerType::Image)
+    case LayerType::Image:
         return QColor(0x7d, 0x8b, 0x7f);
-    static const QColor palette[] = {
-        QColor(0x65, 0x8a, 0xc8), QColor(0xb8, 0x8a, 0x48),
-        QColor(0x8a, 0x70, 0xb8), QColor(0x4e, 0x8c, 0x9a)};
-    return palette[row % 4];
+    }
+    return QColor(0x65, 0x8a, 0xc8);
+}
+
+static QColor layer_color(const Layer &layer, int /*row*/)
+{
+    return layer_type_color(layer.type);
 }
 
 static QString layer_type_short(LayerType type)
@@ -857,6 +877,13 @@ static bool any_keyframe_at_time(std::initializer_list<const AnimatedProperty *>
     return false;
 }
 
+static bool any_keyframes(std::initializer_list<const AnimatedProperty *> props)
+{
+    for (const auto *prop : props)
+        if (prop && prop->is_animated()) return true;
+    return false;
+}
+
 static QStringList font_styles_for_family(const QString &family)
 {
     QFontDatabase fdb;
@@ -1117,29 +1144,47 @@ void TitleEditor::build_ui()
     upper_split->setStretchFactor(1, 3);
     upper_split->setStretchFactor(2, 1);
 
-    /* ── Lower split: LayerStack | Timeline ── */
-    auto *lower_split = new QSplitter(Qt::Horizontal, this);
+    /* ── Timeline editor: full-width transport | LayerStack + Timeline | full-width zoom ── */
+    auto *timeline_editor = new QWidget(this);
+    auto *timeline_editor_layout = new QVBoxLayout(timeline_editor);
+    timeline_editor_layout->setContentsMargins(0, 0, 0, 0);
+    timeline_editor_layout->setSpacing(0);
+
+    auto *timeline_transport = new QWidget(timeline_editor);
+    timeline_transport->setFixedHeight(34);
+    timeline_transport->setStyleSheet(
+        "QWidget{background:#141414;border-bottom:1px solid #333;}"
+        "QToolButton{color:#ccc;background:transparent;padding:3px 7px;border:none;}"
+        "QToolButton:hover{background:#333;border-radius:2px;}"
+        "QLabel{color:#0af;font-family:monospace;}");
+    auto *transport_layout = new QHBoxLayout(timeline_transport);
+    transport_layout->setContentsMargins(8, 0, 8, 0);
+    transport_layout->setSpacing(2);
+    auto make_transport_button = [timeline_transport](QAction *action) {
+        auto *button = new QToolButton(timeline_transport);
+        button->setDefaultAction(action);
+        button->setIconSize(QSize(14, 14));
+        button->setAutoRaise(true);
+        return button;
+    };
+    transport_layout->addStretch(1);
+    transport_layout->addWidget(make_transport_button(act_rew_));
+    transport_layout->addWidget(make_transport_button(act_prev_kf_));
+    transport_layout->addWidget(make_transport_button(act_play_));
+    transport_layout->addWidget(make_transport_button(act_full_loop_));
+    QAction *step_forward_action = new QAction(obs_icon("step-forward.svg"), obsgs_tr("OBSTitles.StepForward"), timeline_transport);
+    connect(step_forward_action, &QAction::triggered, this, &TitleEditor::step_forward);
+    transport_layout->addWidget(make_transport_button(step_forward_action));
+    transport_layout->addWidget(make_transport_button(act_next_kf_));
+    transport_layout->addStretch(1);
+    timeline_editor_layout->addWidget(timeline_transport);
+
+    auto *lower_split = new QSplitter(Qt::Horizontal, timeline_editor);
 
     auto *layers_panel = new QWidget(lower_split);
     auto *layers_layout = new QVBoxLayout(layers_panel);
     layers_layout->setContentsMargins(0, 0, 0, 0);
     layers_layout->setSpacing(0);
-
-    auto *layer_transport = new QToolBar(layers_panel);
-    layer_transport->setMovable(false);
-    layer_transport->setFixedHeight(34);
-    layer_transport->setIconSize(QSize(14, 14));
-    layer_transport->setStyleSheet(
-        "QToolBar{background:#141414;border-bottom:1px solid #333;spacing:1px;}"
-        "QToolButton{color:#ccc;background:transparent;padding:3px 5px;border:none;}"
-        "QToolButton:hover{background:#333;border-radius:2px;}");
-    layer_transport->addAction(act_rew_);
-    layer_transport->addAction(act_prev_kf_);
-    layer_transport->addAction(act_play_);
-    layer_transport->addAction(act_full_loop_);
-    layer_transport->addAction(obs_icon("step-forward.svg"), obsgs_tr("OBSTitles.StepForward"), this, &TitleEditor::step_forward);
-    layer_transport->addAction(act_next_kf_);
-    layers_layout->addWidget(layer_transport);
 
     layers_ = new LayerStack(layers_panel);
     layers_->setMinimumHeight(140);
@@ -1148,9 +1193,59 @@ void TitleEditor::build_ui()
     layers_panel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     lower_split->addWidget(layers_panel);
 
-    timeline_ = new TimelineWidget(lower_split);
+    auto *timeline_panel = new QWidget(lower_split);
+    auto *timeline_panel_layout = new QVBoxLayout(timeline_panel);
+    timeline_panel_layout->setContentsMargins(0, 0, 0, 0);
+    timeline_panel_layout->setSpacing(0);
+
+    timeline_ = new TimelineWidget(timeline_panel);
     timeline_->setMinimumHeight(140);
-    lower_split->addWidget(timeline_);
+    timeline_panel_layout->addWidget(timeline_, 1);
+
+    auto *timeline_zoom_bar = new QWidget(timeline_panel);
+    timeline_zoom_bar->setFixedHeight(34);
+    timeline_zoom_bar->setStyleSheet(
+        "QWidget{background:#171717;border-top:1px solid #333;}"
+        "QPushButton{color:#ddd;background:#2a2a2a;border:1px solid #3f3f3f;border-radius:3px;padding:3px 8px;}"
+        "QPushButton:hover{background:#343434;}"
+        "QSlider::groove:horizontal{height:4px;background:#303030;border-radius:2px;}"
+        "QSlider::handle:horizontal{width:12px;margin:-5px 0;background:#bfc7d5;border-radius:6px;}"
+        "QSlider::sub-page:horizontal{background:#0078d4;border-radius:2px;}");
+    auto *zoom_layout = new QHBoxLayout(timeline_zoom_bar);
+    zoom_layout->setContentsMargins(10, 0, 10, 0);
+    zoom_layout->setSpacing(8);
+    auto *zoom_out = new QPushButton(timeline_zoom_bar);
+    zoom_out->setIcon(obs_icon("zoom-out.svg"));
+    zoom_out->setFixedWidth(30);
+    auto *zoom_slider = new QSlider(Qt::Horizontal, timeline_zoom_bar);
+    zoom_slider->setRange(5, 1200);
+    zoom_slider->setValue(timeline_->zoom_percent());
+    zoom_slider->setMinimumWidth(220);
+    zoom_slider->setMaximumWidth(360);
+    auto *zoom_in = new QPushButton(timeline_zoom_bar);
+    zoom_in->setIcon(obs_icon("zoom-in.svg"));
+    zoom_in->setFixedWidth(30);
+    auto *fit_timeline = new QPushButton(obsgs_tr("OBSTitles.FitTimeline"), timeline_zoom_bar);
+    zoom_layout->addWidget(zoom_out);
+    zoom_layout->addWidget(zoom_slider);
+    zoom_layout->addWidget(zoom_in);
+    zoom_layout->addWidget(fit_timeline);
+    zoom_layout->addStretch(1);
+    connect(zoom_slider, &QSlider::valueChanged, timeline_, &TimelineWidget::set_zoom_percent);
+    connect(timeline_, &TimelineWidget::zoom_percent_changed, this, [zoom_slider](int percent) {
+        QSignalBlocker blocker(zoom_slider);
+        zoom_slider->setValue(percent);
+    });
+    connect(zoom_out, &QPushButton::clicked, this, [this]() {
+        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() / 1.18));
+    });
+    connect(zoom_in, &QPushButton::clicked, this, [this]() {
+        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() * 1.18));
+    });
+    connect(fit_timeline, &QPushButton::clicked, timeline_, &TimelineWidget::fit_timeline);
+    timeline_panel_layout->addWidget(timeline_zoom_bar);
+    lower_split->addWidget(timeline_panel);
+
     if (auto *scroll_bar = layers_->vertical_scroll_bar()) {
         connect(scroll_bar, &QScrollBar::valueChanged, timeline_, &TimelineWidget::set_vertical_scroll);
         connect(timeline_, &TimelineWidget::vertical_scroll_delta_requested, this,
@@ -1160,11 +1255,12 @@ void TitleEditor::build_ui()
     lower_split->setStretchFactor(1, 3);
     lower_split->setCollapsible(0, false);
     lower_split->setCollapsible(1, false);
+    timeline_editor_layout->addWidget(lower_split, 1);
 
     /* ── Outer vertical split ── */
     auto *vsplit = new QSplitter(Qt::Vertical, this);
     vsplit->addWidget(upper_split);
-    vsplit->addWidget(lower_split);
+    vsplit->addWidget(timeline_editor);
     vsplit->setStretchFactor(0, 3);
     vsplit->setStretchFactor(1, 2);
     root->addWidget(vsplit, 1);
@@ -1311,6 +1407,8 @@ void TitleEditor::build_ui()
 
     connect(timeline_, &TimelineWidget::playhead_changed,
             this, &TitleEditor::on_playhead_changed);
+    connect(timeline_, &TimelineWidget::layer_selected,
+            this, &TitleEditor::on_layer_selected);
     connect(timeline_, &TimelineWidget::keyframe_easing_changed,
             this, &TitleEditor::on_title_modified);
 
@@ -1647,6 +1745,10 @@ void TitleEditor::open_title(const std::string &tid)
         on_layer_selected(title_->layers.back()->id);
     else
         props_->set_layer(nullptr, playhead_);
+
+    QTimer::singleShot(0, timeline_, [this]() {
+        if (timeline_) timeline_->fit_timeline();
+    });
 
     undo_stack_.clear();
     undo_index_ = -1;
@@ -2932,7 +3034,7 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
 
 
     QWidget *columns = new QWidget(this);
-    columns->setFixedHeight(38);
+    columns->setFixedHeight(72);
     columns->setStyleSheet("background:#141414;border-top:1px solid #292929;border-bottom:1px solid #292929;");
     auto *ch = new QHBoxLayout(columns);
     ch->setContentsMargins(4, 0, 4, 0);
@@ -3095,7 +3197,7 @@ void LayerStack::populate()
         item->setData(Qt::UserRole + 1, "layer");
         item->setFlags((item->flags() | Qt::ItemIsSelectable | Qt::ItemIsEnabled |
                         Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled) & ~Qt::ItemIsUserCheckable);
-        item->setSizeHint(QSize(0, 24));
+        item->setSizeHint(QSize(0, 28));
         list_->addItem(item);
 
         QWidget *row_widget = new QWidget(list_);
@@ -3219,7 +3321,7 @@ void LayerStack::populate()
             prop_item->setData(Qt::UserRole + 2, label);
             prop_item->setFlags((prop_item->flags() | Qt::ItemIsSelectable | Qt::ItemIsEnabled) &
                                 ~(Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled | Qt::ItemIsUserCheckable));
-            prop_item->setSizeHint(QSize(0, 24));
+            prop_item->setSizeHint(QSize(0, 28));
             list_->addItem(prop_item);
 
             QWidget *prop_widget = new QWidget(list_);
@@ -3229,7 +3331,7 @@ void LayerStack::populate()
             QLabel *diamond_indicator = new QLabel("◇", prop_widget);
             diamond_indicator->setFixedWidth(18);
             diamond_indicator->setAlignment(Qt::AlignCenter);
-            diamond_indicator->setStyleSheet("color:#9aa5b1;");
+            diamond_indicator->setStyleSheet(QString("color:%1;").arg(layer_color(*l, row).name()));
             ph->addWidget(diamond_indicator);
             QLabel *prop_name = new QLabel(label, prop_widget);
             prop_name->setStyleSheet("color:#b8b8b8;");
@@ -3404,9 +3506,19 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent)
 
 void TimelineWidget::set_title(std::shared_ptr<Title> t)
 {
+    const bool title_changed = t != title_;
     title_ = t;
+    if (title_changed) {
+        scroll_x_ = 0;
+        fit_on_next_resize_ = true;
+    }
     clamp_scroll();
     clamp_vertical_scroll();
+    if (fit_on_next_resize_ && width() > 40) {
+        fit_on_next_resize_ = false;
+        fit_timeline();
+        return;
+    }
     update();
 }
 
@@ -3418,12 +3530,8 @@ void TimelineWidget::set_selected_layer(const std::string &lid)
 void TimelineWidget::set_playhead(double t)
 {
     playhead_ = snap_time(t);
-    if (title_) {
-        int phx = time_to_x(playhead_);
-        if (phx < 24) scroll_x_ = std::max(0, (int)(playhead_ * pixels_per_sec_) - 24);
-        if (phx > width() - 24) scroll_x_ = std::max(0, (int)(playhead_ * pixels_per_sec_) - width() + 24);
-        clamp_scroll();
-    }
+    if (title_)
+        keep_playhead_visible();
     update();
 }
 
@@ -3432,6 +3540,49 @@ void TimelineWidget::set_vertical_scroll(int scroll_y)
     scroll_y_ = scroll_y;
     clamp_vertical_scroll();
     update();
+}
+
+void TimelineWidget::set_pixels_per_sec(double pixels_per_sec, double anchor_time, int anchor_x)
+{
+    pixels_per_sec_ = std::clamp(pixels_per_sec, 5.0, 1200.0);
+    scroll_x_ = (int)std::round(anchor_time * pixels_per_sec_) - anchor_x;
+    clamp_scroll();
+    keep_playhead_visible();
+    update();
+    emit zoom_percent_changed(zoom_percent());
+}
+
+void TimelineWidget::set_zoom_percent(int percent)
+{
+    int clamped = std::clamp(percent, 5, 1200);
+    double anchor_time = title_ ? std::clamp(playhead_, 0.0, title_->duration) : playhead_;
+    int anchor_x = std::clamp(time_to_x(anchor_time), 24, std::max(24, width() - 24));
+    set_pixels_per_sec((double)clamped, anchor_time, anchor_x);
+}
+
+int TimelineWidget::zoom_percent() const
+{
+    return (int)std::round(pixels_per_sec_);
+}
+
+void TimelineWidget::fit_timeline()
+{
+    double dur = title_ ? std::max(obs_frame_duration(), title_->duration) : 10.0;
+    double fitted = (double)std::max(1, width() - 40) / dur;
+    set_pixels_per_sec(fitted, 0.0, 0);
+}
+
+bool TimelineWidget::keep_playhead_visible()
+{
+    if (!title_) return false;
+    int phx = time_to_x(playhead_);
+    int old_scroll = scroll_x_;
+    if (phx < 24)
+        scroll_x_ = std::max(0, (int)std::round(playhead_ * pixels_per_sec_) - 24);
+    if (phx > width() - 24)
+        scroll_x_ = std::max(0, (int)std::round(playhead_ * pixels_per_sec_) - width() + 24);
+    clamp_scroll();
+    return old_scroll != scroll_x_;
 }
 
 double TimelineWidget::x_to_time(int x) const
@@ -3527,7 +3678,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
         if (title_->playback_mode == 2) {
             int pause_x = time_to_x(std::clamp(title_->pause_time, 0.0, dur));
             p.setPen(QPen(QColor(0xff, 0xc8, 0x32), 2));
-            p.drawLine(pause_x, 12, pause_x, H);
+            p.drawLine(pause_x, 12, pause_x, rh);
             p.setBrush(QColor(0xff, 0xc8, 0x32));
             p.setPen(Qt::NoPen);
             QPolygon marker;
@@ -3535,6 +3686,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
             p.drawPolygon(marker);
             p.setPen(QColor(0xff, 0xe0, 0x85));
             p.drawText(pause_x + 4, 22, 100, 16, Qt::AlignVCenter, obsgs_tr("OBSTitles.Pause"));
+            p.setBrush(Qt::NoBrush);
         }
     }
 
@@ -3562,6 +3714,7 @@ void TimelineWidget::paintEvent(QPaintEvent *)
             QColor bar_col = layer_color(*layer, row);
             if (sel) bar_col = bar_col.lighter(125);
             p.fillRect(x0, y + 3, x1 - x0, rowh - 6, bar_col);
+            p.setBrush(Qt::NoBrush);
             p.setPen(QColor(0x0d,0x0d,0x0d));
             p.drawRect(x0, y + 3, x1 - x0, rowh - 6);
 
@@ -3588,8 +3741,8 @@ void TimelineWidget::paintEvent(QPaintEvent *)
                         << QPoint(kx + 5, ky)
                         << QPoint(kx,     ky + 5)
                         << QPoint(kx - 5, ky);
-                p.setBrush(keyframe_color(kf.easing));
-                p.setPen(QPen(QColor(0x10, 0x10, 0x10), 1));
+                p.setBrush(layer_color(*layer, row));
+                p.setPen(QPen(keyframe_color(kf.easing), 1));
                 p.drawPolygon(diamond);
             }
         };
@@ -3667,6 +3820,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     AnimatedProperty *hit_prop = nullptr;
     int hit_idx = -1;
     if (!hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr)) return;
+    if (layer && layer->locked) return;
 
     const bool has_previous_segment = hit_idx > 0;
     const bool has_next_segment = hit_idx + 1 < (int)hit_prop->keyframes.size();
@@ -3791,7 +3945,7 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
         return;
     }
 
-    if (!(ev->modifiers() & Qt::ControlModifier)) {
+    if (ev->modifiers() & Qt::AltModifier) {
         int delta = angle.y() != 0 ? -angle.y() : -angle.x();
         if (delta != 0) {
             emit vertical_scroll_delta_requested(delta);
@@ -3810,16 +3964,18 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
     if (delta == 0) return;
 
     double factor = std::pow(1.0015, delta);
-    pixels_per_sec_ = std::clamp(pixels_per_sec_ * factor, 25.0, 1200.0);
-    scroll_x_ = (int)std::round(anchor_time * pixels_per_sec_) - cursor_x;
-    clamp_scroll();
-    update();
+    set_pixels_per_sec(pixels_per_sec_ * factor, anchor_time, cursor_x);
     ev->accept();
 }
 
 void TimelineWidget::resizeEvent(QResizeEvent *ev)
 {
     QWidget::resizeEvent(ev);
+    if (fit_on_next_resize_ && title_ && width() > 40) {
+        fit_on_next_resize_ = false;
+        fit_timeline();
+        return;
+    }
     clamp_scroll();
     clamp_vertical_scroll();
 }
@@ -3872,6 +4028,11 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
     AnimatedProperty *hit_prop = nullptr;
     int hit_idx = -1;
     if (hit_keyframe(ev->pos(), &hit_layer, &hit_prop, &hit_idx, nullptr)) {
+        if (hit_layer && hit_layer->locked) {
+            ev->accept();
+            return;
+        }
+        if (hit_layer) emit layer_selected(hit_layer->id);
         drag_mode_ = DragMode::Keyframe;
         drag_layer_id_ = hit_layer->id;
         drag_prop_name_ = hit_prop->name;
@@ -3885,9 +4046,16 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
     int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
     if (row >= 0 && row < (int)rows.size() && !rows[row].is_property) {
         auto layer = rows[row].layer;
+        if (!layer || layer->locked) {
+            ev->accept();
+            return;
+        }
         int x0 = time_to_x(layer->in_time);
         int x1 = time_to_x(layer->out_time);
         constexpr int kTrimHit = 7;
+        const bool hit_strip = ev->pos().x() >= std::min(x0, x1) - kTrimHit &&
+                               ev->pos().x() <= std::max(x0, x1) + kTrimHit;
+        if (hit_strip) emit layer_selected(layer->id);
         if (std::abs(ev->pos().x() - x0) <= kTrimHit) {
             drag_mode_ = DragMode::TrimIn;
             drag_layer_id_ = layer->id;
@@ -3945,7 +4113,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
 
     if (drag_mode_ == DragMode::Keyframe) {
         auto layer = title_->find_layer(drag_layer_id_);
-        if (!layer) return;
+        if (!layer || layer->locked) return;
         for (auto *prop : timeline_properties(*layer)) {
             if (prop->name != drag_prop_name_) continue;
             if (drag_keyframe_index_ < 0 || drag_keyframe_index_ >= (int)prop->keyframes.size()) return;
@@ -3958,7 +4126,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
 
     if (drag_mode_ == DragMode::TrimIn || drag_mode_ == DragMode::TrimOut) {
         auto layer = title_->find_layer(drag_layer_id_);
-        if (!layer) return;
+        if (!layer || layer->locked) return;
         if (drag_mode_ == DragMode::TrimIn)
             layer->in_time = std::clamp(t, 0.0, std::max(0.0, layer->out_time - obs_frame_duration()));
         else
@@ -3969,7 +4137,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
 
     if (drag_mode_ == DragMode::Layer) {
         auto layer = title_->find_layer(drag_layer_id_);
-        if (!layer) return;
+        if (!layer || layer->locked) return;
         double duration = std::max(obs_frame_duration(), drag_start_out_ - drag_start_in_);
         double new_in = drag_start_in_ + (t - drag_start_time_);
         new_in = std::clamp(new_in, 0.0, std::max(0.0, title_->duration - duration));
@@ -3982,6 +4150,10 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
     auto rows = timeline_rows(title_);
     int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
     if (row >= 0 && row < (int)rows.size() && !rows[row].is_property) {
+        if (!rows[row].layer || rows[row].layer->locked) {
+            unsetCursor();
+            return;
+        }
         int x0 = time_to_x(rows[row].layer->in_time);
         int x1 = time_to_x(rows[row].layer->out_time);
         if (std::abs(ev->pos().x() - x0) <= 7 || std::abs(ev->pos().x() - x1) <= 7)
@@ -4006,11 +4178,13 @@ void TimelineWidget::mouseReleaseEvent(QMouseEvent *)
                    drag_mode_ == DragMode::PauseMarker;
     if (drag_mode_ == DragMode::Keyframe && title_) {
         if (auto layer = title_->find_layer(drag_layer_id_)) {
-            for (auto *prop : timeline_properties(*layer)) {
-                if (prop->name != drag_prop_name_) continue;
-                std::sort(prop->keyframes.begin(), prop->keyframes.end(),
-                          [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
-                break;
+            if (!layer->locked) {
+                for (auto *prop : timeline_properties(*layer)) {
+                    if (prop->name != drag_prop_name_) continue;
+                    std::sort(prop->keyframes.begin(), prop->keyframes.end(),
+                              [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
+                    break;
+                }
             }
         }
     }
@@ -4059,13 +4233,6 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     spn_pause_frame_->setToolTip(obsgs_tr("OBSTitles.PauseFrameTooltip"));
     fl->addRow(obsgs_tr("OBSTitles.PauseFrameLabel"), spn_pause_frame_);
 
-    spn_pause_time_ = new QDoubleSpinBox(this);
-    spn_pause_time_->setRange(0.0, 3600.0);
-    spn_pause_time_->setSingleStep(obs_frame_duration());
-    spn_pause_time_->setDecimals(3);
-    spn_pause_time_->setSuffix(" s");
-    spn_pause_time_->setToolTip(obsgs_tr("OBSTitles.PauseTimecodeTooltip"));
-    fl->addRow(obsgs_tr("OBSTitles.PauseTimecodeLabel"), spn_pause_time_);
 
     spn_duration_ = new QDoubleSpinBox(this);
     spn_duration_->setRange(0.1, 3600.0);
@@ -4115,13 +4282,6 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 emit title_changed();
             });
 
-    connect(spn_pause_time_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this](double v) {
-                if (!title_ || loading_values_) return;
-                title_->pause_time = std::clamp(v, 0.0, title_->duration);
-                load_values();
-                emit title_changed();
-            });
 
     connect(spn_duration_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this](double v) {
@@ -4180,9 +4340,6 @@ void TitlePropertiesPanel::load_values()
     spn_loop_end_->setMaximum(duration);
     spn_loop_start_->setValue(std::clamp(loop_start, 0.0, duration));
     spn_loop_end_->setValue(std::clamp(loop_end, std::clamp(loop_start, 0.0, duration), duration));
-    spn_pause_time_->setMaximum(duration);
-    spn_pause_time_->setSingleStep(obs_frame_duration());
-    spn_pause_time_->setValue(pause_time);
     spn_pause_frame_->setMaximum(std::max(0, (int)std::round(duration / obs_frame_duration())));
     spn_pause_frame_->setValue((int)std::round(pause_time / obs_frame_duration()));
 
@@ -4197,8 +4354,6 @@ void TitlePropertiesPanel::load_values()
     if (form) if (auto *label = qobject_cast<QWidget *>(form->labelForField(spn_loop_end_))) label->setVisible(show_loop);
     spn_pause_frame_->setVisible(show_pause);
     if (form) if (auto *label = qobject_cast<QWidget *>(form->labelForField(spn_pause_frame_))) label->setVisible(show_pause);
-    spn_pause_time_->setVisible(show_pause);
-    if (form) if (auto *label = qobject_cast<QWidget *>(form->labelForField(spn_pause_time_))) label->setVisible(show_pause);
     loading_values_ = false;
 }
 
@@ -4266,8 +4421,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         b->setToolTip(tip);
         b->setAccessibleName(tip);
         b->setProperty("active", false);
+        b->setProperty("outlined", false);
         b->setStyleSheet("QPushButton{background:transparent;border:none;border-radius:2px;padding:0;}"
                          "QPushButton:hover{background:#303030;}"
+                         "QPushButton[outlined=\"true\"]{background:#201d12;}"
                          "QPushButton[active=\"true\"]{background:#2b2518;}");
         return b;
     };
@@ -5345,6 +5502,7 @@ void PropertiesPanel::load_values()
             if (!b) continue;
             b->setIcon(keyframe_diamond_icon(false));
             b->setProperty("active", false);
+            b->setProperty("outlined", false);
             b->style()->unpolish(b);
             b->style()->polish(b);
         }
@@ -5462,33 +5620,41 @@ void PropertiesPanel::load_values()
     }
     if (chk_outline_antialias_) chk_outline_antialias_->setChecked(layer_->outline_antialias);
 
-    auto set_kf_icon = [](QPushButton *button, bool active) {
+    auto set_kf_icon = [](QPushButton *button, bool active, bool has_keyframes) {
         if (!button) return;
-        button->setIcon(keyframe_diamond_icon(active));
+        const bool outlined = has_keyframes && !active;
+        button->setIcon(keyframe_diamond_icon(active, outlined));
         button->setProperty("active", active);
+        button->setProperty("outlined", outlined);
         button->style()->unpolish(button);
         button->style()->polish(button);
     };
-    set_kf_icon(btn_kf_pos_x_, keyframe_at_time(layer_->pos_x, lt));
-    set_kf_icon(btn_kf_pos_y_, keyframe_at_time(layer_->pos_y, lt));
-    set_kf_icon(btn_kf_rotation_, keyframe_at_time(layer_->rotation, lt));
-    set_kf_icon(btn_kf_opacity_, keyframe_at_time(layer_->opacity, lt));
-    set_kf_icon(btn_kf_origin_x_, keyframe_at_time(layer_->origin_x_prop, lt));
-    set_kf_icon(btn_kf_origin_y_, keyframe_at_time(layer_->origin_y_prop, lt));
-    set_kf_icon(btn_kf_width_, keyframe_at_time(layer_->box_width, lt));
-    set_kf_icon(btn_kf_height_, keyframe_at_time(layer_->box_height, lt));
-    set_kf_icon(btn_kf_text_color_, any_keyframe_at_time({&layer_->text_color_a, &layer_->text_color_r,
-                                                          &layer_->text_color_g, &layer_->text_color_b}, lt));
-    set_kf_icon(btn_kf_fill_color_, any_keyframe_at_time({&layer_->fill_color_a, &layer_->fill_color_r,
-                                                          &layer_->fill_color_g, &layer_->fill_color_b}, lt));
-    set_kf_icon(btn_kf_shadow_enabled_, keyframe_at_time(layer_->shadow_enabled_prop, lt));
-    set_kf_icon(btn_kf_shadow_opacity_, keyframe_at_time(layer_->shadow_opacity_prop, lt));
-    set_kf_icon(btn_kf_shadow_distance_, keyframe_at_time(layer_->shadow_distance_prop, lt));
-    set_kf_icon(btn_kf_shadow_angle_, keyframe_at_time(layer_->shadow_angle_prop, lt));
-    set_kf_icon(btn_kf_shadow_blur_, keyframe_at_time(layer_->shadow_blur_prop, lt));
-    set_kf_icon(btn_kf_shadow_spread_, keyframe_at_time(layer_->shadow_spread_prop, lt));
-    set_kf_icon(btn_kf_shadow_color_, any_keyframe_at_time({&layer_->shadow_color_a, &layer_->shadow_color_r,
-                                                            &layer_->shadow_color_g, &layer_->shadow_color_b}, lt));
+    auto set_prop_kf_icon = [&](QPushButton *button, const AnimatedProperty &prop) {
+        set_kf_icon(button, keyframe_at_time(prop, lt), prop.is_animated());
+    };
+    auto set_group_kf_icon = [&](QPushButton *button, std::initializer_list<const AnimatedProperty *> props) {
+        set_kf_icon(button, any_keyframe_at_time(props, lt), any_keyframes(props));
+    };
+    set_prop_kf_icon(btn_kf_pos_x_, layer_->pos_x);
+    set_prop_kf_icon(btn_kf_pos_y_, layer_->pos_y);
+    set_prop_kf_icon(btn_kf_rotation_, layer_->rotation);
+    set_prop_kf_icon(btn_kf_opacity_, layer_->opacity);
+    set_prop_kf_icon(btn_kf_origin_x_, layer_->origin_x_prop);
+    set_prop_kf_icon(btn_kf_origin_y_, layer_->origin_y_prop);
+    set_prop_kf_icon(btn_kf_width_, layer_->box_width);
+    set_prop_kf_icon(btn_kf_height_, layer_->box_height);
+    set_group_kf_icon(btn_kf_text_color_, {&layer_->text_color_a, &layer_->text_color_r,
+                                           &layer_->text_color_g, &layer_->text_color_b});
+    set_group_kf_icon(btn_kf_fill_color_, {&layer_->fill_color_a, &layer_->fill_color_r,
+                                           &layer_->fill_color_g, &layer_->fill_color_b});
+    set_prop_kf_icon(btn_kf_shadow_enabled_, layer_->shadow_enabled_prop);
+    set_prop_kf_icon(btn_kf_shadow_opacity_, layer_->shadow_opacity_prop);
+    set_prop_kf_icon(btn_kf_shadow_distance_, layer_->shadow_distance_prop);
+    set_prop_kf_icon(btn_kf_shadow_angle_, layer_->shadow_angle_prop);
+    set_prop_kf_icon(btn_kf_shadow_blur_, layer_->shadow_blur_prop);
+    set_prop_kf_icon(btn_kf_shadow_spread_, layer_->shadow_spread_prop);
+    set_group_kf_icon(btn_kf_shadow_color_, {&layer_->shadow_color_a, &layer_->shadow_color_r,
+                                             &layer_->shadow_color_g, &layer_->shadow_color_b});
 
     txt_content_->setPlainText(QString::fromStdString(is_clock ? layer_->clock_format : layer_->text_content));
     int ticker_style_idx = cmb_ticker_style_->findData(layer_->ticker_style);
