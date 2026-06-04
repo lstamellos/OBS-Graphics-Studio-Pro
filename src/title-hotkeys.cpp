@@ -40,6 +40,7 @@ struct HotkeySection {
 
 std::vector<HotkeySection> g_sections;
 std::vector<HotkeyRegistration> g_hotkeys;
+std::map<std::string, obs_source_t *> g_section_sources;
 std::string g_hotkey_signature;
 bool g_hotkeys_active = false;
 bool g_change_callback_registered = false;
@@ -52,6 +53,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
+        if (!layer) continue;
         if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
@@ -303,14 +305,37 @@ static void unregister_all_hotkeys()
             obs_hotkey_unregister(hotkey.id);
     }
     g_hotkeys.clear();
-    for (auto &section : g_sections) {
-        if (section.source) {
-            obs_source_remove(section.source);
-            obs_source_release(section.source);
+    g_hotkey_signature.clear();
+}
+
+static void release_hotkey_section_sources()
+{
+    for (auto &[title_id, source] : g_section_sources) {
+        (void)title_id;
+        if (source) {
+            obs_source_remove(source);
+            obs_source_release(source);
         }
     }
+    g_section_sources.clear();
     g_sections.clear();
-    g_hotkey_signature.clear();
+}
+
+static obs_source_t *hotkey_section_source_for(const HotkeySection &section)
+{
+    auto existing = g_section_sources.find(section.title_id);
+    if (existing != g_section_sources.end())
+        return existing->second;
+
+    obs_source_t *source = obs_source_create(kHotkeySectionSourceId,
+                                             section.display_name.c_str(),
+                                             nullptr,
+                                             nullptr);
+    if (source) {
+        obs_source_set_hidden(source, true);
+        g_section_sources[section.title_id] = source;
+    }
+    return source;
 }
 
 static void refresh_hotkeys()
@@ -327,14 +352,9 @@ static void refresh_hotkeys()
 
     std::map<std::string, obs_source_t *> section_sources;
     for (auto &section : g_sections) {
-        section.source = obs_source_create(kHotkeySectionSourceId,
-                                           section.display_name.c_str(),
-                                           nullptr,
-                                           nullptr);
-        if (section.source) {
-            obs_source_set_hidden(section.source, true);
+        section.source = hotkey_section_source_for(section);
+        if (section.source)
             section_sources[section.title_id] = section.source;
-        }
     }
 
     g_hotkeys.reserve(descriptors.size());
@@ -373,4 +393,5 @@ void title_hotkeys_unregister()
 {
     g_hotkeys_active = false;
     unregister_all_hotkeys();
+    release_hotkey_section_sources();
 }

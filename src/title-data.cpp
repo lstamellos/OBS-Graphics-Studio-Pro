@@ -533,10 +533,29 @@ TitleDataStore &TitleDataStore::instance()
     return inst;
 }
 
+std::vector<std::shared_ptr<Title>> TitleDataStore::titles() const
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return titles_;
+}
+
+void TitleDataStore::on_change(ChangeCallback cb)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    change_cbs_.push_back(std::move(cb));
+}
+
 void TitleDataStore::notify_change()
 {
     touch_runtime_change();
-    for (auto &cb : change_cbs_) cb();
+
+    std::vector<ChangeCallback> callbacks;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        callbacks = change_cbs_;
+    }
+
+    for (auto &cb : callbacks) cb();
 }
 
 void TitleDataStore::touch_runtime_change()
@@ -567,13 +586,17 @@ std::shared_ptr<Title> TitleDataStore::create_title(const std::string &name)
     layer->expose_text = true;
     t->layers.push_back(layer);
 
-    titles_.push_back(t);
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        titles_.push_back(t);
+    }
     notify_change();
     return t;
 }
 
 std::shared_ptr<Title> TitleDataStore::get_title(const std::string &id) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     for (auto &t : titles_)
         if (t->id == id) return t;
     return nullptr;
@@ -581,16 +604,37 @@ std::shared_ptr<Title> TitleDataStore::get_title(const std::string &id) const
 
 void TitleDataStore::delete_title(const std::string &id)
 {
-    titles_.erase(
-        std::remove_if(titles_.begin(), titles_.end(),
-                       [&](auto &t){ return t->id == id; }),
-        titles_.end());
-    notify_change();
+    bool deleted = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        const auto old_size = titles_.size();
+        titles_.erase(
+            std::remove_if(titles_.begin(), titles_.end(),
+                           [&](auto &t){ return t && t->id == id; }),
+            titles_.end());
+        deleted = titles_.size() != old_size;
+    }
+
+    if (deleted)
+        notify_change();
 }
 
 void TitleDataStore::rename_title(const std::string &id, const std::string &n)
 {
-    if (auto t = get_title(id)) { t->name = n; notify_change(); }
+    bool renamed = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        for (auto &t : titles_) {
+            if (t && t->id == id) {
+                t->name = n;
+                renamed = true;
+                break;
+            }
+        }
+    }
+
+    if (renamed)
+        notify_change();
 }
 
 /* ── persistence ──────────────────────────────────────────────────── */
@@ -1001,9 +1045,13 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
 
 void TitleDataStore::save() const
 {
+    const auto snapshot = titles();
+
     json root = json::array();
-    for (auto &t : titles_)
-        root.push_back(title_to_json(*t));
+    for (auto &t : snapshot) {
+        if (t)
+            root.push_back(title_to_json(*t));
+    }
 
     const std::string path = data_path();
     const std::string tmp_path = path + ".tmp";
@@ -1114,16 +1162,19 @@ std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std
         std::string base_name = imported->name.empty() ? "Imported Title" : imported->name;
         std::string unique_name = base_name;
         int suffix = 2;
-        auto name_exists = [this](const std::string &candidate) {
-            return std::any_of(titles_.begin(), titles_.end(), [&](const auto &existing) {
-                return existing && existing->name == candidate;
-            });
-        };
-        while (name_exists(unique_name))
-            unique_name = base_name + " (imported " + std::to_string(suffix++) + ")";
-        imported->name = unique_name;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            auto name_exists = [this](const std::string &candidate) {
+                return std::any_of(titles_.begin(), titles_.end(), [&](const auto &existing) {
+                    return existing && existing->name == candidate;
+                });
+            };
+            while (name_exists(unique_name))
+                unique_name = base_name + " (imported " + std::to_string(suffix++) + ")";
+            imported->name = unique_name;
+            titles_.push_back(imported);
+        }
 
-        titles_.push_back(imported);
         notify_change();
         save();
         return imported;
@@ -1159,9 +1210,14 @@ void TitleDataStore::load()
             ensure_unique_title_id(title, seen_ids);
             loaded.push_back(title);
         }
-        titles_ = std::move(loaded);
+        size_t loaded_count = 0;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            titles_ = std::move(loaded);
+            loaded_count = titles_.size();
+        }
         touch_runtime_change();
-        blog(LOG_INFO, "[OBS Graphics Studio Pro] Loaded %zu title(s).", titles_.size());
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] Loaded %zu title(s).", loaded_count);
     } catch (std::exception &e) {
         blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to parse titles.json: %s", e.what());
     }
