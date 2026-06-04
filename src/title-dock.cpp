@@ -1364,7 +1364,6 @@ void TitleDock::on_add_from_templates_library()
         metadata.description = obs_text_std(entry.description_key);
         metadata.creator = "OBS Graphics Studio Pro";
         metadata.creation_date = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
-        metadata.screenshot_png_base64 = title_screenshot_png_base64(title_screenshot_image(*canned)).toStdString();
 
         std::string error;
         TitleDataStore::instance().export_title(canned->id, template_path.toStdString(), metadata, &error);
