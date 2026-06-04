@@ -13,6 +13,7 @@
 #include <obs-frontend-api.h>
 
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QMenu>
 #include <QMessageBox>
 #include <QVBoxLayout>
@@ -39,6 +40,7 @@
 #include <QRegularExpression>
 #include <algorithm>
 #include <functional>
+#include <numeric>
 
 namespace {
 
@@ -79,13 +81,6 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
             row[i] = exposed[i]->text_content;
     }
 }
-
-static void move_live_row_marker(int &marker, int from, int to)
-{
-    if (marker == from) marker = to;
-    else if (marker == to) marker = from;
-}
-
 
 static QIcon obs_icon(const char *file_name)
 {
@@ -153,6 +148,24 @@ static void set_bold_label(QLabel *label)
     label->setFont(font);
 }
 
+
+class LiveTextCueTable : public QTableWidget {
+public:
+    explicit LiveTextCueTable(QWidget *parent = nullptr)
+        : QTableWidget(parent)
+    {
+        setMouseTracking(false);
+        viewport()->setMouseTracking(false);
+    }
+
+protected:
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (event && event->buttons() == Qt::NoButton)
+            return;
+        QTableWidget::mouseMoveEvent(event);
+    }
+};
 
 class LiveTextCueHeader : public QHeaderView {
 public:
@@ -354,7 +367,7 @@ void TitleDock::build_ui()
     live_header->addStretch();
     live_layout->addLayout(live_header);
 
-    text_table_ = new QTableWidget(live_section);
+    text_table_ = new LiveTextCueTable(live_section);
     auto *live_text_header = new LiveTextCueHeader(text_table_);
     live_text_header->select_all_toggled = [this](bool checked) { set_all_live_text_rows_checked(checked); };
     text_table_->setHorizontalHeader(live_text_header);
@@ -509,6 +522,49 @@ bool TitleDock::restore_live_text_header_state()
     auto it = live_text_header_states_.find(text_table_->columnCount());
     if (it == live_text_header_states_.end()) return false;
     return text_table_->horizontalHeader()->restoreState(it->second);
+}
+
+bool TitleDock::has_checked_live_text_rows() const
+{
+    if (!text_table_) return false;
+    for (int row = 0; row < text_table_->rowCount(); ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (item && item->checkState() == Qt::Checked)
+            return true;
+    }
+    return false;
+}
+
+void TitleDock::apply_live_text_row_selection(const std::vector<int> &rows, bool checked)
+{
+    if (!text_table_) return;
+
+    QSignalBlocker block(text_table_);
+    text_table_->clearSelection();
+    for (int row = 0; row < text_table_->rowCount(); ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (item)
+            item->setCheckState(Qt::Unchecked);
+    }
+
+    auto *selection_model = text_table_->selectionModel();
+    for (int row : rows) {
+        if (row < 0 || row >= text_table_->rowCount()) continue;
+        if (checked) {
+            auto *item = text_table_->item(row, 0);
+            if (item)
+                item->setCheckState(Qt::Checked);
+        }
+        if (selection_model && text_table_->columnCount() > 0) {
+            const QModelIndex left = text_table_->model()->index(row, 0);
+            const QModelIndex right = text_table_->model()->index(row, text_table_->columnCount() - 1);
+            selection_model->select(QItemSelection(left, right),
+                                    QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        }
+    }
+    if (!rows.empty() && selection_model)
+        selection_model->setCurrentIndex(text_table_->model()->index(rows.front(), 0), QItemSelectionModel::NoUpdate);
+    update_live_text_select_all_state();
 }
 
 void TitleDock::set_all_live_text_rows_checked(bool checked)
@@ -695,14 +751,56 @@ void TitleDock::on_add_live_text_row()
     auto exposed = exposed_text_layers(title);
     if (exposed.empty()) return;
 
-    std::vector<std::string> row;
-    for (const auto &layer : exposed)
-        row.push_back(layer->text_content);
+    auto selected_rows = selected_live_text_rows();
+    std::vector<std::string> row(exposed.size());
+    if (selected_rows.size() == 1) {
+        const int source_row = selected_rows.front();
+        if (source_row >= 0 && source_row < (int)title->live_text_rows.size())
+            row = title->live_text_rows[source_row];
+    }
+    row.resize(exposed.size());
+
     title->live_text_rows.push_back(std::move(row));
+    const int added_row = (int)title->live_text_rows.size() - 1;
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
     populate_exposed_text();
-    text_table_->selectRow((int)title->live_text_rows.size() - 1);
+    apply_live_text_row_selection({added_row}, false);
+}
+
+void TitleDock::on_delete_live_text_rows()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title || !text_table_) return;
+
+    auto rows = selected_live_text_rows();
+    if (rows.empty()) return;
+
+    updating_exposed_text_ = true;
+    int next_row = rows.front();
+    for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+        const int row = *it;
+        if (row < 0 || row >= (int)title->live_text_rows.size())
+            continue;
+        title->live_text_rows.erase(title->live_text_rows.begin() + row);
+        if (title->current_cue_row == row)
+            title->current_cue_row = -1;
+        else if (title->current_cue_row > row)
+            --title->current_cue_row;
+        if (title->pending_cue_row == row)
+            title->pending_cue_row = -1;
+        else if (title->pending_cue_row > row)
+            --title->pending_cue_row;
+    }
+
+    auto exposed_now = exposed_text_layers(title);
+    normalize_live_text_rows(title, exposed_now);
+    TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
+    updating_exposed_text_ = false;
+    populate_exposed_text();
+    if (!title->live_text_rows.empty())
+        text_table_->selectRow(std::min(next_row, (int)title->live_text_rows.size() - 1));
 }
 
 void TitleDock::on_delete_live_text_rows()
@@ -744,30 +842,106 @@ void TitleDock::on_move_live_text_row_up()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title || !text_table_) return;
-    int row = text_table_->currentRow();
-    if (row <= 0 || row >= (int)title->live_text_rows.size()) return;
-    std::swap(title->live_text_rows[row], title->live_text_rows[row - 1]);
-    move_live_row_marker(title->current_cue_row, row, row - 1);
-    move_live_row_marker(title->pending_cue_row, row, row - 1);
+
+    auto rows = selected_live_text_rows();
+    if (rows.empty()) return;
+
+    const bool restore_checked = has_checked_live_text_rows();
+    const int row_count = (int)title->live_text_rows.size();
+    std::vector<bool> selected(row_count, false);
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            selected[row] = true;
+    }
+
+    std::vector<int> order(row_count);
+    std::iota(order.begin(), order.end(), 0);
+    bool moved = false;
+    for (int visual = 1; visual < row_count; ++visual) {
+        if (selected[order[visual]] && !selected[order[visual - 1]]) {
+            std::swap(order[visual], order[visual - 1]);
+            moved = true;
+        }
+    }
+    if (!moved) return;
+
+    std::vector<std::vector<std::string>> reordered;
+    reordered.reserve(title->live_text_rows.size());
+    std::vector<int> new_index(row_count, -1);
+    for (int visual = 0; visual < row_count; ++visual) {
+        new_index[order[visual]] = visual;
+        reordered.push_back(std::move(title->live_text_rows[order[visual]]));
+    }
+    title->live_text_rows = std::move(reordered);
+    if (title->current_cue_row >= 0 && title->current_cue_row < row_count)
+        title->current_cue_row = new_index[title->current_cue_row];
+    if (title->pending_cue_row >= 0 && title->pending_cue_row < row_count)
+        title->pending_cue_row = new_index[title->pending_cue_row];
+
+    std::vector<int> moved_rows;
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            moved_rows.push_back(new_index[row]);
+    }
+    std::sort(moved_rows.begin(), moved_rows.end());
+
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
     populate_exposed_text();
-    text_table_->selectRow(row - 1);
+    apply_live_text_row_selection(moved_rows, restore_checked);
 }
 
 void TitleDock::on_move_live_text_row_down()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title || !text_table_) return;
-    int row = text_table_->currentRow();
-    if (row < 0 || row + 1 >= (int)title->live_text_rows.size()) return;
-    std::swap(title->live_text_rows[row], title->live_text_rows[row + 1]);
-    move_live_row_marker(title->current_cue_row, row, row + 1);
-    move_live_row_marker(title->pending_cue_row, row, row + 1);
+
+    auto rows = selected_live_text_rows();
+    if (rows.empty()) return;
+
+    const bool restore_checked = has_checked_live_text_rows();
+    const int row_count = (int)title->live_text_rows.size();
+    std::vector<bool> selected(row_count, false);
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            selected[row] = true;
+    }
+
+    std::vector<int> order(row_count);
+    std::iota(order.begin(), order.end(), 0);
+    bool moved = false;
+    for (int visual = row_count - 2; visual >= 0; --visual) {
+        if (selected[order[visual]] && !selected[order[visual + 1]]) {
+            std::swap(order[visual], order[visual + 1]);
+            moved = true;
+        }
+    }
+    if (!moved) return;
+
+    std::vector<std::vector<std::string>> reordered;
+    reordered.reserve(title->live_text_rows.size());
+    std::vector<int> new_index(row_count, -1);
+    for (int visual = 0; visual < row_count; ++visual) {
+        new_index[order[visual]] = visual;
+        reordered.push_back(std::move(title->live_text_rows[order[visual]]));
+    }
+    title->live_text_rows = std::move(reordered);
+    if (title->current_cue_row >= 0 && title->current_cue_row < row_count)
+        title->current_cue_row = new_index[title->current_cue_row];
+    if (title->pending_cue_row >= 0 && title->pending_cue_row < row_count)
+        title->pending_cue_row = new_index[title->pending_cue_row];
+
+    std::vector<int> moved_rows;
+    for (int row : rows) {
+        if (row >= 0 && row < row_count)
+            moved_rows.push_back(new_index[row]);
+    }
+    std::sort(moved_rows.begin(), moved_rows.end());
+
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
     populate_exposed_text();
-    text_table_->selectRow(row + 1);
+    apply_live_text_row_selection(moved_rows, restore_checked);
 }
 
 

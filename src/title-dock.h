@@ -65,6 +65,8 @@ private:
     void update_live_text_select_all_state();
     void save_live_text_header_state();
     bool restore_live_text_header_state();
+    bool has_checked_live_text_rows() const;
+    void apply_live_text_row_selection(const std::vector<int> &rows, bool checked);
     std::string selected_id() const;
     std::shared_ptr<Title> create_template_title(const std::string &name, int template_id);
     void select_title(const std::string &id);
