@@ -1172,9 +1172,59 @@ void TitleEditor::build_ui()
     layers_panel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     lower_split->addWidget(layers_panel);
 
-    timeline_ = new TimelineWidget(lower_split);
+    auto *timeline_panel = new QWidget(lower_split);
+    auto *timeline_panel_layout = new QVBoxLayout(timeline_panel);
+    timeline_panel_layout->setContentsMargins(0, 0, 0, 0);
+    timeline_panel_layout->setSpacing(0);
+
+    timeline_ = new TimelineWidget(timeline_panel);
     timeline_->setMinimumHeight(140);
-    lower_split->addWidget(timeline_);
+    timeline_panel_layout->addWidget(timeline_, 1);
+
+    auto *timeline_zoom_bar = new QWidget(timeline_panel);
+    timeline_zoom_bar->setFixedHeight(34);
+    timeline_zoom_bar->setStyleSheet(
+        "QWidget{background:#171717;border-top:1px solid #333;}"
+        "QPushButton{color:#ddd;background:#2a2a2a;border:1px solid #3f3f3f;border-radius:3px;padding:3px 8px;}"
+        "QPushButton:hover{background:#343434;}"
+        "QSlider::groove:horizontal{height:4px;background:#303030;border-radius:2px;}"
+        "QSlider::handle:horizontal{width:12px;margin:-5px 0;background:#bfc7d5;border-radius:6px;}"
+        "QSlider::sub-page:horizontal{background:#0078d4;border-radius:2px;}");
+    auto *zoom_layout = new QHBoxLayout(timeline_zoom_bar);
+    zoom_layout->setContentsMargins(10, 0, 10, 0);
+    zoom_layout->setSpacing(8);
+    auto *zoom_out = new QPushButton(timeline_zoom_bar);
+    zoom_out->setIcon(obs_icon("zoom-out.svg"));
+    zoom_out->setFixedWidth(30);
+    auto *zoom_slider = new QSlider(Qt::Horizontal, timeline_zoom_bar);
+    zoom_slider->setRange(5, 1200);
+    zoom_slider->setValue(timeline_->zoom_percent());
+    zoom_slider->setMinimumWidth(220);
+    zoom_slider->setMaximumWidth(360);
+    auto *zoom_in = new QPushButton(timeline_zoom_bar);
+    zoom_in->setIcon(obs_icon("zoom-in.svg"));
+    zoom_in->setFixedWidth(30);
+    auto *fit_timeline = new QPushButton(obsgs_tr("OBSTitles.FitTimeline"), timeline_zoom_bar);
+    zoom_layout->addWidget(zoom_out);
+    zoom_layout->addWidget(zoom_slider);
+    zoom_layout->addWidget(zoom_in);
+    zoom_layout->addWidget(fit_timeline);
+    zoom_layout->addStretch(1);
+    connect(zoom_slider, &QSlider::valueChanged, timeline_, &TimelineWidget::set_zoom_percent);
+    connect(timeline_, &TimelineWidget::zoom_percent_changed, this, [zoom_slider](int percent) {
+        QSignalBlocker blocker(zoom_slider);
+        zoom_slider->setValue(percent);
+    });
+    connect(zoom_out, &QPushButton::clicked, this, [this]() {
+        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() / 1.18));
+    });
+    connect(zoom_in, &QPushButton::clicked, this, [this]() {
+        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() * 1.18));
+    });
+    connect(fit_timeline, &QPushButton::clicked, timeline_, &TimelineWidget::fit_timeline);
+    timeline_panel_layout->addWidget(timeline_zoom_bar);
+    lower_split->addWidget(timeline_panel);
+
     if (auto *scroll_bar = layers_->vertical_scroll_bar()) {
         connect(scroll_bar, &QScrollBar::valueChanged, timeline_, &TimelineWidget::set_vertical_scroll);
         connect(timeline_, &TimelineWidget::vertical_scroll_delta_requested, this,
@@ -1185,57 +1235,6 @@ void TitleEditor::build_ui()
     lower_split->setCollapsible(0, false);
     lower_split->setCollapsible(1, false);
     timeline_editor_layout->addWidget(lower_split, 1);
-
-    auto *timeline_zoom_bar = new QWidget(timeline_editor);
-    timeline_zoom_bar->setFixedHeight(34);
-    timeline_zoom_bar->setStyleSheet(
-        "QWidget{background:#171717;border-top:1px solid #333;}"
-        "QLabel{color:#9a9a9a;}"
-        "QPushButton{color:#ddd;background:#2a2a2a;border:1px solid #3f3f3f;border-radius:3px;padding:3px 8px;}"
-        "QPushButton:hover{background:#343434;}"
-        "QSlider::groove:horizontal{height:4px;background:#303030;border-radius:2px;}"
-        "QSlider::handle:horizontal{width:12px;margin:-5px 0;background:#bfc7d5;border-radius:6px;}"
-        "QSlider::sub-page:horizontal{background:#0078d4;border-radius:2px;}");
-    auto *zoom_layout = new QHBoxLayout(timeline_zoom_bar);
-    zoom_layout->setContentsMargins(10, 0, 10, 0);
-    zoom_layout->setSpacing(8);
-    auto *zoom_label = new QLabel(obsgs_tr("OBSTitles.TimelineZoomLabel"), timeline_zoom_bar);
-    auto *zoom_out = new QPushButton(timeline_zoom_bar);
-    zoom_out->setIcon(obs_icon("zoom-out.svg"));
-    zoom_out->setFixedWidth(30);
-    auto *zoom_slider = new QSlider(Qt::Horizontal, timeline_zoom_bar);
-    zoom_slider->setRange(5, 1200);
-    zoom_slider->setValue(timeline_->zoom_percent());
-    zoom_slider->setMinimumWidth(220);
-    auto *zoom_in = new QPushButton(timeline_zoom_bar);
-    zoom_in->setIcon(obs_icon("zoom-in.svg"));
-    zoom_in->setFixedWidth(30);
-    auto *zoom_value = new QLabel(QStringLiteral("%1%").arg(timeline_->zoom_percent()), timeline_zoom_bar);
-    zoom_value->setFixedWidth(54);
-    zoom_value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    auto *fit_timeline = new QPushButton(obsgs_tr("OBSTitles.FitTimeline"), timeline_zoom_bar);
-    zoom_layout->addStretch(1);
-    zoom_layout->addWidget(zoom_label);
-    zoom_layout->addWidget(zoom_out);
-    zoom_layout->addWidget(zoom_slider);
-    zoom_layout->addWidget(zoom_in);
-    zoom_layout->addWidget(zoom_value);
-    zoom_layout->addWidget(fit_timeline);
-    zoom_layout->addStretch(1);
-    connect(zoom_slider, &QSlider::valueChanged, timeline_, &TimelineWidget::set_zoom_percent);
-    connect(timeline_, &TimelineWidget::zoom_percent_changed, this, [zoom_slider, zoom_value](int percent) {
-        QSignalBlocker blocker(zoom_slider);
-        zoom_slider->setValue(percent);
-        zoom_value->setText(QStringLiteral("%1%").arg(percent));
-    });
-    connect(zoom_out, &QPushButton::clicked, this, [this]() {
-        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() / 1.18));
-    });
-    connect(zoom_in, &QPushButton::clicked, this, [this]() {
-        timeline_->set_zoom_percent((int)std::round(timeline_->zoom_percent() * 1.18));
-    });
-    connect(fit_timeline, &QPushButton::clicked, timeline_, &TimelineWidget::fit_timeline);
-    timeline_editor_layout->addWidget(timeline_zoom_bar);
 
     /* ── Outer vertical split ── */
     auto *vsplit = new QSplitter(Qt::Vertical, this);
