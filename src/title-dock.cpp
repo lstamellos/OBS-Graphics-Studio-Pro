@@ -13,6 +13,7 @@
 #include <obs-frontend-api.h>
 
 #include <QBuffer>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QDialog>
@@ -284,7 +285,8 @@ static QString title_screenshot_png_base64(const QImage &screenshot)
 
 static bool prompt_template_export_metadata(QWidget *parent, const Title &title,
                                             const QImage &screenshot,
-                                            TitleTemplateExportMetadata &metadata)
+                                            TitleTemplateExportMetadata &metadata,
+                                            bool &save_in_template_library)
 {
     QDialog dialog(parent);
     dialog.setWindowTitle(obsgs_tr("OBSTitles.ExportTemplateDetails"));
@@ -324,14 +326,20 @@ static bool prompt_template_export_metadata(QWidget *parent, const Title &title,
     layout->addLayout(form);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+    auto validate_and_accept = [&dialog, title_edit, &save_in_template_library](bool save_to_library) {
         if (title_edit->text().trimmed().isEmpty()) {
             QMessageBox::warning(&dialog, obsgs_tr("OBSTitles.ExportTemplateDetails"),
                                  obsgs_tr("OBSTitles.TemplateExportTitleRequired"));
             return;
         }
+        save_in_template_library = save_to_library;
         dialog.accept();
-    });
+    };
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
+                     [&validate_and_accept]() { validate_and_accept(false); });
+    auto *library_button = buttons->addButton(obsgs_tr("OBSTitles.SaveInTemplateLibrary"), QDialogButtonBox::ActionRole);
+    QObject::connect(library_button, &QPushButton::clicked, &dialog,
+                     [&validate_and_accept]() { validate_and_accept(true); });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     layout->addWidget(buttons);
 
@@ -473,6 +481,83 @@ static void populate_template_categories(QTreeWidget *tree, const QString &root_
     tree->expandAll();
     if (tree->topLevelItemCount() > 0)
         tree->setCurrentItem(tree->topLevelItem(0));
+}
+
+static void collect_template_category_paths(const QDir &root, const QString &relative_dir, QStringList &categories)
+{
+    const QString scan_path = relative_dir.isEmpty() ? root.absolutePath() : root.filePath(relative_dir);
+    QDir dir(scan_path);
+    const auto children = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QFileInfo &child : children) {
+        const QString relative_child = relative_dir.isEmpty()
+            ? child.fileName()
+            : relative_dir + QStringLiteral("/") + child.fileName();
+        categories << relative_child;
+        collect_template_category_paths(root, relative_child, categories);
+    }
+}
+
+static QStringList template_library_category_paths(const QString &root_path)
+{
+    for (const char *folder : template_library_category_folders)
+        QDir(root_path).mkpath(QString::fromUtf8(folder));
+
+    QStringList categories;
+    QDir root(root_path);
+    collect_template_category_paths(root, QString(), categories);
+    categories.removeDuplicates();
+    categories.sort(Qt::CaseInsensitive);
+    return categories;
+}
+
+static QString sanitized_template_category_path(QString category)
+{
+    category.replace('\\', '/');
+    QStringList safe_parts;
+    for (QString part : category.split('/', Qt::SkipEmptyParts)) {
+        part = part.trimmed();
+        part.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
+        if (!part.isEmpty() && part != QStringLiteral(".") && part != QStringLiteral(".."))
+            safe_parts << part;
+    }
+    return safe_parts.join(QStringLiteral("/"));
+}
+
+static bool prompt_template_library_category(QWidget *parent, QString &category)
+{
+    const QString root_path = template_library_root_path();
+    QDialog dialog(parent);
+    dialog.setWindowTitle(obsgs_tr("OBSTitles.TemplateLibraryCategoryTitle"));
+    dialog.setModal(true);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(obs_layout_spacing(&dialog));
+
+    auto *prompt = new QLabel(obsgs_tr("OBSTitles.TemplateLibraryCategoryPrompt"), &dialog);
+    prompt->setWordWrap(true);
+    layout->addWidget(prompt);
+
+    auto *combo = new QComboBox(&dialog);
+    combo->setEditable(true);
+    combo->addItems(template_library_category_paths(root_path));
+    layout->addWidget(combo);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        const QString safe_category = sanitized_template_category_path(combo->currentText());
+        if (safe_category.isEmpty()) {
+            QMessageBox::warning(&dialog, obsgs_tr("OBSTitles.TemplateLibraryCategoryTitle"),
+                                 obsgs_tr("OBSTitles.TemplateLibraryCategoryRequired"));
+            return;
+        }
+        category = safe_category;
+        dialog.accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    return dialog.exec() == QDialog::Accepted;
 }
 
 } // namespace
@@ -1559,21 +1644,32 @@ void TitleDock::on_export()
 
     TitleTemplateExportMetadata metadata;
     metadata.screenshot_png_base64 = screenshot_base64.toStdString();
-    if (!prompt_template_export_metadata(this, *title, screenshot, metadata))
+    bool save_in_template_library = false;
+    if (!prompt_template_export_metadata(this, *title, screenshot, metadata, save_in_template_library))
         return;
 
     QString safe_name = QString::fromStdString(metadata.title).trimmed();
     if (safe_name.isEmpty()) safe_name = obsgs_tr("OBSTitles.TemplateFileDialogTitle");
     safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
 
-    QString path = QFileDialog::getSaveFileName(
-        this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
-        QDir(template_library_root_path()).filePath(safe_name + QStringLiteral(".ogspt")),
-        obsgs_tr("OBSTitles.TemplateFileFilter"));
-    if (path.isEmpty()) return;
+    QString path;
+    if (save_in_template_library) {
+        QString category;
+        if (!prompt_template_library_category(this, category))
+            return;
+        const QString category_path = QDir(template_library_root_path()).filePath(category);
+        QDir().mkpath(category_path);
+        path = QDir(category_path).filePath(safe_name + QStringLiteral(".ogspt"));
+    } else {
+        path = QFileDialog::getSaveFileName(
+            this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
+            QDir(template_library_root_path()).filePath(safe_name + QStringLiteral(".ogspt")),
+            obsgs_tr("OBSTitles.TemplateFileFilter"));
+        if (path.isEmpty()) return;
 
-    if (QFileInfo(path).suffix().isEmpty())
-        path += QStringLiteral(".ogspt");
+        if (QFileInfo(path).suffix().isEmpty())
+            path += QStringLiteral(".ogspt");
+    }
 
     std::string error;
     if (!TitleDataStore::instance().export_title(title->id, path.toStdString(), metadata, &error)) {
