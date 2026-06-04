@@ -20,6 +20,7 @@
 #include <functional>
 #include <cstdint>
 #include <atomic>
+#include <mutex>
 #include <obs-module.h>
 #include <util/config-file.h>
 
@@ -276,7 +277,7 @@ public:
     std::shared_ptr<Title> import_title(const std::string &path,
                                         std::string *error = nullptr);
 
-    const std::vector<std::shared_ptr<Title>> &titles() const { return titles_; }
+    std::vector<std::shared_ptr<Title>> titles() const;
 
     /* Persistence */
     void load();
@@ -284,13 +285,14 @@ public:
 
     /* Change notifications */
     using ChangeCallback = std::function<void()>;
-    void on_change(ChangeCallback cb) { change_cbs_.push_back(cb); }
+    void on_change(ChangeCallback cb);
     void notify_change();
     void touch_runtime_change();
     uint64_t revision() const { return revision_.load(); }
 
 private:
     TitleDataStore() = default;
+    mutable std::recursive_mutex         mutex_;
     std::vector<std::shared_ptr<Title>>  titles_;
     std::vector<ChangeCallback>          change_cbs_;
     std::atomic<uint64_t>                revision_ { 0 };

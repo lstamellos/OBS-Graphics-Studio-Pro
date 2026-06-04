@@ -77,6 +77,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
+        if (!layer) continue;
         if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
@@ -2128,7 +2129,6 @@ void TitleDock::on_delete()
     if (reply == QMessageBox::Yes) {
         TitleDataStore::instance().delete_title(id);
         TitleDataStore::instance().save();
-        TitleDataStore::instance().notify_change();
     }
 }
 
