@@ -12,6 +12,7 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
+#include <QAction>
 #include <QBuffer>
 #include <QComboBox>
 #include <QDateTime>
