@@ -160,17 +160,10 @@ static QIcon obs_icon(const char *file_name)
     return obsgs_icon(file_name);
 }
 
-static std::string obs_text_std(const char *key)
+static std::string editor_text_std(const char *key)
 {
     return obsgs_tr(key).toStdString();
 }
-
-static std::string obs_text_std(const char *key)
-{
-    return obsgs_tr(key).toStdString();
-}
-
-
 
 
 
@@ -941,11 +934,11 @@ void TitleEditor::build_ui()
                 if (!title_) return;
                 auto l = std::make_shared<Layer>();
                 l->id   = TitleDataStore::make_uuid();
-                l->name = (type == LayerType::Text) ? obs_text_std("OBSTitles.Text") :
-                          (type == LayerType::Clock) ? obs_text_std("OBSTitles.Clock") :
-                          (type == LayerType::Image) ? obs_text_std("OBSTitles.Image") : obs_text_std("OBSTitles.Rectangle");
+                l->name = (type == LayerType::Text) ? editor_text_std("OBSTitles.Text") :
+                          (type == LayerType::Clock) ? editor_text_std("OBSTitles.Clock") :
+                          (type == LayerType::Image) ? editor_text_std("OBSTitles.Image") : editor_text_std("OBSTitles.Rectangle");
                 l->type = type;
-                l->text_content = (type == LayerType::Text) ? obs_text_std("OBSTitles.NewText") : "";
+                l->text_content = (type == LayerType::Text) ? editor_text_std("OBSTitles.NewText") : "";
                 l->clock_format = (type == LayerType::Clock) ? "H:i:s" : l->clock_format;
                 l->pos_x.static_value = title_->width  / 2.0;
                 l->pos_y.static_value = title_->height / 2.0;
@@ -1052,7 +1045,7 @@ void TitleEditor::build_ui()
                 if (!title_) return;
                 if (auto layer = title_->find_layer(lid)) {
                     if (layer->name == name) return;
-                    layer->name = name.empty() ? obs_text_std("OBSTitles.Layer") : name;
+                    layer->name = name.empty() ? editor_text_std("OBSTitles.Layer") : name;
                     timeline_->set_title(title_);
                     on_title_modified();
                     QTimer::singleShot(0, layers_, [this]() {
@@ -1409,7 +1402,7 @@ std::shared_ptr<Layer> TitleEditor::clone_layer_for_insert(const Layer &layer, b
     auto clone = std::make_shared<Layer>(layer);
     clone->id = TitleDataStore::make_uuid();
     if (suffix_name)
-        clone->name = clone->name.empty() ? obs_text_std("OBSTitles.LayerCopy") : clone->name + obs_text_std("OBSTitles.CopySuffix");
+        clone->name = clone->name.empty() ? editor_text_std("OBSTitles.LayerCopy") : clone->name + editor_text_std("OBSTitles.CopySuffix");
     if (!clone->parent_id.empty() && (!title_ || !title_->find_layer(clone->parent_id)))
         clone->parent_id.clear();
     return clone;
