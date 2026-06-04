@@ -321,6 +321,7 @@ signals:
     void keyframe_easing_changed();
     void vertical_scroll_delta_requested(int delta);
     void zoom_percent_changed(int percent);
+    void layer_selected(const std::string &layer_id);
 
 protected:
     void paintEvent(QPaintEvent *ev) override;
@@ -349,6 +350,7 @@ private:
 
     std::shared_ptr<Title> title_;
     std::string sel_layer_id_;
+    bool fit_on_next_resize_ = false;
     double playhead_  = 0.0;
     DragMode drag_mode_ = DragMode::None;
     std::string drag_layer_id_;

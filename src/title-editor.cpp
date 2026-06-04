@@ -1386,6 +1386,8 @@ void TitleEditor::build_ui()
 
     connect(timeline_, &TimelineWidget::playhead_changed,
             this, &TitleEditor::on_playhead_changed);
+    connect(timeline_, &TimelineWidget::layer_selected,
+            this, &TitleEditor::on_layer_selected);
     connect(timeline_, &TimelineWidget::keyframe_easing_changed,
             this, &TitleEditor::on_title_modified);
 
@@ -1722,6 +1724,10 @@ void TitleEditor::open_title(const std::string &tid)
         on_layer_selected(title_->layers.back()->id);
     else
         props_->set_layer(nullptr, playhead_);
+
+    QTimer::singleShot(0, timeline_, [this]() {
+        if (timeline_) timeline_->fit_timeline();
+    });
 
     undo_stack_.clear();
     undo_index_ = -1;
@@ -3479,9 +3485,19 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent)
 
 void TimelineWidget::set_title(std::shared_ptr<Title> t)
 {
+    const bool title_changed = t != title_;
     title_ = t;
+    if (title_changed) {
+        scroll_x_ = 0;
+        fit_on_next_resize_ = true;
+    }
     clamp_scroll();
     clamp_vertical_scroll();
+    if (fit_on_next_resize_ && width() > 40) {
+        fit_on_next_resize_ = false;
+        fit_timeline();
+        return;
+    }
     update();
 }
 
@@ -3934,6 +3950,11 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
 void TimelineWidget::resizeEvent(QResizeEvent *ev)
 {
     QWidget::resizeEvent(ev);
+    if (fit_on_next_resize_ && title_ && width() > 40) {
+        fit_on_next_resize_ = false;
+        fit_timeline();
+        return;
+    }
     clamp_scroll();
     clamp_vertical_scroll();
 }
@@ -3990,6 +4011,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
             ev->accept();
             return;
         }
+        if (hit_layer) emit layer_selected(hit_layer->id);
         drag_mode_ = DragMode::Keyframe;
         drag_layer_id_ = hit_layer->id;
         drag_prop_name_ = hit_prop->name;
@@ -4010,6 +4032,9 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
         int x0 = time_to_x(layer->in_time);
         int x1 = time_to_x(layer->out_time);
         constexpr int kTrimHit = 7;
+        const bool hit_strip = ev->pos().x() >= std::min(x0, x1) - kTrimHit &&
+                               ev->pos().x() <= std::max(x0, x1) + kTrimHit;
+        if (hit_strip) emit layer_selected(layer->id);
         if (std::abs(ev->pos().x() - x0) <= kTrimHit) {
             drag_mode_ = DragMode::TrimIn;
             drag_layer_id_ = layer->id;
