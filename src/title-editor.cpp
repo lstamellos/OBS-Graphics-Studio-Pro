@@ -165,6 +165,12 @@ static std::string obs_text_std(const char *key)
     return obsgs_tr(key).toStdString();
 }
 
+static std::string obs_text_std(const char *key)
+{
+    return obsgs_tr(key).toStdString();
+}
+
+
 
 
 
