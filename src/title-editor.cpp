@@ -84,6 +84,10 @@ static const QColor C_BG_MID   { 0x252525 };
 static const QColor C_BG_LIGHT { 0x2e2e2e };
 static const QColor C_ACCENT   { 0x0078d4 };
 
+/* OBS safe area margins: Rec. ITU-R BT.1848-1 / EBU R 95. */
+static constexpr double OBS_ACTION_SAFE_PERCENT = 0.035;
+static constexpr double OBS_GRAPHICS_SAFE_PERCENT = 0.05;
+
 static bool editor_image_path_is_svg(const QString &path)
 {
     return path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive) ||
@@ -1186,6 +1190,10 @@ void TitleEditor::build_ui()
     canvas_zoom_layout->addWidget(canvas_zoom_percent);
     canvas_zoom_layout->addWidget(fit_canvas);
     canvas_zoom_layout->addWidget(checkerboard);
+    auto *safe_guides = new QToolButton(canvas_zoom_bar);
+    safe_guides->setDefaultAction(act_safe_guides_);
+    safe_guides->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    canvas_zoom_layout->addWidget(safe_guides);
     canvas_zoom_layout->addStretch(1);
     canvas_layout->addWidget(canvas_zoom_bar);
     connect(canvas_zoom_slider, &QSlider::valueChanged, canvas_, &CanvasPreview::set_zoom_percent);
@@ -1623,7 +1631,7 @@ void TitleEditor::align_selected_layers(int x_mode, int y_mode)
     double target_bottom = max_bottom;
 
     if (alignment_target_ == 1 || alignment_target_ == 2) {
-        const double safe_inset = alignment_target_ == 1 ? 0.10 : 0.05;
+        const double safe_inset = alignment_target_ == 1 ? OBS_GRAPHICS_SAFE_PERCENT : OBS_ACTION_SAFE_PERCENT;
         target_left = title_->width * safe_inset;
         target_hcenter = title_->width / 2.0;
         target_right = title_->width * (1.0 - safe_inset);
@@ -1744,7 +1752,7 @@ void TitleEditor::build_toolbar()
     add_align_action("align-bottom.svg", obsgs_tr("OBSTitles.AlignBottom"), -1, 2);
     add_align_action("align-center-artboard.svg", obsgs_tr("OBSTitles.AlignCenterToArtboard"), 1, 1);
 
-    act_safe_guides_ = toolbar_->addAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"));
+    act_safe_guides_ = new QAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"), this);
     act_safe_guides_->setCheckable(true);
     act_safe_guides_->setToolTip(obsgs_tr("OBSTitles.SafeTooltip"));
     connect(act_safe_guides_, &QAction::toggled, this, [this](bool visible) {
@@ -2939,8 +2947,8 @@ void CanvasPreview::paintEvent(QPaintEvent *)
             p.setPen(QPen(color, 1.0, Qt::DashLine));
             p.drawRect(r);
         };
-        draw_guide(0.05, QColor(0, 200, 255, 190));
-        draw_guide(0.10, QColor(255, 220, 0, 190));
+        draw_guide(OBS_ACTION_SAFE_PERCENT, QColor(0, 200, 255, 190));
+        draw_guide(OBS_GRAPHICS_SAFE_PERCENT, QColor(255, 220, 0, 190));
     }
 
     auto layers = selected_layers();
