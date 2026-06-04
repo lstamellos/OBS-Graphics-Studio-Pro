@@ -1167,12 +1167,25 @@ void TitleEditor::build_ui()
     add_canvas_zoom_action("800%", 800);
     add_canvas_zoom_action("1600%", 1600);
     fit_canvas->setMenu(fit_canvas_menu);
-    canvas_zoom_layout->addStretch(1);
+    auto *checkerboard = new QToolButton(canvas_zoom_bar);
+    checkerboard->setText("Checkerboard: Medium");
+    checkerboard->setPopupMode(QToolButton::InstantPopup);
+    auto *checkerboard_menu = new QMenu(checkerboard);
+    auto add_checkerboard_action = [checkerboard_menu](const QString &text, int pattern) {
+        QAction *action = checkerboard_menu->addAction(text);
+        action->setData(pattern);
+        return action;
+    };
+    add_checkerboard_action("Light", 0);
+    add_checkerboard_action("Medium", 1);
+    add_checkerboard_action("Dark", 2);
+    checkerboard->setMenu(checkerboard_menu);
     canvas_zoom_layout->addWidget(canvas_zoom_out);
     canvas_zoom_layout->addWidget(canvas_zoom_slider);
     canvas_zoom_layout->addWidget(canvas_zoom_in);
     canvas_zoom_layout->addWidget(canvas_zoom_percent);
     canvas_zoom_layout->addWidget(fit_canvas);
+    canvas_zoom_layout->addWidget(checkerboard);
     canvas_zoom_layout->addStretch(1);
     canvas_layout->addWidget(canvas_zoom_bar);
     connect(canvas_zoom_slider, &QSlider::valueChanged, canvas_, &CanvasPreview::set_zoom_percent);
@@ -1195,6 +1208,10 @@ void TitleEditor::build_ui()
         if (value == -1) canvas_->fit_canvas(false);
         else if (value == -2) canvas_->fit_canvas(true);
         else canvas_->set_zoom_percent(value);
+    });
+    connect(checkerboard_menu, &QMenu::triggered, this, [this, checkerboard](QAction *action) {
+        checkerboard->setText(QString("Checkerboard: %1").arg(action->text()));
+        canvas_->set_checkerboard_pattern(action->data().toInt());
     });
     upper_split->addWidget(canvas_panel);
 
@@ -2306,6 +2323,12 @@ int CanvasPreview::zoom_percent() const
     return zoom_percent_;
 }
 
+void CanvasPreview::set_checkerboard_pattern(int pattern)
+{
+    checkerboard_pattern_ = std::clamp(pattern, 0, 2);
+    update();
+}
+
 void CanvasPreview::fit_canvas(bool up_to_100)
 {
     fit_zoom_active_ = true;
@@ -2890,8 +2913,18 @@ void CanvasPreview::paintEvent(QPaintEvent *)
     int ox = (int)origin.x();
     int oy = (int)origin.y();
 
-    p.setBrush(QBrush(QColor(0x44, 0x44, 0x44)));
+    auto checkerboard_colors = [this]() {
+        if (checkerboard_pattern_ == 0)
+            return std::pair<QColor, QColor>(QColor(0xee, 0xee, 0xee), QColor(0xc8, 0xc8, 0xc8));
+        if (checkerboard_pattern_ == 2)
+            return std::pair<QColor, QColor>(QColor(0x1f, 0x1f, 0x1f), QColor(0x36, 0x36, 0x36));
+        return std::pair<QColor, QColor>(QColor(0x33, 0x33, 0x33), QColor(0x4a, 0x4a, 0x4a));
+    };
+    const auto [checker_a, checker_b] = checkerboard_colors();
     p.setPen(Qt::NoPen);
+    p.setBrush(QBrush(checker_a));
+    p.drawRect(ox, oy, dw, dh);
+    p.setBrush(QBrush(checker_b));
     for (int cy = oy; cy < oy + dh; cy += 12)
         for (int cx = ox; cx < ox + dw; cx += 12)
             if ((((cx - ox) / 12) + ((cy - oy) / 12)) % 2 == 0)

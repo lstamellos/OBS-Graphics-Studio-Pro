@@ -172,6 +172,7 @@ public:
     void set_zoom_percent(int percent);
     int zoom_percent() const;
     void fit_canvas(bool up_to_100 = false);
+    void set_checkerboard_pattern(int pattern);
 
 signals:
     void layer_clicked(const std::string &layer_id);
@@ -223,6 +224,7 @@ private:
     QPixmap frame_pixmap_;
     bool dirty_ = true;
     bool safe_guides_visible_ = false;
+    int checkerboard_pattern_ = 1;
 
     DragMode drag_mode_ = DragMode::None;
     bool drag_changed_ = false;
