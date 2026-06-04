@@ -472,8 +472,11 @@ static QFont font_for_layer(const Layer &layer)
         font.setStyleName(style);
     font.setBold(layer.font_bold);
     font.setItalic(layer.font_italic);
-    font.setKerning(layer.font_kerning);
-    font.setLetterSpacing(QFont::AbsoluteSpacing, layer.char_tracking);
+    font.setUnderline(layer.text_underline);
+    font.setStrikeOut(layer.text_strikethrough);
+    font.setKerning(layer.kerning_mode != 2 && layer.font_kerning);
+    const float effective_tracking = layer.char_tracking + (layer.kerning_mode == 2 ? layer.manual_kerning : 0.0f);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, effective_tracking);
     font.setStretch(std::clamp((int)std::round(layer.char_scale_x * 100.0f), 1, 4000));
     apply_text_style_to_font(font, layer);
     return font;
@@ -724,6 +727,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     text_image.fill(Qt::transparent);
 
     QPainter painter(&text_image);
+    const bool previous_shape_aa = painter.testRenderHint(QPainter::Antialiasing);
+    const bool previous_text_aa = painter.testRenderHint(QPainter::TextAntialiasing);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
@@ -743,6 +748,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
         ? ticker_text_path(font, text_rect, align, text, layer)
         : text_overflow_path(font, text_rect, align, text, layer);
     text_path = apply_vertical_character_scale(text_path, text_rect, align, layer);
+    if (std::abs(layer.baseline_shift) > 0.0001)
+        text_path.translate(0.0, -layer.baseline_shift);
 
     if (eval_shadow_enabled(layer, t)) {
         QColor shadow = color_from_argb(eval_shadow_color(layer, t));
@@ -782,6 +789,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     if (!eval_outline_on_front(layer, t)) draw_text_outline();
     draw_text_fill();
     if (eval_outline_on_front(layer, t)) draw_text_outline();
+    painter.setRenderHint(QPainter::TextAntialiasing, previous_text_aa);
+    painter.setRenderHint(QPainter::Antialiasing, previous_shape_aa);
     painter.restore();
     painter.end();
 
