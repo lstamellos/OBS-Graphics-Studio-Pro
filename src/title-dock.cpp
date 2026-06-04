@@ -803,41 +803,6 @@ void TitleDock::on_delete_live_text_rows()
         text_table_->selectRow(std::min(next_row, (int)title->live_text_rows.size() - 1));
 }
 
-void TitleDock::on_delete_live_text_rows()
-{
-    auto title = TitleDataStore::instance().get_title(selected_id());
-    if (!title || !text_table_) return;
-
-    auto rows = selected_live_text_rows();
-    if (rows.empty()) return;
-
-    updating_exposed_text_ = true;
-    int next_row = rows.front();
-    for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
-        const int row = *it;
-        if (row < 0 || row >= (int)title->live_text_rows.size())
-            continue;
-        title->live_text_rows.erase(title->live_text_rows.begin() + row);
-        if (title->current_cue_row == row)
-            title->current_cue_row = -1;
-        else if (title->current_cue_row > row)
-            --title->current_cue_row;
-        if (title->pending_cue_row == row)
-            title->pending_cue_row = -1;
-        else if (title->pending_cue_row > row)
-            --title->pending_cue_row;
-    }
-
-    auto exposed_now = exposed_text_layers(title);
-    normalize_live_text_rows(title, exposed_now);
-    TitleDataStore::instance().save();
-    TitleDataStore::instance().notify_change();
-    updating_exposed_text_ = false;
-    populate_exposed_text();
-    if (!title->live_text_rows.empty())
-        text_table_->selectRow(std::min(next_row, (int)title->live_text_rows.size() - 1));
-}
-
 void TitleDock::on_move_live_text_row_up()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
