@@ -1172,6 +1172,15 @@ void TitleEditor::build_ui()
     /* ── Connect sub-widget signals ── */
     connect(layers_, &LayerStack::layer_selected,
             this, &TitleEditor::on_layer_selected);
+    connect(layers_, &LayerStack::layers_selected,
+            this, [this](const std::vector<std::string> &ids) {
+                sel_layer_id_ = ids.empty() ? std::string() : ids.back();
+                canvas_->set_selected_layers(ids);
+                timeline_->set_selected_layer(sel_layer_id_);
+                if (!title_) return;
+                auto layer = title_->find_layer(sel_layer_id_);
+                if (layer) props_->set_layer(layer, playhead_);
+            });
 
     connect(layers_, &LayerStack::add_layer_requested,
             this, [this](LayerType type) {
@@ -1325,6 +1334,16 @@ void TitleEditor::build_ui()
 
     connect(canvas_, &CanvasPreview::layer_clicked,
             this, &TitleEditor::on_layer_selected);
+    connect(canvas_, &CanvasPreview::layers_selected,
+            this, [this](const std::vector<std::string> &ids) {
+                sel_layer_id_ = ids.empty() ? std::string() : ids.back();
+                layers_->set_selected_layers(ids);
+                canvas_->set_selected_layers(ids);
+                timeline_->set_selected_layer(sel_layer_id_);
+                if (!title_) return;
+                auto layer = title_->find_layer(sel_layer_id_);
+                if (layer) props_->set_layer(layer, playhead_);
+            });
     connect(canvas_, &CanvasPreview::layer_geometry_changed,
             this, [this]() {
                 on_title_modified();
@@ -2037,7 +2056,7 @@ void TitleEditor::on_layer_selected(const std::string &lid)
     canvas_->set_selected_layer(lid);
     timeline_->set_selected_layer(lid);
 
-    if (!title_) return;
+    if (!title_ || lid.empty()) return;
     auto layer = title_->find_layer(lid);
     if (layer) props_->set_layer(layer, playhead_);
 }
@@ -2092,7 +2111,17 @@ void CanvasPreview::set_playhead(double t)
 
 void CanvasPreview::set_selected_layer(const std::string &lid)
 {
-    sel_layer_id_ = lid; update();
+    sel_layer_id_ = lid;
+    selected_layer_ids_.clear();
+    if (!lid.empty()) selected_layer_ids_.push_back(lid);
+    update();
+}
+
+void CanvasPreview::set_selected_layers(const std::vector<std::string> &ids)
+{
+    selected_layer_ids_ = ids;
+    sel_layer_id_ = ids.empty() ? std::string() : ids.back();
+    update();
 }
 
 void CanvasPreview::set_safe_guides_visible(bool visible)
@@ -2110,6 +2139,23 @@ void CanvasPreview::refresh_preview()
 std::shared_ptr<Layer> CanvasPreview::selected_layer() const
 {
     return title_ ? title_->find_layer(sel_layer_id_) : nullptr;
+}
+
+std::vector<std::shared_ptr<Layer>> CanvasPreview::selected_layers() const
+{
+    std::vector<std::shared_ptr<Layer>> layers;
+    if (!title_) return layers;
+    if (selected_layer_ids_.empty()) {
+        if (auto layer = selected_layer()) layers.push_back(layer);
+        return layers;
+    }
+    std::set<std::string> seen;
+    for (const auto &id : selected_layer_ids_) {
+        if (!seen.insert(id).second) continue;
+        auto layer = title_->find_layer(id);
+        if (layer) layers.push_back(layer);
+    }
+    return layers;
 }
 
 QRectF CanvasPreview::layer_local_rect(const Layer &layer) const
@@ -2185,13 +2231,86 @@ QPointF CanvasPreview::layer_to_canvas(const Layer &layer, const QPointF &layer_
                    py + x * ss + y * c);
 }
 
+QRectF CanvasPreview::layer_canvas_bounds(const Layer &layer) const
+{
+    QRectF r = layer_local_rect(layer);
+    const QPointF corners[] = {r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()};
+
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+
+    for (const QPointF &corner : corners) {
+        QPointF canvas = layer_to_canvas(layer, corner);
+        min_x = std::min(min_x, canvas.x());
+        min_y = std::min(min_y, canvas.y());
+        max_x = std::max(max_x, canvas.x());
+        max_y = std::max(max_y, canvas.y());
+    }
+
+    if (!std::isfinite(min_x) || !std::isfinite(min_y) ||
+        !std::isfinite(max_x) || !std::isfinite(max_y))
+        return QRectF();
+
+    return QRectF(QPointF(min_x, min_y), QPointF(max_x, max_y)).normalized();
+}
+
+QRectF CanvasPreview::selected_canvas_bounds() const
+{
+    QRectF bounds;
+    bool have_bounds = false;
+    for (auto &layer : selected_layers()) {
+        if (!layer || !layer->visible) continue;
+        QRectF layer_bounds = layer_canvas_bounds(*layer);
+        if (!layer_bounds.isValid()) continue;
+        if (!have_bounds) {
+            bounds = layer_bounds;
+            have_bounds = true;
+        } else {
+            bounds = bounds.united(layer_bounds);
+        }
+    }
+    return bounds.normalized();
+}
+
 CanvasPreview::DragMode CanvasPreview::hit_test_selected(const QPointF &view_pt) const
 {
-    auto layer = selected_layer();
-    if (!layer || layer->locked) return DragMode::None;
+    auto layers = selected_layers();
+    if (layers.empty()) return DragMode::None;
 
     double scale = view_scale();
-    double handle = 8.0 / std::max(0.1, scale);
+    double handle_canvas = 8.0 / std::max(0.1, scale);
+
+    if (layers.size() > 1) {
+        QRectF r = selected_canvas_bounds();
+        if (!r.isValid() || r.isEmpty()) return DragMode::None;
+        QPointF canvas = view_to_canvas(view_pt);
+        auto near_pt = [&](const QPointF &p) {
+            return std::abs(canvas.x() - p.x()) <= handle_canvas &&
+                   std::abs(canvas.y() - p.y()) <= handle_canvas;
+        };
+        if (near_pt(r.topLeft())) return DragMode::ResizeNW;
+        if (near_pt(QPointF(r.center().x(), r.top()))) return DragMode::ResizeN;
+        if (near_pt(r.topRight())) return DragMode::ResizeNE;
+        if (near_pt(QPointF(r.right(), r.center().y()))) return DragMode::ResizeE;
+        if (near_pt(r.bottomRight())) return DragMode::ResizeSE;
+        if (near_pt(QPointF(r.center().x(), r.bottom()))) return DragMode::ResizeS;
+        if (near_pt(r.bottomLeft())) return DragMode::ResizeSW;
+        if (near_pt(QPointF(r.left(), r.center().y()))) return DragMode::ResizeW;
+        for (const auto &layer : layers) {
+            if (!layer || layer->locked) continue;
+            QPointF local = canvas_to_layer(*layer, canvas);
+            if (layer_local_rect(*layer).adjusted(-handle_canvas, -handle_canvas, handle_canvas, handle_canvas).contains(local))
+                return DragMode::Move;
+        }
+        return DragMode::None;
+    }
+
+    auto layer = layers.front();
+    if (!layer || layer->locked) return DragMode::None;
+
+    double handle = handle_canvas;
     QPointF local = canvas_to_layer(*layer, view_to_canvas(view_pt));
     QRectF r = layer_local_rect(*layer);
 
@@ -2212,14 +2331,133 @@ CanvasPreview::DragMode CanvasPreview::hit_test_selected(const QPointF &view_pt)
     if (r.adjusted(-handle, -handle, handle, handle).contains(local)) return DragMode::Move;
     return DragMode::None;
 }
+void CanvasPreview::begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers)
+{
+    drag_mode_ = DragMode::Marquee;
+    marquee_active_ = false;
+    drag_start_view_ = view_pt;
+    drag_current_view_ = view_pt;
+    marquee_base_selection_ = selected_layer_ids_;
+    drag_changed_ = false;
+}
+
+void CanvasPreview::update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers)
+{
+    if (!title_) return;
+    drag_current_view_ = view_pt;
+    if ((drag_current_view_ - drag_start_view_).manhattanLength() < QApplication::startDragDistance()) {
+        update();
+        return;
+    }
+
+    marquee_active_ = true;
+    QRectF view_rect(drag_start_view_, drag_current_view_);
+    view_rect = view_rect.normalized();
+    QRectF canvas_rect(view_to_canvas(view_rect.topLeft()), view_to_canvas(view_rect.bottomRight()));
+    canvas_rect = canvas_rect.normalized();
+    const bool contains_mode = drag_current_view_.x() >= drag_start_view_.x();
+
+    std::set<std::string> selected;
+    if (modifiers & (Qt::ShiftModifier | Qt::ControlModifier))
+        selected.insert(marquee_base_selection_.begin(), marquee_base_selection_.end());
+
+    std::vector<std::string> hits;
+    for (const auto &layer : title_->layers) {
+        if (!layer || !layer->visible || layer->locked) continue;
+        if (playhead_ < layer->in_time || playhead_ > layer->out_time) continue;
+        QRectF bounds = layer_canvas_bounds(*layer);
+        bool hit = contains_mode ? canvas_rect.contains(bounds) : canvas_rect.intersects(bounds);
+        if (hit) hits.push_back(layer->id);
+    }
+
+    if (modifiers & Qt::ControlModifier) {
+        for (const auto &id : hits) {
+            auto it = selected.find(id);
+            if (it == selected.end()) selected.insert(id);
+            else selected.erase(it);
+        }
+    } else {
+        selected.insert(hits.begin(), hits.end());
+    }
+
+    selected_layer_ids_.clear();
+    for (const auto &layer : title_->layers) {
+        if (layer && selected.find(layer->id) != selected.end())
+            selected_layer_ids_.push_back(layer->id);
+    }
+    sel_layer_id_ = selected_layer_ids_.empty() ? std::string() : selected_layer_ids_.back();
+    emit layers_selected(selected_layer_ids_);
+    update();
+}
 
 void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers)
 {
-    auto layer = selected_layer();
-    if (!layer || drag_mode_ == DragMode::None) return;
+    if (drag_mode_ == DragMode::Marquee) {
+        update_marquee(view_pt, modifiers);
+        return;
+    }
+
+    auto layers = selected_layers();
+    if (layers.empty() || drag_mode_ == DragMode::None) return;
 
     QPointF canvas = view_to_canvas(view_pt);
     QPointF delta = canvas - drag_start_canvas_;
+
+    if (layers.size() > 1) {
+        if (drag_mode_ == DragMode::Move) {
+            if (modifiers & Qt::ShiftModifier) {
+                if (std::abs(delta.x()) >= std::abs(delta.y())) delta.setY(0.0);
+                else delta.setX(0.0);
+            }
+            for (const auto &state : drag_layer_states_) {
+                auto layer = title_->find_layer(state.id);
+                if (!layer || layer->locked) continue;
+                double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                                       std::max(0.0, layer->out_time - layer->in_time));
+                set_animated_value(layer->pos_x, lt, state.x + delta.x());
+                set_animated_value(layer->pos_y, lt, state.y + delta.y());
+            }
+        } else {
+            QRectF start = drag_start_selection_bounds_;
+            if (!start.isValid() || start.width() <= 0.0 || start.height() <= 0.0) return;
+            QRectF next = start;
+            bool resize_left = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeW;
+            bool resize_right = drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeE;
+            bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
+            bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
+            if (resize_left) next.setLeft(std::min(canvas.x(), start.right() - 1.0));
+            if (resize_right) next.setRight(std::max(canvas.x(), start.left() + 1.0));
+            if (resize_top) next.setTop(std::min(canvas.y(), start.bottom() - 1.0));
+            if (resize_bottom) next.setBottom(std::max(canvas.y(), start.top() + 1.0));
+            double sx = next.width() / start.width();
+            double sy = next.height() / start.height();
+            if (modifiers & Qt::ShiftModifier) {
+                double uniform = std::abs(sx) >= std::abs(sy) ? sx : sy;
+                sx = sy = uniform;
+            }
+            for (const auto &state : drag_layer_states_) {
+                auto layer = title_->find_layer(state.id);
+                if (!layer || layer->locked) continue;
+                double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                                       std::max(0.0, layer->out_time - layer->in_time));
+                double rx = (state.x - start.left()) / start.width();
+                double ry = (state.y - start.top()) / start.height();
+                set_animated_value(layer->pos_x, lt, next.left() + rx * next.width());
+                set_animated_value(layer->pos_y, lt, next.top() + ry * next.height());
+                layer->rect_width = std::max(1.0f, (float)(state.w * sx));
+                layer->rect_height = std::max(1.0f, (float)(state.h * sy));
+                set_animated_value(layer->box_width, lt, layer->rect_width);
+                set_animated_value(layer->box_height, lt, layer->rect_height);
+            }
+        }
+        dirty_ = true;
+        drag_changed_ = true;
+        update();
+        return;
+    }
+
+    auto layer = layers.front();
+    if (!layer) return;
     double lt = std::clamp(playhead_ - layer->in_time, 0.0,
                            std::max(0.0, layer->out_time - layer->in_time));
 
@@ -2253,15 +2491,10 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
         bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
         bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
 
-        if (resize_left)
-            left = std::min(local.x(), right - 1.0);
-        else if (resize_right)
-            right = std::max(local.x(), left + 1.0);
-
-        if (resize_top)
-            top = std::min(local.y(), bottom - 1.0);
-        else if (resize_bottom)
-            bottom = std::max(local.y(), top + 1.0);
+        if (resize_left) left = std::min(local.x(), right - 1.0);
+        else if (resize_right) right = std::max(local.x(), left + 1.0);
+        if (resize_top) top = std::min(local.y(), bottom - 1.0);
+        else if (resize_bottom) bottom = std::max(local.y(), top + 1.0);
 
         double new_w = std::max(1.0, right - left);
         double new_h = std::max(1.0, bottom - top);
@@ -2282,7 +2515,6 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
     drag_changed_ = true;
     update();
 }
-
 void CanvasPreview::render_to_pixmap()
 {
     if (!title_) { frame_pixmap_ = QPixmap(); return; }
@@ -2479,43 +2711,74 @@ void CanvasPreview::paintEvent(QPaintEvent *)
         draw_guide(0.10, QColor(255, 220, 0, 190));
     }
 
-    auto layer = selected_layer();
-    if (!layer) return;
-
-    double lt = playhead_ - layer->in_time;
-    QRectF box = layer_local_rect(*layer);
+    auto layers = selected_layers();
     double handle = 8.0 / std::max(0.1, scale);
 
-    p.save();
-    QPointF layer_origin = canvas_to_view(QPointF(layer->pos_x.evaluate(lt),
-                                                  layer->pos_y.evaluate(lt)));
-    p.translate(layer_origin);
-    p.rotate(layer->rotation.evaluate(lt));
-    p.scale(scale * layer->scale_x.evaluate(lt),
-            scale * layer->scale_y.evaluate(lt));
-    p.setBrush(Qt::NoBrush);
-    p.setPen(QPen(QColor(0, 120, 255, 230), 1.5 / scale, Qt::DashLine));
-    p.drawRect(box);
-
-    p.setPen(QPen(QColor(0, 120, 255, 255), 1.0 / scale));
-    p.setBrush(QColor(255, 255, 255));
-    const QPointF handle_points[] = {
-        box.topLeft(), QPointF(box.center().x(), box.top()), box.topRight(),
-        QPointF(box.right(), box.center().y()), box.bottomRight(),
-        QPointF(box.center().x(), box.bottom()), box.bottomLeft(),
-        QPointF(box.left(), box.center().y())
+    auto draw_layer_box = [&](const Layer &layer, bool handles) {
+        double lt = playhead_ - layer.in_time;
+        QRectF box = layer_local_rect(layer);
+        p.save();
+        QPointF layer_origin = canvas_to_view(QPointF(layer.pos_x.evaluate(lt), layer.pos_y.evaluate(lt)));
+        p.translate(layer_origin);
+        p.rotate(layer.rotation.evaluate(lt));
+        p.scale(scale * layer.scale_x.evaluate(lt), scale * layer.scale_y.evaluate(lt));
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(0, 120, 255, handles ? 230 : 150), 1.5 / scale, Qt::DashLine));
+        p.drawRect(box);
+        if (handles) {
+            p.setPen(QPen(QColor(0, 120, 255, 255), 1.0 / scale));
+            p.setBrush(QColor(255, 255, 255));
+            const QPointF handle_points[] = {
+                box.topLeft(), QPointF(box.center().x(), box.top()), box.topRight(),
+                QPointF(box.right(), box.center().y()), box.bottomRight(),
+                QPointF(box.center().x(), box.bottom()), box.bottomLeft(),
+                QPointF(box.left(), box.center().y())
+            };
+            for (const QPointF &pt : handle_points)
+                p.drawRect(QRectF(pt.x() - handle / 2.0, pt.y() - handle / 2.0, handle, handle));
+            p.setPen(QPen(QColor(255, 160, 0), 1.5 / scale));
+            p.setBrush(QColor(255, 220, 80));
+            p.drawEllipse(QPointF(0, 0), handle * 0.45, handle * 0.45);
+            p.drawLine(QPointF(-handle, 0), QPointF(handle, 0));
+            p.drawLine(QPointF(0, -handle), QPointF(0, handle));
+        }
+        p.restore();
     };
-    for (const QPointF &pt : handle_points)
-        p.drawRect(QRectF(pt.x() - handle / 2.0, pt.y() - handle / 2.0, handle, handle));
 
-    p.setPen(QPen(QColor(255, 160, 0), 1.5 / scale));
-    p.setBrush(QColor(255, 220, 80));
-    p.drawEllipse(QPointF(0, 0), handle * 0.45, handle * 0.45);
-    p.drawLine(QPointF(-handle, 0), QPointF(handle, 0));
-    p.drawLine(QPointF(0, -handle), QPointF(0, handle));
-    p.restore();
+    if (layers.size() == 1) {
+        draw_layer_box(*layers.front(), true);
+    } else if (layers.size() > 1) {
+        for (const auto &layer : layers)
+            if (layer) draw_layer_box(*layer, false);
+
+        QRectF bounds = selected_canvas_bounds();
+        if (bounds.isValid() && !bounds.isEmpty()) {
+            QRectF view_bounds(canvas_to_view(bounds.topLeft()), canvas_to_view(bounds.bottomRight()));
+            view_bounds = view_bounds.normalized();
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(QColor(0, 160, 255, 240), 1.5, Qt::SolidLine));
+            p.drawRect(view_bounds);
+            p.setPen(QPen(QColor(0, 120, 255, 255), 1.0));
+            p.setBrush(QColor(255, 255, 255));
+            const QPointF points[] = {
+                view_bounds.topLeft(), QPointF(view_bounds.center().x(), view_bounds.top()), view_bounds.topRight(),
+                QPointF(view_bounds.right(), view_bounds.center().y()), view_bounds.bottomRight(),
+                QPointF(view_bounds.center().x(), view_bounds.bottom()), view_bounds.bottomLeft(),
+                QPointF(view_bounds.left(), view_bounds.center().y())
+            };
+            for (const QPointF &pt : points)
+                p.drawRect(QRectF(pt.x() - 4.0, pt.y() - 4.0, 8.0, 8.0));
+        }
+    }
+
+    if (drag_mode_ == DragMode::Marquee && marquee_active_) {
+        QRectF marquee(drag_start_view_, drag_current_view_);
+        marquee = marquee.normalized();
+        p.setBrush(QColor(0, 120, 255, 45));
+        p.setPen(QPen(QColor(0, 160, 255, 220), 1.0, Qt::DashLine));
+        p.drawRect(marquee);
+    }
 }
-
 void CanvasPreview::mousePressEvent(QMouseEvent *ev)
 {
     if (!title_ || ev->button() != Qt::LeftButton) return;
@@ -2525,23 +2788,61 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
         QPointF canvas = view_to_canvas(ev->pos());
         for (auto it = title_->layers.rbegin(); it != title_->layers.rend(); ++it) {
             auto &l = *it;
-            if (!l->visible || l->locked) continue;
+            if (!l || !l->visible || l->locked) continue;
+            if (playhead_ < l->in_time || playhead_ > l->out_time) continue;
             QPointF local = canvas_to_layer(*l, canvas);
             if (layer_local_rect(*l).contains(local)) {
-                emit layer_clicked(l->id);
-                sel_layer_id_ = l->id;
+                std::vector<std::string> next_ids;
+                if (ev->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier))
+                    next_ids = selected_layer_ids_;
+                auto existing = std::find(next_ids.begin(), next_ids.end(), l->id);
+                if (ev->modifiers() & Qt::ControlModifier) {
+                    if (existing == next_ids.end()) next_ids.push_back(l->id);
+                    else next_ids.erase(existing);
+                } else if (existing == next_ids.end()) {
+                    if (!(ev->modifiers() & Qt::ShiftModifier)) next_ids.clear();
+                    next_ids.push_back(l->id);
+                }
+                emit layers_selected(next_ids);
+                selected_layer_ids_ = next_ids;
+                sel_layer_id_ = selected_layer_ids_.empty() ? std::string() : selected_layer_ids_.back();
                 drag_mode_ = DragMode::Move;
                 break;
             }
         }
     }
 
-    auto layer = selected_layer();
-    if (!layer || drag_mode_ == DragMode::None) return;
+    if (drag_mode_ == DragMode::None) {
+        begin_marquee(ev->pos(), ev->modifiers());
+        ev->accept();
+        return;
+    }
 
     drag_changed_ = false;
+    drag_start_view_ = ev->pos();
+    drag_current_view_ = ev->pos();
     drag_start_canvas_ = view_to_canvas(ev->pos());
-    double lt = playhead_ - layer->in_time;
+    drag_layer_states_.clear();
+    drag_start_selection_bounds_ = selected_canvas_bounds();
+
+    auto layers = selected_layers();
+    auto layer = selected_layer();
+    if (!layer && !layers.empty()) layer = layers.front();
+    if (!layer) return;
+
+    for (const auto &selected : layers) {
+        if (!selected || selected->locked) continue;
+        double lt = std::clamp(playhead_ - selected->in_time, 0.0,
+                               std::max(0.0, selected->out_time - selected->in_time));
+        drag_layer_states_.push_back({selected->id,
+                                      selected->pos_x.evaluate(lt),
+                                      selected->pos_y.evaluate(lt),
+                                      std::max(1.0f, selected->rect_width),
+                                      std::max(1.0f, selected->rect_height)});
+    }
+
+    double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                           std::max(0.0, layer->out_time - layer->in_time));
     drag_start_x_ = layer->pos_x.evaluate(lt);
     drag_start_y_ = layer->pos_y.evaluate(lt);
     drag_start_w_ = std::max(1.0f, layer->rect_width);
@@ -2580,16 +2881,31 @@ void CanvasPreview::mouseMoveEvent(QMouseEvent *ev)
 
 void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
 {
-    if (ev->button() == Qt::LeftButton && drag_mode_ != DragMode::None) {
-        bool changed = drag_changed_;
+    if (ev->button() != Qt::LeftButton || drag_mode_ == DragMode::None) return;
+
+    if (drag_mode_ == DragMode::Marquee) {
+        update_marquee(ev->pos(), ev->modifiers());
+        if (!marquee_active_)
+            emit layers_selected(std::vector<std::string>{});
         drag_mode_ = DragMode::None;
+        marquee_active_ = false;
         drag_changed_ = false;
         unsetCursor();
-        if (changed)
-            emit layer_geometry_changed();
+        update();
         ev->accept();
+        return;
     }
+
+    bool changed = drag_changed_;
+    drag_mode_ = DragMode::None;
+    drag_changed_ = false;
+    drag_layer_states_.clear();
+    unsetCursor();
+    if (changed)
+        emit layer_geometry_changed();
+    ev->accept();
 }
+
 
 void CanvasPreview::wheelEvent(QWheelEvent *ev)
 {
@@ -2927,19 +3243,35 @@ void LayerStack::populate()
 
 void LayerStack::set_selected_layer(const std::string &layer_id)
 {
-    QString qid = QString::fromStdString(layer_id);
-    if (list_->currentItem() &&
-        list_->currentItem()->data(Qt::UserRole).toString() == qid)
-        return;
+    set_selected_layers(layer_id.empty() ? std::vector<std::string>()
+                                         : std::vector<std::string>{layer_id});
+}
 
+void LayerStack::set_selected_layers(const std::vector<std::string> &layer_ids)
+{
     QSignalBlocker blocker(list_);
+    list_->clearSelection();
+    if (layer_ids.empty()) {
+        list_->setCurrentItem(nullptr);
+        return;
+    }
+
+    std::set<QString> ids;
+    for (const auto &id : layer_ids)
+        ids.insert(QString::fromStdString(id));
+
+    QListWidgetItem *current = nullptr;
+    QString primary = QString::fromStdString(layer_ids.back());
     for (int i = 0; i < list_->count(); ++i) {
         auto *item = list_->item(i);
-        if (item->data(Qt::UserRole).toString() == qid) {
-            list_->setCurrentItem(item);
-            return;
+        if (item->data(Qt::UserRole + 1).toString() != "layer") continue;
+        QString id = item->data(Qt::UserRole).toString();
+        if (ids.find(id) != ids.end()) {
+            item->setSelected(true);
+            if (id == primary) current = item;
         }
     }
+    if (current) list_->setCurrentItem(current, QItemSelectionModel::NoUpdate);
 }
 
 std::string LayerStack::selected_id() const
@@ -2967,6 +3299,9 @@ void LayerStack::on_selection_changed()
     bool can_move_up = false;
     bool can_move_down = false;
     if (has_layer) {
+        auto selected = selected_ids();
+        if (selected.size() > 1)
+            emit layers_selected(selected);
         auto it = std::find_if(title_->layers.begin(), title_->layers.end(),
                                [&](const auto &layer) { return layer && layer->id == id; });
         if (it != title_->layers.end()) {
@@ -2974,7 +3309,8 @@ void LayerStack::on_selection_changed()
             can_move_down = idx > 0;
             can_move_up = idx < (int)title_->layers.size() - 1;
         }
-        emit layer_selected(id);
+        if (selected.size() <= 1)
+            emit layer_selected(id);
     }
     if (btn_move_up_) btn_move_up_->setEnabled(can_move_up);
     if (btn_move_down_) btn_move_down_->setEnabled(can_move_down);
