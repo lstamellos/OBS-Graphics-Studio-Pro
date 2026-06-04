@@ -118,11 +118,22 @@ struct Layer {
     bool        font_bold     = false;
     bool        font_italic   = false;
     bool        font_kerning  = true;
+    int         kerning_mode  = 0;  /* 0=metrics, 1=optical, 2=manual */
+    float       manual_kerning = 0.0f;
     float       text_leading  = 0.0f;
     float       char_tracking = 0.0f;
     float       char_scale_x  = 1.0f;
     float       char_scale_y  = 1.0f;
+    float       baseline_shift = 0.0f;
     int         text_style    = 0;  /* 0=normal, 1=all caps, 2=small caps, 3=superscript, 4=subscript */
+    bool        text_underline = false;
+    bool        text_strikethrough = false;
+    bool        text_ligatures = true;
+    bool        text_stylistic_alternates = false;
+    bool        text_fractions = false;
+    bool        text_opentype_features = false;
+    std::string text_language = "English";
+    int         text_antialias = 0;  /* 0=default, 1=smooth, 2=crisp, 3=none */
     int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
     float       text_fit_min_scale = 0.5f;
 
