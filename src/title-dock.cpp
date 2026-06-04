@@ -70,6 +70,8 @@
 
 namespace {
 
+constexpr int TemplateCategoryNameRole = Qt::UserRole + 1;
+
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
@@ -329,6 +331,7 @@ public:
     }
 
     std::function<void()> templates_moved;
+    std::function<void(QTreeWidgetItem *)> category_delete_requested;
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override
@@ -392,7 +395,36 @@ protected:
         accept_template_drag(event);
     }
 
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (auto *item = delete_item_at(event ? event->pos() : QPoint())) {
+            setCurrentItem(item);
+            if (category_delete_requested)
+                category_delete_requested(item);
+            return;
+        }
+        QTreeWidget::mouseReleaseEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        if (delete_item_at(event ? event->pos() : QPoint()))
+            return;
+        QTreeWidget::mouseDoubleClickEvent(event);
+    }
+
 private:
+    QTreeWidgetItem *delete_item_at(const QPoint &pos) const
+    {
+        auto *item = itemAt(pos);
+        if (!item)
+            return nullptr;
+
+        const QRect rect = visualRect(indexFromItem(item, 0));
+        const int delete_width = fontMetrics().horizontalAdvance(QStringLiteral("×")) + 12;
+        return QRect(rect.left(), rect.top(), delete_width, rect.height()).contains(pos) ? item : nullptr;
+    }
+
     template <typename DragEvent>
     bool accept_template_drag(DragEvent *event)
     {
@@ -709,9 +741,10 @@ static QTreeWidgetItem *add_template_category_item(QTreeWidget *tree, QTreeWidge
                                                    const QFileInfo &dir_info)
 {
     auto *item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(tree);
-    item->setText(0, dir_info.fileName());
+    item->setText(0, QStringLiteral("×  ") + dir_info.fileName());
     item->setToolTip(0, dir_info.absoluteFilePath());
     item->setData(0, Qt::UserRole, dir_info.absoluteFilePath());
+    item->setData(0, TemplateCategoryNameRole, dir_info.fileName());
     item->setFlags(item->flags() | Qt::ItemIsDropEnabled);
 
     QDir dir(dir_info.absoluteFilePath());
@@ -796,9 +829,12 @@ static bool rename_template_category(QWidget *parent, QTreeWidgetItem *item)
 
     QFileInfo category_info(category_path);
     bool ok = false;
+    const QString current_name = item->data(0, TemplateCategoryNameRole).toString().isEmpty()
+        ? category_info.fileName()
+        : item->data(0, TemplateCategoryNameRole).toString();
     QString name = QInputDialog::getText(
         parent, obsgs_tr("OBSTitles.RenameCategory"), obsgs_tr("OBSTitles.CategoryNamePrompt"),
-        QLineEdit::Normal, category_info.fileName(), &ok);
+        QLineEdit::Normal, current_name, &ok);
     if (!ok) return false;
 
     name = sanitized_template_category_path(name);
@@ -832,7 +868,7 @@ static bool delete_template_category(QWidget *parent, QTreeWidgetItem *item, con
 
     const auto reply = QMessageBox::question(
         parent, obsgs_tr("OBSTitles.DeleteCategory"),
-        obsgs_tr("OBSTitles.DeleteCategoryQuestionFormat").arg(item->text(0)),
+        obsgs_tr("OBSTitles.DeleteCategoryQuestionFormat").arg(item->data(0, TemplateCategoryNameRole).toString()),
         QMessageBox::Yes | QMessageBox::No);
     if (reply != QMessageBox::Yes) return false;
 
@@ -1889,29 +1925,12 @@ void TitleDock::on_add_from_templates_library()
             reload_current_category();
         }
     });
-    categories->setContextMenuPolicy(Qt::CustomContextMenu);
-    QObject::connect(categories, &QTreeWidget::customContextMenuRequested, window,
-                     [window, categories, root_path, reload_current_category](const QPoint &pos) {
-        auto *item = categories->itemAt(pos);
-        if (!item) return;
-
-        QMenu menu(window);
-        QAction *rename_action = menu.addAction(obsgs_tr("OBSTitles.RenameCategory"));
-        QAction *delete_action = menu.addAction(obsgs_tr("OBSTitles.DeleteCategory"));
-        QAction *selected = menu.exec(categories->viewport()->mapToGlobal(pos));
-        if (!selected) return;
-
-        bool changed = false;
-        if (selected == rename_action)
-            changed = rename_template_category(window, item);
-        else if (selected == delete_action)
-            changed = delete_template_category(window, item, root_path);
-
-        if (changed) {
+    categories->category_delete_requested = [window, categories, root_path, reload_current_category](QTreeWidgetItem *item) {
+        if (delete_template_category(window, item, root_path)) {
             populate_template_categories(categories, root_path);
             reload_current_category();
         }
-    });
+    };
     QObject::connect(templates, &QListWidget::currentItemChanged, window,
                      [update_metadata](QListWidgetItem *, QListWidgetItem *) { update_metadata(); });
 
