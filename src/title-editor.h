@@ -282,6 +282,9 @@ signals:
     void paste_layer_requested(const std::string &layer_id);
     void delete_layer_requested(const std::string &layer_id);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private slots:
     void on_add_text();
     void on_add_clock();

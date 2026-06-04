@@ -56,6 +56,7 @@
 #include <QFrame>
 #include <QSignalBlocker>
 #include <QKeyEvent>
+#include <QEvent>
 #include <QKeySequence>
 #include <QAbstractSpinBox>
 #include <QAbstractItemModel>
@@ -2253,7 +2254,10 @@ void TitleEditor::on_layer_selected(const std::string &lid)
     canvas_->set_selected_layer(lid);
     timeline_->set_selected_layer(lid);
 
-    if (!title_ || lid.empty()) return;
+    if (!title_ || lid.empty()) {
+        props_->set_layer(nullptr, playhead_);
+        return;
+    }
     auto layer = title_->find_layer(lid);
     if (layer) props_->set_layer(layer, playhead_);
 }
@@ -3337,6 +3341,23 @@ LayerStack::LayerStack(QWidget *parent) : QWidget(parent)
     list_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(list_, &QListWidget::customContextMenuRequested,
             this, &LayerStack::show_layer_context_menu);
+    list_->viewport()->installEventFilter(this);
+}
+
+bool LayerStack::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == list_->viewport() && event->type() == QEvent::MouseButtonPress) {
+        auto *mouse_event = static_cast<QMouseEvent *>(event);
+        if (mouse_event->button() == Qt::LeftButton && !list_->itemAt(mouse_event->pos())) {
+            QSignalBlocker blocker(list_);
+            list_->clearSelection();
+            list_->setCurrentItem(nullptr);
+            emit layer_selected(std::string());
+            event->accept();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void LayerStack::set_title(std::shared_ptr<Title> t)
@@ -3580,7 +3601,10 @@ void LayerStack::set_selected_layers(const std::vector<std::string> &layer_ids)
 std::string LayerStack::selected_id() const
 {
     auto *item = list_->currentItem();
-    return item ? item->data(Qt::UserRole).toString().toStdString() : "";
+    if (item && item->isSelected())
+        return item->data(Qt::UserRole).toString().toStdString();
+    auto selected = list_->selectedItems();
+    return selected.isEmpty() ? std::string() : selected.back()->data(Qt::UserRole).toString().toStdString();
 }
 
 std::vector<std::string> LayerStack::selected_ids() const
@@ -3588,8 +3612,6 @@ std::vector<std::string> LayerStack::selected_ids() const
     std::vector<std::string> ids;
     for (auto *item : list_->selectedItems())
         ids.push_back(item->data(Qt::UserRole).toString().toStdString());
-    if (ids.empty() && list_->currentItem())
-        ids.push_back(list_->currentItem()->data(Qt::UserRole).toString().toStdString());
     return ids;
 }
 
@@ -3615,6 +3637,9 @@ void LayerStack::on_selection_changed()
         if (selected.size() <= 1)
             emit layer_selected(id);
     }
+    if (!has_layer)
+        emit layer_selected(std::string());
+
     if (btn_move_up_) btn_move_up_->setEnabled(can_move_up);
     if (btn_move_down_) btn_move_down_->setEnabled(can_move_down);
 }
@@ -3908,19 +3933,34 @@ void TimelineWidget::paintEvent(QPaintEvent *)
         int x0 = time_to_x(layer->in_time);
         int x1 = time_to_x(layer->out_time);
         if (!entry.is_property) {
+            QRect strip_rect(std::min(x0, x1), y + 3, std::abs(x1 - x0), rowh - 6);
             QColor bar_col = layer_color(*layer, row);
+            if (!layer->visible) {
+                const int gray = qGray(bar_col.rgb());
+                bar_col = QColor(gray, gray, gray).darker(135);
+            }
             if (sel) bar_col = bar_col.lighter(125);
-            p.fillRect(x0, y + 3, x1 - x0, rowh - 6, bar_col);
+            p.fillRect(strip_rect, bar_col);
+            if (layer->locked) {
+                p.save();
+                p.setClipRect(strip_rect);
+                p.setPen(QPen(QColor(0x09, 0x09, 0x09, 170), 2));
+                for (int lx = strip_rect.left() - strip_rect.height(); lx < strip_rect.right() + strip_rect.height(); lx += 8)
+                    p.drawLine(lx, strip_rect.bottom(), lx + strip_rect.height(), strip_rect.top());
+                p.restore();
+            }
             p.setBrush(Qt::NoBrush);
             p.setPen(QColor(0x0d,0x0d,0x0d));
-            p.drawRect(x0, y + 3, x1 - x0, rowh - 6);
+            p.drawRect(strip_rect);
 
-            /* Trim handles for mouse resizing of layer in/out. */
-            p.fillRect(x0, y + 3, 4, rowh - 6, QColor(0xdc,0xdc,0xdc,150));
-            p.fillRect(x1 - 4, y + 3, 4, rowh - 6, QColor(0xdc,0xdc,0xdc,150));
+            /* Trim handles for mouse resizing of unlocked layer in/out. */
+            if (!layer->locked) {
+                p.fillRect(x0, y + 3, 4, rowh - 6, QColor(0xdc,0xdc,0xdc,150));
+                p.fillRect(x1 - 4, y + 3, 4, rowh - 6, QColor(0xdc,0xdc,0xdc,150));
+            }
 
-            p.setPen(QColor(0xcc,0xcc,0xcc));
-            p.drawText(std::max(x0, 0) + 6, y, std::max(1, x1 - x0 - 12), rowh,
+            p.setPen(layer->visible ? QColor(0xcc,0xcc,0xcc) : QColor(0x8a,0x8a,0x8a));
+            p.drawText(std::max(strip_rect.left(), 0) + 6, y, std::max(1, strip_rect.width() - 12), rowh,
                        Qt::AlignVCenter, QString::fromStdString(layer->name));
         } else {
             p.fillRect(x0, y + rowh / 2 - 1, x1 - x0, 2, QColor(0x36,0x36,0x36));
@@ -3938,7 +3978,12 @@ void TimelineWidget::paintEvent(QPaintEvent *)
                         << QPoint(kx + 5, ky)
                         << QPoint(kx,     ky + 5)
                         << QPoint(kx - 5, ky);
-                p.setBrush(layer_color(*layer, row));
+                QColor kf_fill = layer_color(*layer, row);
+                if (!layer->visible) {
+                    const int gray = qGray(kf_fill.rgb());
+                    kf_fill = QColor(gray, gray, gray).darker(135);
+                }
+                p.setBrush(kf_fill);
                 p.setPen(QPen(keyframe_color(kf.easing), 1));
                 p.drawPolygon(diamond);
             }
@@ -4243,7 +4288,7 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
     int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
     if (row >= 0 && row < (int)rows.size() && !rows[row].is_property) {
         auto layer = rows[row].layer;
-        if (!layer || layer->locked) {
+        if (!layer) {
             ev->accept();
             return;
         }
@@ -4252,6 +4297,10 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
         constexpr int kTrimHit = 7;
         const bool hit_strip = ev->pos().x() >= std::min(x0, x1) - kTrimHit &&
                                ev->pos().x() <= std::max(x0, x1) + kTrimHit;
+        if (layer->locked && hit_strip) {
+            ev->accept();
+            return;
+        }
         if (hit_strip) emit layer_selected(layer->id);
         if (std::abs(ev->pos().x() - x0) <= kTrimHit) {
             drag_mode_ = DragMode::TrimIn;
@@ -4278,6 +4327,9 @@ void TimelineWidget::mousePressEvent(QMouseEvent *ev)
             return;
         }
     }
+
+    emit layer_selected(std::string());
+    ev->accept();
 }
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent *ev)
