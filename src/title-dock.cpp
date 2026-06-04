@@ -19,6 +19,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QStyle>
+#include <QStyleOptionButton>
 #include <QToolButton>
 #include <QToolBar>
 #include <QPushButton>
@@ -28,6 +29,8 @@
 #include <QStringList>
 #include <QHeaderView>
 #include <QLineEdit>
+#include <QMouseEvent>
+#include <QPainter>
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTableWidgetItem>
@@ -35,6 +38,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <algorithm>
+#include <functional>
 
 namespace {
 
@@ -147,6 +151,73 @@ static void set_bold_label(QLabel *label)
     QFont font = label->font();
     font.setBold(true);
     label->setFont(font);
+}
+
+
+class LiveTextCueHeader : public QHeaderView {
+public:
+    explicit LiveTextCueHeader(QWidget *parent = nullptr)
+        : QHeaderView(Qt::Horizontal, parent)
+    {
+        setSectionsMovable(true);
+        setSectionsClickable(true);
+        setSectionResizeMode(QHeaderView::Interactive);
+    }
+
+    void set_select_all_checked(bool checked)
+    {
+        if (select_all_checked_ == checked) return;
+        select_all_checked_ = checked;
+        viewport()->update();
+    }
+
+    std::function<void(bool)> select_all_toggled;
+
+protected:
+    void paintSection(QPainter *painter, const QRect &rect, int logicalIndex) const override
+    {
+        QHeaderView::paintSection(painter, rect, logicalIndex);
+        if (logicalIndex != 0) return;
+
+        QStyleOptionButton option;
+        option.state = QStyle::State_Enabled | (select_all_checked_ ? QStyle::State_On : QStyle::State_Off);
+        option.rect = checkbox_rect(rect);
+        style()->drawControl(QStyle::CE_CheckBox, &option, painter, this);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event && event->button() == Qt::LeftButton && logicalIndexAt(event->pos()) == 0) {
+            const QRect section_rect(sectionViewportPosition(0), 0, sectionSize(0), height());
+            if (checkbox_rect(section_rect).contains(event->pos())) {
+                select_all_checked_ = !select_all_checked_;
+                viewport()->update();
+                if (select_all_toggled)
+                    select_all_toggled(select_all_checked_);
+                return;
+            }
+        }
+
+        QHeaderView::mousePressEvent(event);
+    }
+
+private:
+    QRect checkbox_rect(const QRect &section_rect) const
+    {
+        const int indicator_width = style()->pixelMetric(QStyle::PM_IndicatorWidth, nullptr, this);
+        const int indicator_height = style()->pixelMetric(QStyle::PM_IndicatorHeight, nullptr, this);
+        return QRect(section_rect.x() + (section_rect.width() - indicator_width) / 2,
+                     section_rect.y() + (section_rect.height() - indicator_height) / 2,
+                     indicator_width,
+                     indicator_height);
+    }
+
+    bool select_all_checked_ = false;
+};
+
+static LiveTextCueHeader *live_text_cue_header(QTableWidget *table)
+{
+    return table ? dynamic_cast<LiveTextCueHeader *>(table->horizontalHeader()) : nullptr;
 }
 
 } // namespace
@@ -284,12 +355,16 @@ void TitleDock::build_ui()
     live_layout->addLayout(live_header);
 
     text_table_ = new QTableWidget(live_section);
+    auto *live_text_header = new LiveTextCueHeader(text_table_);
+    live_text_header->select_all_toggled = [this](bool checked) { set_all_live_text_rows_checked(checked); };
+    text_table_->setHorizontalHeader(live_text_header);
     text_table_->setMinimumHeight(96);
     text_table_->setAlternatingRowColors(false);
     text_table_->verticalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     text_table_->verticalHeader()->setDefaultSectionSize(30);
     text_table_->horizontalHeader()->setStretchLastSection(false);
-    text_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    text_table_->horizontalHeader()->setSectionsMovable(true);
+    text_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     text_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     text_table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     text_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -333,6 +408,10 @@ void TitleDock::build_ui()
     connect(btn_delete_text_row_, &QToolButton::clicked, this, &TitleDock::on_delete_live_text_rows);
     connect(btn_row_up_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_up);
     connect(btn_row_down_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_down);
+    connect(text_table_, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
+        if (item && item->column() == 0)
+            update_live_text_select_all_state();
+    });
     connect(list_, &QListWidget::itemSelectionChanged,
             this, &TitleDock::on_selection_changed);
     connect(list_, &QListWidget::itemDoubleClicked,
@@ -413,6 +492,36 @@ void TitleDock::on_selection_changed()
 }
 
 
+void TitleDock::set_all_live_text_rows_checked(bool checked)
+{
+    if (!text_table_) return;
+
+    QSignalBlocker block(text_table_);
+    for (int row = 0; row < text_table_->rowCount(); ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (item)
+            item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+    }
+    update_live_text_select_all_state();
+}
+
+void TitleDock::update_live_text_select_all_state()
+{
+    auto *header = live_text_cue_header(text_table_);
+    if (!header || !text_table_) return;
+
+    const int row_count = text_table_->rowCount();
+    bool all_checked = row_count > 0;
+    for (int row = 0; row < row_count; ++row) {
+        auto *item = text_table_->item(row, 0);
+        if (!item || item->checkState() != Qt::Checked) {
+            all_checked = false;
+            break;
+        }
+    }
+    header->set_select_all_checked(all_checked);
+}
+
 std::vector<int> TitleDock::selected_live_text_rows() const
 {
     std::vector<int> rows;
@@ -453,6 +562,7 @@ void TitleDock::populate_exposed_text()
         if (btn_delete_text_row_) btn_delete_text_row_->setEnabled(false);
         if (btn_row_up_) btn_row_up_->setEnabled(false);
         if (btn_row_down_) btn_row_down_->setEnabled(false);
+        update_live_text_select_all_state();
         return;
     }
 
@@ -468,7 +578,10 @@ void TitleDock::populate_exposed_text()
     text_editor_lbl_->setText(has_exposed
         ? obsgs_tr("OBSTitles.LiveTextCues")
         : obsgs_tr("OBSTitles.LiveTextExposeHint"));
-    if (!has_exposed) return;
+    if (!has_exposed) {
+        update_live_text_select_all_state();
+        return;
+    }
 
     text_table_->setRowCount((int)title->live_text_rows.size());
     text_table_->setColumnCount((int)exposed.size() + 2);
@@ -483,10 +596,10 @@ void TitleDock::populate_exposed_text()
         if (auto *item = text_table_->horizontalHeaderItem(col + 1))
             item->setToolTip(live_text_layer_header(exposed[col]));
     }
-    text_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    for (int col = 0; col < (int)exposed.size(); ++col)
-        text_table_->horizontalHeader()->setSectionResizeMode(col + 1, QHeaderView::Stretch);
-    text_table_->horizontalHeader()->setSectionResizeMode((int)exposed.size() + 1, QHeaderView::ResizeToContents);
+    text_table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    text_table_->horizontalHeader()->setSectionsMovable(true);
+    text_table_->resizeColumnToContents(0);
+    text_table_->resizeColumnToContents((int)exposed.size() + 1);
 
     for (int row = 0; row < (int)title->live_text_rows.size(); ++row) {
         text_table_->setVerticalHeaderItem(row, new QTableWidgetItem(QString::number(row + 1)));
@@ -550,6 +663,7 @@ void TitleDock::populate_exposed_text()
         });
         text_table_->setCellWidget(row, (int)exposed.size() + 1, cue);
     }
+    update_live_text_select_all_state();
 }
 
 void TitleDock::on_add_live_text_row()
