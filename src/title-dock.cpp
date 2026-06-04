@@ -12,6 +12,7 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
+#include <QAction>
 #include <QBuffer>
 #include <QComboBox>
 #include <QDateTime>
@@ -709,12 +710,7 @@ static QTreeWidgetItem *add_template_category_item(QTreeWidget *tree, QTreeWidge
 {
     auto *item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(tree);
     item->setText(0, dir_info.fileName());
-    item->setIcon(1, obs_icon("edit.svg"));
-    item->setTextAlignment(1, Qt::AlignCenter);
-    item->setToolTip(1, obsgs_tr("OBSTitles.RenameCategory"));
-    item->setText(2, QStringLiteral("×"));
-    item->setTextAlignment(2, Qt::AlignCenter);
-    item->setToolTip(2, obsgs_tr("OBSTitles.DeleteCategory"));
+    item->setToolTip(0, dir_info.absoluteFilePath());
     item->setData(0, Qt::UserRole, dir_info.absoluteFilePath());
     item->setFlags(item->flags() | Qt::ItemIsDropEnabled);
 
@@ -728,10 +724,8 @@ static QTreeWidgetItem *add_template_category_item(QTreeWidget *tree, QTreeWidge
 static void populate_template_categories(QTreeWidget *tree, const QString &root_path)
 {
     tree->clear();
-    tree->setColumnCount(3);
-    tree->setHeaderLabels(QStringList{obsgs_tr("OBSTitles.TemplateCategories"), QString(), QString()});
-    tree->setColumnWidth(1, 28);
-    tree->setColumnWidth(2, 28);
+    tree->setColumnCount(1);
+    tree->setHeaderHidden(true);
     for (const char *folder : template_library_category_folders)
         QDir(root_path).mkpath(QString::fromUtf8(folder));
 
@@ -822,6 +816,29 @@ static bool rename_template_category(QWidget *parent, QTreeWidgetItem *item)
     if (QFileInfo::exists(new_path) || !QDir(parent_path).rename(category_info.fileName(), name)) {
         QMessageBox::warning(parent, obsgs_tr("OBSTitles.RenameCategory"),
                              obsgs_tr("OBSTitles.RenameCategoryFailed"));
+        return false;
+    }
+
+    return true;
+}
+
+static bool delete_template_category(QWidget *parent, QTreeWidgetItem *item, const QString &root_path)
+{
+    if (!item) return false;
+
+    const QString category_path = item->data(0, Qt::UserRole).toString();
+    if (category_path.isEmpty()) return false;
+    if (QDir::cleanPath(category_path) == QDir::cleanPath(root_path)) return false;
+
+    const auto reply = QMessageBox::question(
+        parent, obsgs_tr("OBSTitles.DeleteCategory"),
+        obsgs_tr("OBSTitles.DeleteCategoryQuestionFormat").arg(item->text(0)),
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply != QMessageBox::Yes) return false;
+
+    if (!QDir(category_path).removeRecursively()) {
+        QMessageBox::warning(parent, obsgs_tr("OBSTitles.DeleteCategory"),
+                             obsgs_tr("OBSTitles.DeleteCategoryFailed"));
         return false;
     }
 
@@ -1864,34 +1881,36 @@ void TitleDock::on_add_from_templates_library()
         load_templates_for_category(current->data(0, Qt::UserRole).toString());
         update_metadata();
     });
-    QObject::connect(categories, &QTreeWidget::itemClicked, window,
+    QObject::connect(categories, &QTreeWidget::itemDoubleClicked, window,
                      [window, categories, root_path, reload_current_category](QTreeWidgetItem *item, int column) {
-        if (!item || column == 0) return;
-        const QString category_path = item->data(0, Qt::UserRole).toString();
-        if (category_path.isEmpty()) return;
-        if (QDir::cleanPath(category_path) == QDir::cleanPath(root_path)) return;
-
-        if (column == 1) {
-            if (rename_template_category(window, item)) {
-                populate_template_categories(categories, root_path);
-                reload_current_category();
-            }
-            return;
+        if (!item || column != 0) return;
+        if (rename_template_category(window, item)) {
+            populate_template_categories(categories, root_path);
+            reload_current_category();
         }
+    });
+    categories->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(categories, &QTreeWidget::customContextMenuRequested, window,
+                     [window, categories, root_path, reload_current_category](const QPoint &pos) {
+        auto *item = categories->itemAt(pos);
+        if (!item) return;
 
-        if (column != 2) return;
-        const auto reply = QMessageBox::question(
-            window, obsgs_tr("OBSTitles.DeleteCategory"),
-            obsgs_tr("OBSTitles.DeleteCategoryQuestionFormat").arg(item->text(0)),
-            QMessageBox::Yes | QMessageBox::No);
-        if (reply != QMessageBox::Yes) return;
-        if (!QDir(category_path).removeRecursively()) {
-            QMessageBox::warning(window, obsgs_tr("OBSTitles.DeleteCategory"),
-                                 obsgs_tr("OBSTitles.DeleteCategoryFailed"));
-            return;
+        QMenu menu(window);
+        QAction *rename_action = menu.addAction(obsgs_tr("OBSTitles.RenameCategory"));
+        QAction *delete_action = menu.addAction(obsgs_tr("OBSTitles.DeleteCategory"));
+        QAction *selected = menu.exec(categories->viewport()->mapToGlobal(pos));
+        if (!selected) return;
+
+        bool changed = false;
+        if (selected == rename_action)
+            changed = rename_template_category(window, item);
+        else if (selected == delete_action)
+            changed = delete_template_category(window, item, root_path);
+
+        if (changed) {
+            populate_template_categories(categories, root_path);
+            reload_current_category();
         }
-        populate_template_categories(categories, root_path);
-        reload_current_category();
     });
     QObject::connect(templates, &QListWidget::currentItemChanged, window,
                      [update_metadata](QListWidgetItem *, QListWidgetItem *) { update_metadata(); });
