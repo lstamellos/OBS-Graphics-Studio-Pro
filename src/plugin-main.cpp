@@ -120,6 +120,8 @@ static void on_frontend_event(obs_frontend_event event, void * /*priv*/)
 
     if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED && g_frontend_ready) {
         title_hotkeys_register();
+        if (g_dock)
+            g_dock->update_scene_collection_title();
     }
 
     if (event == OBS_FRONTEND_EVENT_EXIT) {

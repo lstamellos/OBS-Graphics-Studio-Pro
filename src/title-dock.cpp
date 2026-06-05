@@ -84,6 +84,18 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     return exposed;
 }
 
+static QString current_scene_collection_titles_label()
+{
+    char *collection_name = obs_frontend_get_current_scene_collection();
+    QString name = QString::fromUtf8(collection_name ? collection_name : "").trimmed();
+    bfree(collection_name);
+
+    if (name.isEmpty())
+        name = obsgs_tr("OBSTitles.SceneCollectionFallback");
+
+    return obsgs_tr("OBSTitles.SceneCollectionTitlesAndGraphicsFormat").arg(name);
+}
+
 static QString live_text_layer_header(const std::shared_ptr<Layer> &layer)
 {
     if (!layer) return obsgs_tr("OBSTitles.Text");
@@ -954,6 +966,12 @@ TitleDock::TitleDock(QWidget *parent)
     live_refresh_timer_->start();
 }
 
+void TitleDock::update_scene_collection_title()
+{
+    if (template_lbl_)
+        template_lbl_->setText(current_scene_collection_titles_label());
+}
+
 /* ══════════════════════════════════════════════════════════════════
  *  UI construction
  * ══════════════════════════════════════════════════════════════════ */
@@ -1006,12 +1024,12 @@ void TitleDock::build_ui()
     template_header->setContentsMargins(0, 0, 0, 0);
     template_header->setSpacing(0);
 
-    auto *template_lbl = new QLabel(obsgs_tr("OBSTitles.TitleTemplates"), template_section);
-    set_bold_label(template_lbl);
-    template_header->addWidget(template_lbl);
+    template_lbl_ = new QLabel(current_scene_collection_titles_label(), template_section);
+    set_bold_label(template_lbl_);
+    template_header->addWidget(template_lbl_);
     template_header->addStretch();
-    template_header->addWidget(template_toolbar);
     template_layout->addLayout(template_header);
+    template_layout->addWidget(template_toolbar);
 
     list_ = new QListWidget(template_section);
     list_->setAlternatingRowColors(true);
