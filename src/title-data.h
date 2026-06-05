@@ -238,6 +238,9 @@ struct Title {
     int current_cue_row = -1; /* runtime-only active live text row */
     int pending_cue_row = -1; /* runtime-only next row waiting for outro */
     uint64_t cue_revision = 0; /* runtime-only live text cue counter */
+    bool cue_background_persistence = false; /* runtime-only: freeze non-exposed layers while cueing */
+    bool cue_text_persistence = false; /* runtime-only: freeze unchanged exposed text columns while cueing */
+    std::vector<bool> cue_persistent_text_columns; /* runtime-only exposed text columns held at pause/loop */
 
     /* Helpers */
     std::shared_ptr<Layer> find_layer(const std::string &layer_id) const;

@@ -161,10 +161,15 @@ static void cue_title_row(const std::shared_ptr<Title> &title, int row)
         title->pending_cue_row = -1;
     } else {
         if (row < 0 || row >= (int)title->live_text_rows.size()) return;
+        const bool is_active_cue = title->current_cue_row == row;
+        const bool is_pending_cue = title->pending_cue_row == row;
         const bool needs_outro_before_cue =
             (title->playback_mode == 1 || title->playback_mode == 2) &&
             title->current_cue_row >= 0 && title->current_cue_row != row;
-        if (needs_outro_before_cue) {
+        if (is_active_cue || is_pending_cue) {
+            title->current_cue_row = -1;
+            title->pending_cue_row = -1;
+        } else if (needs_outro_before_cue) {
             title->pending_cue_row = row;
         } else {
             apply_live_text_row(title, row, exposed);
