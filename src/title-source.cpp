@@ -824,6 +824,13 @@ static QColor color_from_argb(uint32_t argb)
                   (argb >> 24) & 0xFF);
 }
 
+static QColor evaluated_background_color(const Layer &layer)
+{
+    QColor color = color_from_argb(layer.background_color);
+    color.setAlphaF(std::clamp((double)color.alphaF() * (double)layer.background_opacity, 0.0, 1.0));
+    return color;
+}
+
 static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
                                int canvas_w, int canvas_h)
 {
@@ -845,6 +852,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     int pad = eval_shadow_enabled(layer, t)
         ? (int)std::ceil(std::max(std::abs(off.x()), std::abs(off.y())) + blur + spread + 4.0)
         : 0;
+    if (layer.background_enabled)
+        pad += (int)std::ceil(std::max(0.0f, layer.background_padding));
     int img_w = std::max(1, (int)std::ceil(box_w) + pad * 2);
     int img_h = std::max(1, (int)std::ceil(box_h) + pad * 2);
     QImage text_image(img_w, img_h, QImage::Format_ARGB32_Premultiplied);
@@ -859,7 +868,19 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     QFont font = font_for_layer(layer);
     painter.setFont(font);
 
-    QRectF text_rect = text_rect_for_style(QRectF(pad, pad, box_w, box_h), layer);
+    QRectF base_rect(pad, pad, box_w, box_h);
+    if (layer.background_enabled) {
+        const double bg_pad = std::max(0.0f, layer.background_padding);
+        QRectF bg_rect = base_rect.adjusted(-bg_pad, -bg_pad, bg_pad, bg_pad);
+        QColor bg = evaluated_background_color(layer);
+        if (bg.alpha() > 0) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(bg);
+            painter.drawRoundedRect(bg_rect, layer.background_corner_radius, layer.background_corner_radius);
+        }
+    }
+
+    QRectF text_rect = text_rect_for_style(base_rect, layer);
     QString text = display_text_for_style(layer);
     painter.save();
     painter.setClipRect(text_rect);
@@ -1057,10 +1078,38 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
     cairo_save(cr);
     cairo_translate(cr, px, py);
     cairo_rotate(cr, rot);
-    cairo_scale(cr, sx * (w / argb.width()), sy * (h / argb.height()));
+    cairo_scale(cr, sx, sy);
+    const double origin_x = eval_origin_x(layer, t);
+    const double origin_y = eval_origin_y(layer, t);
+    if (layer.background_enabled) {
+        const double bg_pad = std::max(0.0f, layer.background_padding);
+        QColor bg = evaluated_background_color(layer);
+        double br, bgc, bb, ba;
+        br = bg.redF(); bgc = bg.greenF(); bb = bg.blueF(); ba = bg.alphaF();
+        if (ba > 0.0) {
+            const double x = -origin_x * w - bg_pad;
+            const double y = -origin_y * h - bg_pad;
+            const double bw = w + bg_pad * 2.0;
+            const double bh = h + bg_pad * 2.0;
+            const double radius = std::min<double>(layer.background_corner_radius, std::min(bw, bh) / 2.0);
+            if (radius > 0.0) {
+                cairo_new_sub_path(cr);
+                cairo_arc(cr, x + radius,      y + radius,      radius, kPi,     3*kPi/2);
+                cairo_arc(cr, x + bw - radius, y + radius,      radius, 3*kPi/2, 2*kPi);
+                cairo_arc(cr, x + bw - radius, y + bh - radius, radius, 0,       kPi/2);
+                cairo_arc(cr, x + radius,      y + bh - radius, radius, kPi/2,   kPi);
+                cairo_close_path(cr);
+            } else {
+                cairo_rectangle(cr, x, y, bw, bh);
+            }
+            cairo_set_source_rgba(cr, br, bgc, bb, ba * alpha);
+            cairo_fill(cr);
+        }
+    }
+    cairo_scale(cr, w / argb.width(), h / argb.height());
     cairo_set_source_surface(cr, img_surface,
-                             -eval_origin_x(layer, t) * argb.width(),
-                             -eval_origin_y(layer, t) * argb.height());
+                             -origin_x * argb.width(),
+                             -origin_y * argb.height());
     cairo_paint_with_alpha(cr, alpha);
     cairo_restore(cr);
 
