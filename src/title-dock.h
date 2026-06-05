@@ -80,6 +80,8 @@ private:
     bool playlist_row_is_terminal(int row, int row_count) const;
     void play_playlist_outro();
     void update_playlist_controls();
+    void update_persistence_controls();
+    void apply_persistence_settings_to_title(const std::shared_ptr<Title> &title);
     void update_playlist_countdown_label();
     void stop_playlist();
     bool has_checked_live_text_rows() const;
@@ -112,8 +114,11 @@ private:
     QToolButton *btn_row_down_ = nullptr;
     QToolButton *btn_playlist_ = nullptr;
     QToolButton *btn_playlist_settings_ = nullptr;
+    QToolButton *btn_persistence_settings_ = nullptr;
     QAction     *act_playlist_loop_ = nullptr;
     QAction     *act_playlist_reverse_ = nullptr;
+    QAction     *act_background_persistence_ = nullptr;
+    QAction     *act_text_persistence_ = nullptr;
     bool          updating_exposed_text_ = false;
     bool          template_icon_view_ = false;
     std::map<int, QByteArray> live_text_header_states_;
@@ -125,6 +130,8 @@ private:
     double        playlist_hold_seconds_ = 5.0;
     bool          playlist_loop_ = false;
     bool          playlist_reverse_ = false;
+    bool          background_persistence_ = false;
+    bool          text_persistence_ = false;
     uint64_t      seen_store_revision_ = 0;
 
     TitleEditor  *editor_     = nullptr;

@@ -202,6 +202,36 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
     return exposed;
 }
 
+
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &title)
+{
+    std::vector<std::shared_ptr<Layer>> exposed;
+    for (const auto &layer : title.layers) {
+        if (!layer) continue;
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
+            exposed.push_back(layer);
+    }
+    return exposed;
+}
+
+static double cue_persistence_hold_time(const Title &title)
+{
+    if (title.playback_mode == 1)
+        return std::clamp(title.loop_end, title.loop_start, title.duration);
+    if (title.playback_mode == 2)
+        return std::clamp(title.pause_time, 0.0, title.duration);
+    return std::clamp(title.duration, 0.0, title.duration);
+}
+
+static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &exposed, const std::shared_ptr<Layer> &layer)
+{
+    for (int i = 0; i < (int)exposed.size(); ++i) {
+        if (exposed[i] == layer)
+            return i;
+    }
+    return -1;
+}
+
 static void apply_live_text_row(const std::shared_ptr<Title> &title, int row)
 {
     if (!title || row < 0 || row >= (int)title->live_text_rows.size()) return;
@@ -1015,11 +1045,27 @@ static void render_title_frame(TitleSourceData *data,
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
+    const bool background_persistence = title.cue_background_persistence &&
+        title.current_cue_row >= 0 && !title.live_text_rows.empty();
+    const double persistence_time = cue_persistence_hold_time(title);
+    const auto exposed = background_persistence ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
+
     /* Render layers bottom → top */
     for (auto &layer : title.layers) {
         if (!layer || !layer->visible) continue;
-        if (t < layer->in_time || t > layer->out_time) continue;
-        double lt = t - layer->in_time;  /* local layer time */
+
+        double layer_time = t;
+        if (background_persistence) {
+            const int exposed_index = exposed_text_layer_index(exposed, layer);
+            const bool persistent_text = exposed_index >= 0 && title.cue_text_persistence &&
+                exposed_index < (int)title.cue_persistent_text_columns.size() &&
+                title.cue_persistent_text_columns[exposed_index];
+            if (exposed_index < 0 || persistent_text)
+                layer_time = persistence_time;
+        }
+
+        if (layer_time < layer->in_time || layer_time > layer->out_time) continue;
+        double lt = layer_time - layer->in_time;  /* local layer time */
 
         switch (layer->type) {
         case LayerType::Text:
