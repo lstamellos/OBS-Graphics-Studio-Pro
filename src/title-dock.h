@@ -57,6 +57,12 @@ private slots:
     void on_delete_live_text_rows();
     void on_move_live_text_row_up();
     void on_move_live_text_row_down();
+    void on_import_live_text_data();
+    void on_import_append_live_text_data();
+    void on_export_live_text_data();
+    void on_toggle_external_data_source();
+    void on_show_external_data_settings();
+    void on_refresh_external_data();
     void on_toggle_playlist(bool enabled);
     void on_playlist_tick();
 
@@ -81,6 +87,7 @@ private:
     void play_playlist_outro();
     void update_playlist_controls();
     void update_persistence_controls();
+    void update_external_data_controls();
     void apply_persistence_settings_to_title(const std::shared_ptr<Title> &title);
     void update_playlist_countdown_label();
     void stop_playlist();
@@ -112,6 +119,8 @@ private:
     QToolButton *btn_delete_text_row_ = nullptr;
     QToolButton *btn_row_up_ = nullptr;
     QToolButton *btn_row_down_ = nullptr;
+    QToolButton *btn_data_sources_ = nullptr;
+    QToolButton *btn_external_refresh_ = nullptr;
     QToolButton *btn_playlist_ = nullptr;
     QToolButton *btn_playlist_settings_ = nullptr;
     QToolButton *btn_persistence_settings_ = nullptr;
