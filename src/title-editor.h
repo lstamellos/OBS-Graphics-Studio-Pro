@@ -482,6 +482,10 @@ private:
     QDoubleSpinBox  *spn_ticker_line_hold_ = nullptr;
     QComboBox       *cmb_ticker_direction_ = nullptr;
     QLabel          *lbl_text_fit_scale_ = nullptr;
+    QCheckBox       *chk_text_box_width_to_text_ = nullptr;
+    QCheckBox       *chk_text_box_height_to_text_ = nullptr;
+    QDoubleSpinBox  *spn_max_text_box_width_ = nullptr;
+    QDoubleSpinBox  *spn_max_text_box_height_ = nullptr;
     QCheckBox       *chk_expose_text_ = nullptr;
     QComboBox       *cmb_text_align_ = nullptr;
     QComboBox       *cmb_text_valign_ = nullptr;
@@ -509,8 +513,15 @@ private:
     QCheckBox       *chk_background_enabled_ = nullptr;
     QPushButton     *btn_background_color_ = nullptr;
     QDoubleSpinBox  *spn_background_opacity_ = nullptr;
-    QDoubleSpinBox  *spn_background_padding_ = nullptr;
+    QDoubleSpinBox  *spn_background_padding_x_ = nullptr;
+    QDoubleSpinBox  *spn_background_padding_y_ = nullptr;
     QDoubleSpinBox  *spn_background_corner_ = nullptr;
+    QWidget         *row_background_enabled_ = nullptr;
+    QWidget         *row_background_color_ = nullptr;
+    QWidget         *row_background_opacity_ = nullptr;
+    QWidget         *row_background_padding_x_ = nullptr;
+    QWidget         *row_background_padding_y_ = nullptr;
+    QWidget         *row_background_corner_ = nullptr;
 
     /* Image controls */
     QLineEdit       *edit_image_path_ = nullptr;
@@ -551,4 +562,10 @@ private:
     QPushButton     *btn_kf_height_ = nullptr;
     QPushButton     *btn_kf_text_color_ = nullptr;
     QPushButton     *btn_kf_fill_color_ = nullptr;
+    QPushButton     *btn_kf_background_enabled_ = nullptr;
+    QPushButton     *btn_kf_background_color_ = nullptr;
+    QPushButton     *btn_kf_background_opacity_ = nullptr;
+    QPushButton     *btn_kf_background_padding_x_ = nullptr;
+    QPushButton     *btn_kf_background_padding_y_ = nullptr;
+    QPushButton     *btn_kf_background_corner_ = nullptr;
 };

@@ -429,6 +429,14 @@ static void set_color_channels(Layer &l, bool text, uint32_t argb)
     b.static_value = argb & 0xFF;
 }
 
+static void set_background_color_channels(Layer &l, uint32_t argb)
+{
+    l.background_color_a.static_value = (argb >> 24) & 0xFF;
+    l.background_color_r.static_value = (argb >> 16) & 0xFF;
+    l.background_color_g.static_value = (argb >> 8) & 0xFF;
+    l.background_color_b.static_value = argb & 0xFF;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  *  UUID helper
  * ══════════════════════════════════════════════════════════════════ */
@@ -805,6 +813,10 @@ static json layer_to_json(const Layer &l, bool include_embedded_assets = true,
     j["text_language"] = l.text_language;
     j["text_overflow_mode"] = l.text_overflow_mode;
     j["text_fit_min_scale"] = l.text_fit_min_scale;
+    j["text_box_width_to_text"] = l.text_box_width_to_text;
+    j["text_box_height_to_text"] = l.text_box_height_to_text;
+    j["max_text_box_width"] = l.max_text_box_width;
+    j["max_text_box_height"] = l.max_text_box_height;
     j["ticker_style"] = l.ticker_style;
     j["ticker_speed"] = l.ticker_speed;
     j["ticker_line_hold"] = l.ticker_line_hold;
@@ -824,8 +836,19 @@ static json layer_to_json(const Layer &l, bool include_embedded_assets = true,
     j["background_enabled"] = l.background_enabled;
     j["background_color"] = l.background_color;
     j["background_opacity"] = l.background_opacity;
-    j["background_padding"] = l.background_padding;
+    j["background_padding"] = l.background_padding_x;
+    j["background_padding_x"] = l.background_padding_x;
+    j["background_padding_y"] = l.background_padding_y;
     j["background_corner_radius"] = l.background_corner_radius;
+    j["background_enabled_prop"] = aprop_to_json(l.background_enabled_prop);
+    j["background_opacity_prop"] = aprop_to_json(l.background_opacity_prop);
+    j["background_padding_x_prop"] = aprop_to_json(l.background_padding_x_prop);
+    j["background_padding_y_prop"] = aprop_to_json(l.background_padding_y_prop);
+    j["background_corner_radius_prop"] = aprop_to_json(l.background_corner_radius_prop);
+    j["background_color_a"] = aprop_to_json(l.background_color_a);
+    j["background_color_r"] = aprop_to_json(l.background_color_r);
+    j["background_color_g"] = aprop_to_json(l.background_color_g);
+    j["background_color_b"] = aprop_to_json(l.background_color_b);
     j["rect_width"]    = l.rect_width;
     j["rect_height"]   = l.rect_height;
     j["corner_radius"] = l.corner_radius;
@@ -922,6 +945,10 @@ static std::shared_ptr<Layer> layer_from_json(const json &j, bool require_embedd
     l->text_language = bounded_string(j, "text_language", "English", kMaxNameLength);
     l->text_overflow_mode = std::clamp(json_int(j, "text_overflow_mode", 0), 0, 2);
     l->text_fit_min_scale = (float)std::clamp(finite_or(json_double(j, "text_fit_min_scale", 0.5), 0.5), 0.05, 1.0);
+    l->text_box_width_to_text = json_bool(j, "text_box_width_to_text", false);
+    l->text_box_height_to_text = json_bool(j, "text_box_height_to_text", false);
+    l->max_text_box_width = (float)std::clamp(finite_or(json_double(j, "max_text_box_width", 1920.0), 1920.0), 1.0, (double)kMaxCanvasDimension);
+    l->max_text_box_height = (float)std::clamp(finite_or(json_double(j, "max_text_box_height", 1080.0), 1080.0), 1.0, (double)kMaxCanvasDimension);
     l->ticker_style = std::clamp(json_int(j, "ticker_style", 0), 0, 2);
     l->ticker_speed = std::clamp(finite_or(json_double(j, "ticker_speed", 120.0), 120.0), 0.0, 10000.0);
     l->ticker_line_hold = std::clamp(finite_or(json_double(j, "ticker_line_hold", 2.0), 2.0), 0.0, kMaxDuration);
@@ -941,8 +968,25 @@ static std::shared_ptr<Layer> layer_from_json(const json &j, bool require_embedd
     l->background_enabled = json_bool(j, "background_enabled", false);
     l->background_color = json_color(j, "background_color", (uint32_t)0xFF000000);
     l->background_opacity = (float)std::clamp(finite_or(json_double(j, "background_opacity", 0.35), 0.35), 0.0, 1.0);
-    l->background_padding = (float)std::clamp(finite_or(json_double(j, "background_padding", 16.0), 16.0), 0.0, (double)kMaxCanvasDimension);
+    const double legacy_padding = finite_or(json_double(j, "background_padding", 0.0), 0.0);
+    l->background_padding_x = (float)std::clamp(finite_or(json_double(j, "background_padding_x", legacy_padding), legacy_padding), 0.0, (double)kMaxCanvasDimension);
+    l->background_padding_y = (float)std::clamp(finite_or(json_double(j, "background_padding_y", legacy_padding), legacy_padding), 0.0, (double)kMaxCanvasDimension);
     l->background_corner_radius = (float)std::clamp(finite_or(json_double(j, "background_corner_radius", 0.0), 0.0), 0.0, (double)kMaxCanvasDimension);
+    l->background_enabled_prop.static_value = l->background_enabled ? 1.0 : 0.0;
+    l->background_opacity_prop.static_value = l->background_opacity;
+    l->background_padding_x_prop.static_value = l->background_padding_x;
+    l->background_padding_y_prop.static_value = l->background_padding_y;
+    l->background_corner_radius_prop.static_value = l->background_corner_radius;
+    set_background_color_channels(*l, l->background_color);
+    if (j.contains("background_enabled_prop")) l->background_enabled_prop = aprop_from_json(j["background_enabled_prop"], "background_enabled");
+    if (j.contains("background_opacity_prop")) l->background_opacity_prop = aprop_from_json(j["background_opacity_prop"], "background_opacity");
+    if (j.contains("background_padding_x_prop")) l->background_padding_x_prop = aprop_from_json(j["background_padding_x_prop"], "background_padding_x");
+    if (j.contains("background_padding_y_prop")) l->background_padding_y_prop = aprop_from_json(j["background_padding_y_prop"], "background_padding_y");
+    if (j.contains("background_corner_radius_prop")) l->background_corner_radius_prop = aprop_from_json(j["background_corner_radius_prop"], "background_corner_radius");
+    if (j.contains("background_color_a")) l->background_color_a = aprop_from_json(j["background_color_a"], "background_color_a");
+    if (j.contains("background_color_r")) l->background_color_r = aprop_from_json(j["background_color_r"], "background_color_r");
+    if (j.contains("background_color_g")) l->background_color_g = aprop_from_json(j["background_color_g"], "background_color_g");
+    if (j.contains("background_color_b")) l->background_color_b = aprop_from_json(j["background_color_b"], "background_color_b");
     l->rect_width    = std::clamp(finite_or(json_double(j, "rect_width", 1920.0), 1920.0), 1.0, (double)kMaxCanvasDimension);
     l->rect_height   = std::clamp(finite_or(json_double(j, "rect_height", 100.0), 100.0), 1.0, (double)kMaxCanvasDimension);
     l->corner_radius = std::clamp(finite_or(json_double(j, "corner_radius", 0.0), 0.0), 0.0, (double)kMaxCanvasDimension);

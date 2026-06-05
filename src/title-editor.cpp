@@ -650,19 +650,85 @@ static QPointF rotated_scaled_delta(double dx, double dy, double rot_deg, double
 }
 
 
+static bool is_text_box_auto_size_layer(const Layer &layer)
+{
+    return layer.type == LayerType::Text || layer.type == LayerType::Clock;
+}
+
+static double natural_text_width(const Layer &layer)
+{
+    if (!is_text_box_auto_size_layer(layer)) return 1.0;
+    QFontMetricsF metrics(font_for_layer(layer));
+    QString text = display_text_for_style(layer);
+    if (layer.text_overflow_mode == 2)
+        text = overflow_layout_text(text, layer);
+
+    double width = 1.0;
+    for (const QString &line : text.split('\n'))
+        width = std::max(width, static_cast<double>(metrics.horizontalAdvance(line)));
+    return std::ceil(width);
+}
+
+static double natural_text_height(const Layer &layer, double width)
+{
+    if (!is_text_box_auto_size_layer(layer)) return 1.0;
+    QFont font = font_for_layer(layer);
+    QFontMetricsF metrics(font);
+    QString text = display_text_for_style(layer);
+    if (layer.text_overflow_mode == 2)
+        text = overflow_layout_text(text, layer);
+
+    QTextOption option;
+    option.setWrapMode(layer.text_overflow_mode == 0
+                           ? QTextOption::WrapAtWordBoundaryOrAnywhere
+                           : QTextOption::NoWrap);
+
+    double total_height = 0.0;
+    const double leading = std::clamp((double)layer.text_leading, -200.0, 500.0);
+    bool first_line = true;
+    for (const QString &paragraph : text.split('\n')) {
+        if (paragraph.isEmpty()) {
+            if (!first_line) total_height += leading;
+            total_height += metrics.lineSpacing();
+            first_line = false;
+            continue;
+        }
+        QTextLayout layout(paragraph, font);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            line.setLineWidth(layer.text_overflow_mode == 0 ? std::max(1.0, width) : 1000000.0);
+            if (!first_line) total_height += leading;
+            total_height += line.height();
+            first_line = false;
+            if (layer.text_overflow_mode != 0) break;
+        }
+        layout.endLayout();
+    }
+    return std::ceil(std::max(1.0, total_height));
+}
+
 static double eval_box_width(const Layer &layer, double t)
 {
-    const double width = layer.box_width.is_animated()
+    double width = layer.box_width.is_animated()
         ? layer.box_width.evaluate(t)
         : static_cast<double>(layer.rect_width);
+    if (layer.text_box_width_to_text && is_text_box_auto_size_layer(layer))
+        width = std::min(natural_text_width(layer), std::max(1.0, (double)layer.max_text_box_width));
     return width < 1.0 ? 1.0 : width;
 }
 
 static double eval_box_height(const Layer &layer, double t)
 {
-    const double height = layer.box_height.is_animated()
+    double height = layer.box_height.is_animated()
         ? layer.box_height.evaluate(t)
         : static_cast<double>(layer.rect_height);
+    if (layer.text_box_height_to_text && is_text_box_auto_size_layer(layer)) {
+        const double width = eval_box_width(layer, t);
+        height = std::min(natural_text_height(layer, width), std::max(1.0, (double)layer.max_text_box_height));
+    }
     return height < 1.0 ? 1.0 : height;
 }
 
@@ -797,10 +863,54 @@ static QPointF shadow_offset(const Layer &layer, double t)
     return QPointF(std::cos(radians) * distance, std::sin(radians) * distance);
 }
 
-static QColor evaluated_background_color(const Layer &layer)
+static bool eval_background_enabled(const Layer &layer, double t)
 {
-    QColor color = color_from_argb(layer.background_color);
-    color.setAlphaF(std::clamp((double)color.alphaF() * (double)layer.background_opacity, 0.0, 1.0));
+    return layer.background_enabled_prop.is_animated()
+        ? layer.background_enabled_prop.evaluate(t) >= 0.5
+        : layer.background_enabled;
+}
+
+static double eval_background_opacity(const Layer &layer, double t)
+{
+    return std::clamp(layer.background_opacity_prop.is_animated()
+                          ? layer.background_opacity_prop.evaluate(t)
+                          : (double)layer.background_opacity,
+                      0.0, 1.0);
+}
+
+static double eval_background_padding_x(const Layer &layer, double t)
+{
+    return std::max(0.0, layer.background_padding_x_prop.is_animated()
+                             ? layer.background_padding_x_prop.evaluate(t)
+                             : (double)layer.background_padding_x);
+}
+
+static double eval_background_padding_y(const Layer &layer, double t)
+{
+    return std::max(0.0, layer.background_padding_y_prop.is_animated()
+                             ? layer.background_padding_y_prop.evaluate(t)
+                             : (double)layer.background_padding_y);
+}
+
+static double eval_background_corner_radius(const Layer &layer, double t)
+{
+    return std::max(0.0, layer.background_corner_radius_prop.is_animated()
+                             ? layer.background_corner_radius_prop.evaluate(t)
+                             : (double)layer.background_corner_radius);
+}
+
+static uint32_t eval_background_color(const Layer &layer, double t)
+{
+    return ((uint32_t)eval_channel(layer.background_color_a, (layer.background_color >> 24) & 0xFF, t) << 24) |
+           ((uint32_t)eval_channel(layer.background_color_r, (layer.background_color >> 16) & 0xFF, t) << 16) |
+           ((uint32_t)eval_channel(layer.background_color_g, (layer.background_color >> 8) & 0xFF, t) << 8) |
+           (uint32_t)eval_channel(layer.background_color_b, layer.background_color & 0xFF, t);
+}
+
+static QColor evaluated_background_color(const Layer &layer, double t)
+{
+    QColor color = color_from_argb(eval_background_color(layer, t));
+    color.setAlphaF(std::clamp((double)color.alphaF() * eval_background_opacity(layer, t), 0.0, 1.0));
     return color;
 }
 
@@ -891,6 +1001,14 @@ static void set_shadow_color_channels_at(Layer &layer, double time, uint32_t arg
     set_animated_value(layer.shadow_color_r, time, (argb >> 16) & 0xFF);
     set_animated_value(layer.shadow_color_g, time, (argb >> 8) & 0xFF);
     set_animated_value(layer.shadow_color_b, time, argb & 0xFF);
+}
+
+static void set_background_color_channels_at(Layer &layer, double time, uint32_t argb)
+{
+    set_animated_value(layer.background_color_a, time, (argb >> 24) & 0xFF);
+    set_animated_value(layer.background_color_r, time, (argb >> 16) & 0xFF);
+    set_animated_value(layer.background_color_g, time, (argb >> 8) & 0xFF);
+    set_animated_value(layer.background_color_b, time, argb & 0xFF);
 }
 
 static bool keyframe_at_time(const AnimatedProperty &prop, double time)
@@ -1017,6 +1135,11 @@ static std::vector<AnimatedProperty *> timeline_properties(Layer &layer)
             &layer.text_color_g, &layer.text_color_b,
             &layer.fill_color_a, &layer.fill_color_r,
             &layer.fill_color_g, &layer.fill_color_b,
+            &layer.background_enabled_prop, &layer.background_opacity_prop,
+            &layer.background_padding_x_prop, &layer.background_padding_y_prop,
+            &layer.background_corner_radius_prop,
+            &layer.background_color_a, &layer.background_color_r,
+            &layer.background_color_g, &layer.background_color_b,
             &layer.shadow_enabled_prop, &layer.shadow_opacity_prop,
             &layer.shadow_distance_prop, &layer.shadow_angle_prop,
             &layer.shadow_blur_prop, &layer.shadow_spread_prop,
@@ -1036,6 +1159,13 @@ static QString property_label(const std::string &name)
         name == "fill_color_g" || name == "fill_color_b") return obsgs_tr("OBSTitles.FillColor");
     if (name == "shadow_color_a" || name == "shadow_color_r" ||
         name == "shadow_color_g" || name == "shadow_color_b") return obsgs_tr("OBSTitles.ShadowColor");
+    if (name == "background_color_a" || name == "background_color_r" ||
+        name == "background_color_g" || name == "background_color_b") return obsgs_tr("OBSTitles.BackgroundColor");
+    if (name == "background_enabled") return obsgs_tr("OBSTitles.EnableColorBackground");
+    if (name == "background_opacity") return obsgs_tr("OBSTitles.BackgroundOpacityLabel");
+    if (name == "background_padding_x") return obsgs_tr("OBSTitles.BackgroundHorizontalPaddingLabel");
+    if (name == "background_padding_y") return obsgs_tr("OBSTitles.BackgroundVerticalPaddingLabel");
+    if (name == "background_corner_radius") return obsgs_tr("OBSTitles.BackgroundCornerLabel");
     if (name == "shadow_enabled") return obsgs_tr("OBSTitles.ShadowEnable");
     if (name == "shadow_opacity") return obsgs_tr("OBSTitles.ShadowOpacity");
     if (name == "shadow_distance") return obsgs_tr("OBSTitles.ShadowDistance");
@@ -1062,9 +1192,9 @@ static QString property_value_text(const AnimatedProperty &prop, const Layer &la
     if (prop.name == "origin_x")
         return QString("%1,%2").arg(layer.origin_x_prop.static_value, 0, 'f', 2)
                                 .arg(layer.origin_y_prop.static_value, 0, 'f', 2);
-    if (prop.name == "opacity" || prop.name == "shadow_opacity") value *= 100.0;
-    if (prop.name == "shadow_enabled") return value >= 0.5 ? obsgs_tr("OBSTitles.On") : obsgs_tr("OBSTitles.Off");
-    return QString::number(value, 'f', (prop.name == "opacity" || prop.name == "shadow_opacity") ? 1 : 2);
+    if (prop.name == "opacity" || prop.name == "shadow_opacity" || prop.name == "background_opacity") value *= 100.0;
+    if (prop.name == "shadow_enabled" || prop.name == "background_enabled") return value >= 0.5 ? obsgs_tr("OBSTitles.On") : obsgs_tr("OBSTitles.Off");
+    return QString::number(value, 'f', (prop.name == "opacity" || prop.name == "shadow_opacity" || prop.name == "background_opacity") ? 1 : 2);
 }
 
 struct TimelineRow {
@@ -1868,17 +1998,6 @@ void TitleEditor::build_toolbar()
     toolbar_->addAction(act_redo_);
     update_undo_redo_actions();
 
-    toolbar_->addSeparator();
-
-    /* Save button */
-    auto *btn_save = new QPushButton(obsgs_tr("OBSTitles.Save"), toolbar_);
-    btn_save->setIcon(obs_icon("save.svg"));
-    btn_save->setStyleSheet(
-        "QPushButton { color:#fff; background:#0078d4; border:none;"
-        "  border-radius:3px; padding:4px 10px; }"
-        "QPushButton:hover { background:#1088e4; }");
-    connect(btn_save, &QPushButton::clicked, this, &TitleEditor::save_title);
-    toolbar_->addWidget(btn_save);
 }
 
 
@@ -3039,14 +3158,16 @@ void CanvasPreview::render_to_pixmap()
         }
 
         if (layer->type == LayerType::Image) {
-            if (layer->background_enabled) {
-                QColor bg = evaluated_background_color(*layer);
+            if (eval_background_enabled(*layer, lt)) {
+                QColor bg = evaluated_background_color(*layer, lt);
                 if (bg.alpha() > 0) {
-                    const double pad = std::max(0.0f, layer->background_padding);
-                    QRectF bg_box = box.adjusted(-pad, -pad, pad, pad);
+                    const double pad_x = eval_background_padding_x(*layer, lt);
+                    const double pad_y = eval_background_padding_y(*layer, lt);
+                    const double corner = eval_background_corner_radius(*layer, lt);
+                    QRectF bg_box = box.adjusted(-pad_x, -pad_y, pad_x, pad_y);
                     p.setPen(Qt::NoPen);
                     p.setBrush(bg);
-                    p.drawRoundedRect(bg_box, layer->background_corner_radius, layer->background_corner_radius);
+                    p.drawRoundedRect(bg_box, corner, corner);
                 }
             }
             QImage image = editor_load_layer_image(QString::fromStdString(layer->image_path),
@@ -3066,14 +3187,16 @@ void CanvasPreview::render_to_pixmap()
             QFont f = font_for_layer(*layer);
             p.setFont(f);
             QString text = display_text_for_style(*layer);
-            if (layer->background_enabled) {
-                QColor bg = evaluated_background_color(*layer);
+            if (eval_background_enabled(*layer, lt)) {
+                QColor bg = evaluated_background_color(*layer, lt);
                 if (bg.alpha() > 0) {
-                    const double pad = std::max(0.0f, layer->background_padding);
-                    QRectF bg_box = box.adjusted(-pad, -pad, pad, pad);
+                    const double pad_x = eval_background_padding_x(*layer, lt);
+                    const double pad_y = eval_background_padding_y(*layer, lt);
+                    const double corner = eval_background_corner_radius(*layer, lt);
+                    QRectF bg_box = box.adjusted(-pad_x, -pad_y, pad_x, pad_y);
                     p.setPen(Qt::NoPen);
                     p.setBrush(bg);
-                    p.drawRoundedRect(bg_box, layer->background_corner_radius, layer->background_corner_radius);
+                    p.drawRoundedRect(bg_box, corner, corner);
                 }
             }
             QRectF text_box = text_rect_for_style(box, *layer);
@@ -5230,11 +5353,21 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     style_form(rfl);
     spn_layer_w_ = mk_dspin(1.0, 9999.0, 10.0);
     spn_layer_h_ = mk_dspin(1.0, 9999.0, 10.0);
+    chk_text_box_width_to_text_ = new QCheckBox(obsgs_tr("OBSTitles.TextBoxWidthToText"), inner);
+    chk_text_box_height_to_text_ = new QCheckBox(obsgs_tr("OBSTitles.TextBoxHeightToText"), inner);
+    style_checkbox(chk_text_box_width_to_text_);
+    style_checkbox(chk_text_box_height_to_text_);
+    spn_max_text_box_width_ = mk_dspin(1.0, 9999.0, 10.0);
+    spn_max_text_box_height_ = mk_dspin(1.0, 9999.0, 10.0);
     spn_rect_corner_ = mk_dspin(0.0, 1000.0, 1.0);
     btn_kf_width_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleWidthKeyframe"));
     btn_kf_height_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleHeightKeyframe"));
     rfl->addRow(obsgs_tr("OBSTitles.WidthLabel"), with_kf(spn_layer_w_, btn_kf_width_));
+    rfl->addRow("", chk_text_box_width_to_text_);
+    rfl->addRow(obsgs_tr("OBSTitles.MaxTextBoxWidthLabel"), spn_max_text_box_width_);
     rfl->addRow(obsgs_tr("OBSTitles.HeightLabel"), with_kf(spn_layer_h_, btn_kf_height_));
+    rfl->addRow("", chk_text_box_height_to_text_);
+    rfl->addRow(obsgs_tr("OBSTitles.MaxTextBoxHeightLabel"), spn_max_text_box_height_);
     rfl->addRow(obsgs_tr("OBSTitles.CornerLabel"), with_kf(spn_rect_corner_, mk_kf_button(obsgs_tr("OBSTitles.ToggleCornerKeyframe"))));
     btn_fill_color_ = new QPushButton(inner);
     btn_kf_fill_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleFillColorKeyframe"));
@@ -5245,13 +5378,27 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_background_color_ = new QPushButton(inner);
     spn_background_opacity_ = mk_dspin(0.0, 1.0, 0.05);
     spn_background_opacity_->setDecimals(2);
-    spn_background_padding_ = mk_dspin(0.0, 1000.0, 1.0);
+    spn_background_padding_x_ = mk_dspin(0.0, 1000.0, 1.0);
+    spn_background_padding_y_ = mk_dspin(0.0, 1000.0, 1.0);
     spn_background_corner_ = mk_dspin(0.0, 1000.0, 1.0);
-    rfl->addRow("", chk_background_enabled_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundColorLabel"), btn_background_color_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundOpacityLabel"), spn_background_opacity_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundPaddingLabel"), spn_background_padding_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundCornerLabel"), spn_background_corner_);
+    btn_kf_background_enabled_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleBackgroundEnabledKeyframe"));
+    btn_kf_background_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleBackgroundColorKeyframe"));
+    btn_kf_background_opacity_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleBackgroundOpacityKeyframe"));
+    btn_kf_background_padding_x_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleBackgroundHorizontalPaddingKeyframe"));
+    btn_kf_background_padding_y_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleBackgroundVerticalPaddingKeyframe"));
+    btn_kf_background_corner_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleBackgroundCornerKeyframe"));
+    row_background_enabled_ = with_kf(chk_background_enabled_, btn_kf_background_enabled_);
+    row_background_color_ = with_kf(btn_background_color_, btn_kf_background_color_);
+    row_background_opacity_ = with_kf(spn_background_opacity_, btn_kf_background_opacity_);
+    row_background_padding_x_ = with_kf(spn_background_padding_x_, btn_kf_background_padding_x_);
+    row_background_padding_y_ = with_kf(spn_background_padding_y_, btn_kf_background_padding_y_);
+    row_background_corner_ = with_kf(spn_background_corner_, btn_kf_background_corner_);
+    rfl->addRow("", row_background_enabled_);
+    rfl->addRow(obsgs_tr("OBSTitles.BackgroundColorLabel"), row_background_color_);
+    rfl->addRow(obsgs_tr("OBSTitles.BackgroundOpacityLabel"), row_background_opacity_);
+    rfl->addRow(obsgs_tr("OBSTitles.BackgroundHorizontalPaddingLabel"), row_background_padding_x_);
+    rfl->addRow(obsgs_tr("OBSTitles.BackgroundVerticalPaddingLabel"), row_background_padding_y_);
+    rfl->addRow(obsgs_tr("OBSTitles.BackgroundCornerLabel"), row_background_corner_);
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
     spn_outline_width_->setToolTip(obsgs_tr("OBSTitles.OutlineWidthTooltip"));
     btn_outline_color_ = new QPushButton(inner);
@@ -5362,6 +5509,12 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         return layer_ ? std::clamp(playhead_ - layer_->in_time, 0.0,
                                    std::max(0.0, layer_->out_time - layer_->in_time)) : 0.0;
     };
+    auto update_text_box_auto_controls = [this]() {
+        if (spn_max_text_box_width_)
+            spn_max_text_box_width_->setEnabled(chk_text_box_width_to_text_ && chk_text_box_width_to_text_->isChecked());
+        if (spn_max_text_box_height_)
+            spn_max_text_box_height_->setEnabled(chk_text_box_height_to_text_ && chk_text_box_height_to_text_->isChecked());
+    };
 
     connect(spn_px_,       QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, local_time, emit_change](double v){
@@ -5417,6 +5570,24 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                 else
                     layer_->text_content = value;
                 emit_change();
+            });
+    connect(chk_text_box_width_to_text_, &QCheckBox::toggled,
+            this, [this, can_edit, update_text_box_auto_controls, emit_change](bool v) {
+                update_text_box_auto_controls();
+                if (can_edit()) { layer_->text_box_width_to_text = v; emit_change(); }
+            });
+    connect(chk_text_box_height_to_text_, &QCheckBox::toggled,
+            this, [this, can_edit, update_text_box_auto_controls, emit_change](bool v) {
+                update_text_box_auto_controls();
+                if (can_edit()) { layer_->text_box_height_to_text = v; emit_change(); }
+            });
+    connect(spn_max_text_box_width_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) {
+                if (can_edit()) { layer_->max_text_box_width = (float)v; emit_change(); }
+            });
+    connect(spn_max_text_box_height_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) {
+                if (can_edit()) { layer_->max_text_box_height = (float)v; emit_change(); }
             });
     connect(cmb_font_, &QComboBox::currentTextChanged,
             this, [this, can_edit, emit_change](const QString &s){
@@ -5685,31 +5856,36 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                 emit_change();
             });
     connect(chk_background_enabled_, &QCheckBox::toggled,
-            this, [this, can_edit, emit_change](bool v) {
-                if (can_edit()) { layer_->background_enabled = v; emit_change(); }
+            this, [this, can_edit, local_time, emit_change](bool v) {
+                if (can_edit()) { layer_->background_enabled = v; set_animated_value(layer_->background_enabled_prop, local_time(), v ? 1.0 : 0.0); emit_change(); }
             });
     connect(btn_background_color_, &QPushButton::clicked,
-            this, [this, can_edit, emit_change]() {
+            this, [this, can_edit, local_time, emit_change]() {
                 if (!can_edit()) return;
-                QColor picked = QColorDialog::getColor(color_from_argb(layer_->background_color), this,
+                QColor picked = QColorDialog::getColor(color_from_argb(eval_background_color(*layer_, local_time())), this,
                                                         obsgs_tr("OBSTitles.BackgroundColor"),
                                                         QColorDialog::ShowAlphaChannel);
                 if (!picked.isValid()) return;
                 layer_->background_color = argb_from_color(picked);
+                set_background_color_channels_at(*layer_, local_time(), layer_->background_color);
                 style_color_button(btn_background_color_, layer_->background_color);
                 emit_change();
             });
     connect(spn_background_opacity_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this, can_edit, emit_change](double v) {
-                if (can_edit()) { layer_->background_opacity = (float)v; emit_change(); }
+            this, [this, can_edit, local_time, emit_change](double v) {
+                if (can_edit()) { layer_->background_opacity = (float)v; set_animated_value(layer_->background_opacity_prop, local_time(), v); emit_change(); }
             });
-    connect(spn_background_padding_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this, can_edit, emit_change](double v) {
-                if (can_edit()) { layer_->background_padding = (float)v; emit_change(); }
+    connect(spn_background_padding_x_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, local_time, emit_change](double v) {
+                if (can_edit()) { layer_->background_padding_x = (float)v; set_animated_value(layer_->background_padding_x_prop, local_time(), v); emit_change(); }
+            });
+    connect(spn_background_padding_y_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, local_time, emit_change](double v) {
+                if (can_edit()) { layer_->background_padding_y = (float)v; set_animated_value(layer_->background_padding_y_prop, local_time(), v); emit_change(); }
             });
     connect(spn_background_corner_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, [this, can_edit, emit_change](double v) {
-                if (can_edit()) { layer_->background_corner_radius = (float)v; emit_change(); }
+            this, [this, can_edit, local_time, emit_change](double v) {
+                if (can_edit()) { layer_->background_corner_radius = (float)v; set_animated_value(layer_->background_corner_radius_prop, local_time(), v); emit_change(); }
             });
 
     connect(chk_outline_enabled_, &QCheckBox::toggled,
@@ -5844,6 +6020,55 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         emit_change();
     });
 
+    connect(btn_kf_background_enabled_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        toggle_keyframe(layer_->background_enabled_prop, local_time(), chk_background_enabled_->isChecked() ? 1.0 : 0.0);
+        load_values();
+        emit_change();
+    });
+    connect(btn_kf_background_opacity_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        toggle_keyframe(layer_->background_opacity_prop, local_time(), spn_background_opacity_->value());
+        load_values();
+        emit_change();
+    });
+    connect(btn_kf_background_padding_x_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        toggle_keyframe(layer_->background_padding_x_prop, local_time(), spn_background_padding_x_->value());
+        load_values();
+        emit_change();
+    });
+    connect(btn_kf_background_padding_y_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        toggle_keyframe(layer_->background_padding_y_prop, local_time(), spn_background_padding_y_->value());
+        load_values();
+        emit_change();
+    });
+    connect(btn_kf_background_corner_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        toggle_keyframe(layer_->background_corner_radius_prop, local_time(), spn_background_corner_->value());
+        load_values();
+        emit_change();
+    });
+    connect(btn_kf_background_color_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        double t = local_time();
+        uint32_t color = eval_background_color(*layer_, t);
+        if (any_keyframe_at_time({&layer_->background_color_a, &layer_->background_color_r,
+                                  &layer_->background_color_g, &layer_->background_color_b}, t)) {
+            remove_keyframe_at(layer_->background_color_a, t);
+            remove_keyframe_at(layer_->background_color_r, t);
+            remove_keyframe_at(layer_->background_color_g, t);
+            remove_keyframe_at(layer_->background_color_b, t);
+        } else {
+            add_or_replace_keyframe(layer_->background_color_a, t, (color >> 24) & 0xFF);
+            add_or_replace_keyframe(layer_->background_color_r, t, (color >> 16) & 0xFF);
+            add_or_replace_keyframe(layer_->background_color_g, t, (color >> 8) & 0xFF);
+            add_or_replace_keyframe(layer_->background_color_b, t, color & 0xFF);
+        }
+        load_values();
+        emit_change();
+    });
     connect(btn_kf_shadow_enabled_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
         if (!can_edit()) return;
         toggle_keyframe(layer_->shadow_enabled_prop, local_time(), chk_shadow_enabled_->isChecked() ? 1.0 : 0.0);
@@ -5959,7 +6184,8 @@ void PropertiesPanel::load_values()
         if (chk_background_enabled_) chk_background_enabled_->setChecked(false);
         if (btn_background_color_) style_color_button(btn_background_color_, 0xFF000000);
         if (spn_background_opacity_) spn_background_opacity_->setValue(0.35);
-        if (spn_background_padding_) spn_background_padding_->setValue(16.0);
+        if (spn_background_padding_x_) spn_background_padding_x_->setValue(0.0);
+        if (spn_background_padding_y_) spn_background_padding_y_->setValue(0.0);
         if (spn_background_corner_) spn_background_corner_->setValue(0.0);
         if (chk_outline_enabled_) chk_outline_enabled_->setChecked(false);
         if (btn_outline_color_) style_color_button(btn_outline_color_, 0xFF000000);
@@ -5991,6 +6217,10 @@ void PropertiesPanel::load_values()
         if (cmb_text_overflow_) cmb_text_overflow_->setCurrentIndex(0);
         if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setValue(0.5);
         if (lbl_text_fit_scale_) lbl_text_fit_scale_->setText(obsgs_tr("OBSTitles.Scale100"));
+        if (chk_text_box_width_to_text_) chk_text_box_width_to_text_->setChecked(false);
+        if (chk_text_box_height_to_text_) chk_text_box_height_to_text_->setChecked(false);
+        if (spn_max_text_box_width_) { spn_max_text_box_width_->setValue(1920.0); spn_max_text_box_width_->setEnabled(false); }
+        if (spn_max_text_box_height_) { spn_max_text_box_height_->setValue(1080.0); spn_max_text_box_height_->setEnabled(false); }
         if (cmb_text_align_) cmb_text_align_->setCurrentIndex(1);
         if (cmb_text_valign_) cmb_text_valign_->setCurrentIndex(1);
         if (cmb_anchor_) cmb_anchor_->setCurrentIndex(4);
@@ -6004,7 +6234,9 @@ void PropertiesPanel::load_values()
         if (spn_shadow_spread_) spn_shadow_spread_->setValue(0.0);
         for (auto *b : {btn_kf_pos_x_, btn_kf_pos_y_, btn_kf_rotation_, btn_kf_opacity_,
                         btn_kf_origin_x_, btn_kf_origin_y_, btn_kf_width_, btn_kf_height_,
-                        btn_kf_text_color_, btn_kf_fill_color_, btn_kf_shadow_enabled_,
+                        btn_kf_text_color_, btn_kf_fill_color_, btn_kf_background_enabled_,
+                        btn_kf_background_color_, btn_kf_background_opacity_, btn_kf_background_padding_x_,
+                        btn_kf_background_padding_y_, btn_kf_background_corner_, btn_kf_shadow_enabled_,
                         btn_kf_shadow_opacity_, btn_kf_shadow_distance_, btn_kf_shadow_angle_,
                         btn_kf_shadow_blur_, btn_kf_shadow_spread_, btn_kf_shadow_color_}) {
             if (!b) continue;
@@ -6064,6 +6296,11 @@ void PropertiesPanel::load_values()
     rect_box_->setTitle(is_text_like ? (is_clock ? obsgs_tr("OBSTitles.ClockBox") : (is_ticker ? obsgs_tr("OBSTitles.TickerBox") : obsgs_tr("OBSTitles.TextBox"))) : (is_image ? obsgs_tr("OBSTitles.ImageSize") : obsgs_tr("OBSTitles.ShapeGeometryFill")));
     spn_rect_corner_->setVisible(is_rect);
     btn_fill_color_->setVisible(is_rect);
+    const bool supports_text_box_auto_size = is_text || is_clock;
+    if (chk_text_box_width_to_text_) chk_text_box_width_to_text_->setVisible(supports_text_box_auto_size);
+    if (chk_text_box_height_to_text_) chk_text_box_height_to_text_->setVisible(supports_text_box_auto_size);
+    if (spn_max_text_box_width_) spn_max_text_box_width_->setVisible(supports_text_box_auto_size);
+    if (spn_max_text_box_height_) spn_max_text_box_height_->setVisible(supports_text_box_auto_size);
     btn_kf_text_color_->setVisible(is_text_like);
     btn_kf_fill_color_->setVisible(is_rect);
     if (row_fill_color_) row_fill_color_->setVisible(is_rect);
@@ -6071,8 +6308,13 @@ void PropertiesPanel::load_values()
     if (chk_background_enabled_) chk_background_enabled_->setVisible(supports_background);
     if (btn_background_color_) btn_background_color_->setVisible(supports_background);
     if (spn_background_opacity_) spn_background_opacity_->setVisible(supports_background);
-    if (spn_background_padding_) spn_background_padding_->setVisible(supports_background);
+    if (spn_background_padding_x_) spn_background_padding_x_->setVisible(supports_background);
+    if (spn_background_padding_y_) spn_background_padding_y_->setVisible(supports_background);
     if (spn_background_corner_) spn_background_corner_->setVisible(supports_background);
+    for (QPushButton *button : std::initializer_list<QPushButton *>{btn_kf_background_enabled_, btn_kf_background_color_,
+                                                                    btn_kf_background_opacity_, btn_kf_background_padding_x_,
+                                                                    btn_kf_background_padding_y_, btn_kf_background_corner_})
+        if (button) button->setVisible(supports_background);
     if (outline_box_) outline_box_->setVisible(supports_outline);
     if (auto *outline_form = qobject_cast<QFormLayout *>(outline_box_->layout())) {
         if (btn_outline_color_) btn_outline_color_->setVisible(supports_outline);
@@ -6087,8 +6329,15 @@ void PropertiesPanel::load_values()
             label->setVisible(is_rect);
         if (auto *label = form->labelForField(row_fill_color_))
             label->setVisible(is_rect);
-        for (QWidget *field : std::initializer_list<QWidget *>{btn_background_color_, spn_background_opacity_, spn_background_padding_, spn_background_corner_})
+        for (QWidget *field : std::initializer_list<QWidget *>{chk_text_box_width_to_text_, spn_max_text_box_width_,
+                                                               chk_text_box_height_to_text_, spn_max_text_box_height_})
+            if (auto *label = form->labelForField(field)) label->setVisible(supports_text_box_auto_size);
+        for (QWidget *field : std::initializer_list<QWidget *>{row_background_enabled_, row_background_color_,
+                                                               row_background_opacity_, row_background_padding_x_,
+                                                               row_background_padding_y_, row_background_corner_}) {
+            if (field) field->setVisible(supports_background);
             if (auto *label = form->labelForField(field)) label->setVisible(supports_background);
+        }
         if (auto *label = form->labelForField(spn_outline_width_))
             label->setVisible(supports_outline);
         if (auto *label = form->labelForField(row_outline_color_))
@@ -6122,11 +6371,16 @@ void PropertiesPanel::load_values()
     chk_lock_aspect_->setChecked(layer_->lock_aspect_ratio);
     style_color_button(btn_text_color_, eval_text_color(*layer_, lt));
     style_color_button(btn_fill_color_, eval_fill_color(*layer_, lt));
-    if (chk_background_enabled_) chk_background_enabled_->setChecked(layer_->background_enabled);
-    if (btn_background_color_) style_color_button(btn_background_color_, layer_->background_color);
-    if (spn_background_opacity_) spn_background_opacity_->setValue(layer_->background_opacity);
-    if (spn_background_padding_) spn_background_padding_->setValue(layer_->background_padding);
-    if (spn_background_corner_) spn_background_corner_->setValue(layer_->background_corner_radius);
+    if (chk_text_box_width_to_text_) chk_text_box_width_to_text_->setChecked(layer_->text_box_width_to_text);
+    if (chk_text_box_height_to_text_) chk_text_box_height_to_text_->setChecked(layer_->text_box_height_to_text);
+    if (spn_max_text_box_width_) { spn_max_text_box_width_->setValue(layer_->max_text_box_width); spn_max_text_box_width_->setEnabled(layer_->text_box_width_to_text); }
+    if (spn_max_text_box_height_) { spn_max_text_box_height_->setValue(layer_->max_text_box_height); spn_max_text_box_height_->setEnabled(layer_->text_box_height_to_text); }
+    if (chk_background_enabled_) chk_background_enabled_->setChecked(eval_background_enabled(*layer_, lt));
+    if (btn_background_color_) style_color_button(btn_background_color_, eval_background_color(*layer_, lt));
+    if (spn_background_opacity_) spn_background_opacity_->setValue(eval_background_opacity(*layer_, lt));
+    if (spn_background_padding_x_) spn_background_padding_x_->setValue(eval_background_padding_x(*layer_, lt));
+    if (spn_background_padding_y_) spn_background_padding_y_->setValue(eval_background_padding_y(*layer_, lt));
+    if (spn_background_corner_) spn_background_corner_->setValue(eval_background_corner_radius(*layer_, lt));
     if (chk_outline_enabled_) chk_outline_enabled_->setChecked(layer_->outline_enabled);
     if (spn_outline_width_) spn_outline_width_->setValue(layer_->stroke_width);
     if (btn_outline_color_) style_color_button(btn_outline_color_, eval_outline_color(*layer_, lt));
@@ -6168,6 +6422,13 @@ void PropertiesPanel::load_values()
                                            &layer_->text_color_g, &layer_->text_color_b});
     set_group_kf_icon(btn_kf_fill_color_, {&layer_->fill_color_a, &layer_->fill_color_r,
                                            &layer_->fill_color_g, &layer_->fill_color_b});
+    set_prop_kf_icon(btn_kf_background_enabled_, layer_->background_enabled_prop);
+    set_group_kf_icon(btn_kf_background_color_, {&layer_->background_color_a, &layer_->background_color_r,
+                                                 &layer_->background_color_g, &layer_->background_color_b});
+    set_prop_kf_icon(btn_kf_background_opacity_, layer_->background_opacity_prop);
+    set_prop_kf_icon(btn_kf_background_padding_x_, layer_->background_padding_x_prop);
+    set_prop_kf_icon(btn_kf_background_padding_y_, layer_->background_padding_y_prop);
+    set_prop_kf_icon(btn_kf_background_corner_, layer_->background_corner_radius_prop);
     set_prop_kf_icon(btn_kf_shadow_enabled_, layer_->shadow_enabled_prop);
     set_prop_kf_icon(btn_kf_shadow_opacity_, layer_->shadow_opacity_prop);
     set_prop_kf_icon(btn_kf_shadow_distance_, layer_->shadow_distance_prop);
