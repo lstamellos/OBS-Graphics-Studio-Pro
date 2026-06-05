@@ -2708,6 +2708,7 @@ void TitleDock::on_add()
     if (!ok || name.trimmed().isEmpty()) return;
 
     auto title = TitleDataStore::instance().create_title(name.trimmed().toStdString());
+    title->preview_screenshot_png_base64 = title_screenshot_png_base64(title_screenshot_image(*title)).toStdString();
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
     select_title(title->id);

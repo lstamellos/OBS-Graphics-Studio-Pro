@@ -102,6 +102,11 @@ private:
     void build_ui();
     void build_toolbar();
     void update_title_bar();
+    void new_title_contents();
+    void save_title();
+    void save_title_as_new();
+    void export_title_template(bool save_in_library);
+    void copy_title_to_store(const std::shared_ptr<Title> &source, const std::shared_ptr<Title> &dest) const;
     void align_selected_to_canvas(int x_mode, int y_mode);
     void align_selected_layers_horizontal();
     void align_selected_layers_vertical();
@@ -120,6 +125,7 @@ private:
 
     /* Current editing state */
     std::shared_ptr<Title> title_;
+    std::string            editing_title_id_;
     std::string            sel_layer_id_;
     double                 playhead_  = 0.0;
     bool                   playing_   = false;
@@ -498,6 +504,13 @@ private:
     QDoubleSpinBox  *spn_rect_corner_   = nullptr;
     QPushButton     *btn_fill_color_ = nullptr;
     QWidget         *row_fill_color_ = nullptr;
+
+    /* Text/image background controls */
+    QCheckBox       *chk_background_enabled_ = nullptr;
+    QPushButton     *btn_background_color_ = nullptr;
+    QDoubleSpinBox  *spn_background_opacity_ = nullptr;
+    QDoubleSpinBox  *spn_background_padding_ = nullptr;
+    QDoubleSpinBox  *spn_background_corner_ = nullptr;
 
     /* Image controls */
     QLineEdit       *edit_image_path_ = nullptr;

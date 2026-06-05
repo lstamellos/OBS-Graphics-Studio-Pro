@@ -164,6 +164,14 @@ struct Layer {
 
     /* ----- Solid / shape ----- */
     uint32_t    fill_color    = 0xFF222222;
+
+    /* Optional box background for text/image layers. */
+    bool        background_enabled = false;
+    uint32_t    background_color = 0xFF000000;
+    float       background_opacity = 0.35f;
+    float       background_padding = 16.0f;
+    float       background_corner_radius = 0.0f;
+
     float       rect_width    = 1920.0f;
     float       rect_height   = 100.0f;
     float       corner_radius = 0.0f;

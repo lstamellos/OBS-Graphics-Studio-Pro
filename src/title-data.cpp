@@ -821,6 +821,11 @@ static json layer_to_json(const Layer &l, bool include_embedded_assets = true,
     j["align_v"]       = l.align_v;
 
     j["fill_color"]    = l.fill_color;
+    j["background_enabled"] = l.background_enabled;
+    j["background_color"] = l.background_color;
+    j["background_opacity"] = l.background_opacity;
+    j["background_padding"] = l.background_padding;
+    j["background_corner_radius"] = l.background_corner_radius;
     j["rect_width"]    = l.rect_width;
     j["rect_height"]   = l.rect_height;
     j["corner_radius"] = l.corner_radius;
@@ -933,6 +938,11 @@ static std::shared_ptr<Layer> layer_from_json(const json &j, bool require_embedd
     l->align_v       = std::clamp(json_int(j, "align_v", 1), 0, 2);
 
     l->fill_color    = json_color(j, "fill_color", (uint32_t)0xFF222222);
+    l->background_enabled = json_bool(j, "background_enabled", false);
+    l->background_color = json_color(j, "background_color", (uint32_t)0xFF000000);
+    l->background_opacity = (float)std::clamp(finite_or(json_double(j, "background_opacity", 0.35), 0.35), 0.0, 1.0);
+    l->background_padding = (float)std::clamp(finite_or(json_double(j, "background_padding", 16.0), 16.0), 0.0, (double)kMaxCanvasDimension);
+    l->background_corner_radius = (float)std::clamp(finite_or(json_double(j, "background_corner_radius", 0.0), 0.0), 0.0, (double)kMaxCanvasDimension);
     l->rect_width    = std::clamp(finite_or(json_double(j, "rect_width", 1920.0), 1920.0), 1.0, (double)kMaxCanvasDimension);
     l->rect_height   = std::clamp(finite_or(json_double(j, "rect_height", 100.0), 100.0), 1.0, (double)kMaxCanvasDimension);
     l->corner_radius = std::clamp(finite_or(json_double(j, "corner_radius", 0.0), 0.0), 0.0, (double)kMaxCanvasDimension);
