@@ -258,35 +258,6 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &titl
     return exposed;
 }
 
-static bool exposed_text_animation_bounds(const std::vector<std::shared_ptr<Layer>> &exposed,
-                                           double &first_time, double &last_time)
-{
-    first_time = std::numeric_limits<double>::max();
-    last_time = std::numeric_limits<double>::lowest();
-    bool has_bounds = false;
-    for (const auto &layer : exposed) {
-        if (!layer) continue;
-        has_bounds |= layer_animation_keyframe_bounds(*layer, first_time, last_time);
-    }
-    return has_bounds && first_time <= last_time;
-}
-
-static double cue_persistence_layer_time(const Title &title, double t)
-{
-    if (title.playback_mode == 1) {
-        const double loop_start = std::clamp(title.loop_start, 0.0, title.duration);
-        const double loop_end = std::clamp(title.loop_end, loop_start, title.duration);
-        if (loop_end > loop_start + 0.0001) {
-            const double loop_len = std::max(0.001, loop_end - loop_start);
-            return loop_start + std::fmod(std::max(0.0, t - loop_start), loop_len);
-        }
-        return loop_end;
-    }
-    if (title.playback_mode == 2)
-        return std::clamp(title.pause_time, 0.0, title.duration);
-    return std::clamp(t, 0.0, title.duration);
-}
-
 static double cue_persistence_hold_time(const Title &title)
 {
     if (title.playback_mode == 1)
@@ -1126,16 +1097,10 @@ static void render_title_frame(TitleSourceData *data,
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-    const bool persistence_transition = title.cue_background_persistence &&
+    const bool background_persistence = title.cue_background_persistence &&
         title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
-    const double persistence_time = cue_persistence_layer_time(title, t);
-    const auto exposed = persistence_transition ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
-    double text_first_keyframe = 0.0;
-    double text_last_keyframe = 0.0;
-    const bool has_text_keyframe_bounds = persistence_transition &&
-        exposed_text_animation_bounds(exposed, text_first_keyframe, text_last_keyframe);
-    const bool background_persistence = persistence_transition && has_text_keyframe_bounds &&
-        t >= text_first_keyframe && t <= text_last_keyframe;
+    const double persistence_time = cue_persistence_hold_time(title);
+    const auto exposed = background_persistence ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
 
     /* Render layers bottom → top */
     for (auto &layer : title.layers) {
