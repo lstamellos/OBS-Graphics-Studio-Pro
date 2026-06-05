@@ -1,12 +1,15 @@
 #include "title-hotkeys.h"
 #include "title-data.h"
 #include <obs-module.h>
+#include <QSettings>
+#include <QString>
 
 #include <algorithm>
 #include <cctype>
 #include <map>
 #include <memory>
 #include <sstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -42,11 +45,97 @@ std::vector<HotkeySection> g_sections;
 std::vector<HotkeyRegistration> g_hotkeys;
 std::map<std::string, obs_source_t *> g_section_sources;
 std::string g_hotkey_signature;
+std::map<std::string, std::string> g_persisted_hotkey_bindings;
 bool g_hotkeys_active = false;
 bool g_change_callback_registered = false;
 bool g_hotkey_section_source_registered = false;
 
 constexpr const char *kHotkeySectionSourceId = "obs_graphics_studio_pro_hotkey_section";
+constexpr const char *kDockSettingsGroup = "TitleDock";
+constexpr const char *kBackgroundPersistenceKey = "backgroundPersistence";
+constexpr const char *kTextPersistenceKey = "textPersistence";
+constexpr const char *kHotkeySettingsGroup = "Hotkeys";
+
+static void load_persisted_hotkey_bindings()
+{
+    QSettings settings(QStringLiteral("OBSGraphicsStudioPro"), QStringLiteral("Dock"));
+    settings.beginGroup(QString::fromUtf8(kHotkeySettingsGroup));
+    g_persisted_hotkey_bindings.clear();
+    for (const auto &key : settings.childKeys())
+        g_persisted_hotkey_bindings[key.toStdString()] = settings.value(key).toString().toStdString();
+    settings.endGroup();
+}
+
+static void save_persisted_hotkey_bindings()
+{
+    QSettings settings(QStringLiteral("OBSGraphicsStudioPro"), QStringLiteral("Dock"));
+    settings.beginGroup(QString::fromUtf8(kHotkeySettingsGroup));
+    settings.remove(QString());
+    for (const auto &[name, json] : g_persisted_hotkey_bindings)
+        settings.setValue(QString::fromStdString(name), QString::fromStdString(json));
+    settings.endGroup();
+}
+
+static void remember_hotkey_binding(const HotkeyRegistration &hotkey)
+{
+    if (hotkey.id == OBS_INVALID_HOTKEY_ID) return;
+    obs_data_array_t *bindings = obs_hotkey_save(hotkey.id);
+    if (!bindings) return;
+
+    obs_data_t *wrapper = obs_data_create();
+    obs_data_set_array(wrapper, "bindings", bindings);
+    const char *json = obs_data_get_json(wrapper);
+    if (json && *json)
+        g_persisted_hotkey_bindings[hotkey.descriptor.name] = json;
+
+    obs_data_release(wrapper);
+    obs_data_array_release(bindings);
+}
+
+static void restore_hotkey_binding(const HotkeyRegistration &hotkey)
+{
+    if (hotkey.id == OBS_INVALID_HOTKEY_ID) return;
+    auto it = g_persisted_hotkey_bindings.find(hotkey.descriptor.name);
+    if (it == g_persisted_hotkey_bindings.end() || it->second.empty()) return;
+
+    obs_data_t *wrapper = obs_data_create_from_json(it->second.c_str());
+    if (!wrapper) return;
+    obs_data_array_t *bindings = obs_data_get_array(wrapper, "bindings");
+    if (bindings) {
+        obs_hotkey_load(hotkey.id, bindings);
+        obs_data_array_release(bindings);
+    }
+    obs_data_release(wrapper);
+}
+
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
+    const std::vector<std::shared_ptr<Layer>> &exposed,
+    const std::vector<std::string> &column_order)
+{
+    if (column_order.empty())
+        return exposed;
+
+    std::vector<std::shared_ptr<Layer>> ordered;
+    ordered.reserve(exposed.size());
+    for (const auto &layer_id : column_order) {
+        auto it = std::find_if(exposed.begin(), exposed.end(),
+                               [&](const std::shared_ptr<Layer> &layer) {
+                                   return layer && layer->id == layer_id;
+                               });
+        if (it != exposed.end())
+            ordered.push_back(*it);
+    }
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        auto it = std::find_if(ordered.begin(), ordered.end(),
+                               [&](const std::shared_ptr<Layer> &ordered_layer) {
+                                   return ordered_layer && ordered_layer->id == layer->id;
+                               });
+        if (it == ordered.end())
+            ordered.push_back(layer);
+    }
+    return ordered;
+}
 
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
@@ -57,13 +146,38 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
         if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return exposed;
+    return order_exposed_text_layers(exposed, title->live_text_column_order);
 }
 
 static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
                                      const std::vector<std::shared_ptr<Layer>> &exposed)
 {
     if (!title || exposed.empty()) return;
+
+    std::vector<std::string> new_order;
+    new_order.reserve(exposed.size());
+    for (const auto &layer : exposed)
+        new_order.push_back(layer ? layer->id : std::string());
+
+    const std::vector<std::string> old_order = title->live_text_column_order;
+    if (!old_order.empty() && old_order != new_order) {
+        for (auto &row : title->live_text_rows) {
+            std::vector<std::string> remapped;
+            remapped.reserve(exposed.size());
+            for (size_t new_col = 0; new_col < new_order.size(); ++new_col) {
+                auto it = std::find(old_order.begin(), old_order.end(), new_order[new_col]);
+                if (it != old_order.end()) {
+                    const size_t old_col = (size_t)std::distance(old_order.begin(), it);
+                    remapped.push_back(old_col < row.size() ? row[old_col] : exposed[new_col]->text_content);
+                } else {
+                    remapped.push_back(exposed[new_col]->text_content);
+                }
+            }
+            row = std::move(remapped);
+        }
+    }
+    title->live_text_column_order = std::move(new_order);
+
     if (title->live_text_rows.empty()) {
         std::vector<std::string> row;
         for (const auto &layer : exposed)
@@ -77,6 +191,7 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
             row[i] = exposed[i]->text_content;
     }
 }
+
 
 static void apply_live_text_row(const std::shared_ptr<Title> &title, int row,
                                 const std::vector<std::shared_ptr<Layer>> &exposed)
@@ -149,6 +264,32 @@ static void register_hotkey_section_source_type()
     g_hotkey_section_source_registered = true;
 }
 
+static void load_persistence_settings(bool &background_persistence, bool &text_persistence)
+{
+    QSettings settings(QStringLiteral("OBSGraphicsStudioPro"), QStringLiteral("Dock"));
+    settings.beginGroup(QString::fromUtf8(kDockSettingsGroup));
+    background_persistence = settings.value(QString::fromUtf8(kBackgroundPersistenceKey), false).toBool();
+    text_persistence = background_persistence &&
+        settings.value(QString::fromUtf8(kTextPersistenceKey), false).toBool();
+    settings.endGroup();
+}
+
+static void apply_persistence_settings_to_title(const std::shared_ptr<Title> &title,
+                                                const std::vector<std::shared_ptr<Layer>> &exposed)
+{
+    if (!title) return;
+    bool background_persistence = false;
+    bool text_persistence = false;
+    load_persistence_settings(background_persistence, text_persistence);
+    const bool has_exposed = !exposed.empty();
+    title->cue_background_persistence = background_persistence && has_exposed;
+    title->cue_text_persistence = title->cue_background_persistence && text_persistence;
+    if (!title->cue_background_persistence)
+        title->cue_persistence_transition = false;
+    if (!title->cue_text_persistence)
+        title->cue_persistent_text_columns.clear();
+}
+
 static void cue_title_row(const std::shared_ptr<Title> &title, int row)
 {
     if (!title) return;
@@ -159,12 +300,40 @@ static void cue_title_row(const std::shared_ptr<Title> &title, int row)
     if (exposed.empty()) {
         title->current_cue_row = -1;
         title->pending_cue_row = -1;
+        title->cue_persistence_transition = false;
+        title->cue_persistent_text_columns.clear();
     } else {
         if (row < 0 || row >= (int)title->live_text_rows.size()) return;
+        apply_persistence_settings_to_title(title, exposed);
+        const bool is_active_cue = title->current_cue_row == row;
+        const bool is_pending_cue = title->pending_cue_row == row;
+        const int previous_row = title->current_cue_row >= 0 ? title->current_cue_row : title->pending_cue_row;
+        const bool can_persist_transition = title->cue_background_persistence &&
+            (title->playback_mode == 1 || title->playback_mode == 2) &&
+            previous_row >= 0 && previous_row != row;
         const bool needs_outro_before_cue =
             (title->playback_mode == 1 || title->playback_mode == 2) &&
             title->current_cue_row >= 0 && title->current_cue_row != row;
-        if (needs_outro_before_cue) {
+
+        title->cue_persistence_transition = false;
+        title->cue_persistent_text_columns.assign(exposed.size(), false);
+
+        if (is_active_cue || is_pending_cue) {
+            title->current_cue_row = -1;
+            title->pending_cue_row = -1;
+            title->cue_persistence_transition = false;
+            title->cue_persistent_text_columns.clear();
+        } else if (can_persist_transition) {
+            for (int col = 0; col < (int)exposed.size() && col < (int)title->live_text_rows[row].size(); ++col) {
+                if (title->cue_text_persistence &&
+                    previous_row >= 0 && previous_row < (int)title->live_text_rows.size() &&
+                    col < (int)title->live_text_rows[previous_row].size() &&
+                    title->live_text_rows[previous_row][col] == title->live_text_rows[row][col])
+                    title->cue_persistent_text_columns[col] = true;
+            }
+            title->pending_cue_row = row;
+            title->cue_persistence_transition = true;
+        } else if (needs_outro_before_cue) {
             title->pending_cue_row = row;
         } else {
             apply_live_text_row(title, row, exposed);
@@ -301,9 +470,12 @@ static std::string descriptor_signature(const std::vector<HotkeyDescriptor> &des
 static void unregister_all_hotkeys()
 {
     for (auto &hotkey : g_hotkeys) {
-        if (hotkey.id != OBS_INVALID_HOTKEY_ID)
+        if (hotkey.id != OBS_INVALID_HOTKEY_ID) {
+            remember_hotkey_binding(hotkey);
             obs_hotkey_unregister(hotkey.id);
+        }
     }
+    save_persisted_hotkey_bindings();
     g_hotkeys.clear();
     g_hotkey_signature.clear();
 }
@@ -371,6 +543,7 @@ static void refresh_hotkeys()
             registration.descriptor.description.c_str(),
             hotkey_callback,
             &registration.descriptor);
+        restore_hotkey_binding(registration);
     }
     g_hotkey_signature = std::move(signature);
 }
@@ -381,6 +554,7 @@ void title_hotkeys_register()
 {
     if (g_hotkeys_active) return;
     register_hotkey_section_source_type();
+    load_persisted_hotkey_bindings();
     g_hotkeys_active = true;
     refresh_hotkeys();
     if (!g_change_callback_registered) {

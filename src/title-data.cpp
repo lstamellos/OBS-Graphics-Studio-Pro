@@ -1024,6 +1024,8 @@ static json title_to_json(const Title &t, bool include_embedded_assets = true,
     for (const auto &row : t.live_text_rows)
         live_rows.push_back(row);
     jt["live_text_rows"] = live_rows;
+    jt["live_text_column_order"] = t.live_text_column_order;
+    jt["live_text_header_state"] = t.live_text_header_state;
     return jt;
 }
 
@@ -1074,6 +1076,18 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
             t->live_text_rows.push_back(std::move(row));
         }
     }
+    if (jt.contains("live_text_column_order") && jt["live_text_column_order"].is_array()) {
+        const size_t count = std::min(jt["live_text_column_order"].size(), kMaxLiveTextColumns);
+        t->live_text_column_order.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            if (!jt["live_text_column_order"][i].is_string()) continue;
+            std::string layer_id = jt["live_text_column_order"][i].get<std::string>();
+            if (layer_id.size() > kMaxNameLength)
+                layer_id.resize(kMaxNameLength);
+            t->live_text_column_order.push_back(std::move(layer_id));
+        }
+    }
+    t->live_text_header_state = bounded_string(jt, "live_text_header_state", "", kMaxTextLength);
 
     if (regenerate_ids) {
         std::unordered_map<std::string, std::string> layer_id_map;
@@ -1090,6 +1104,11 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
                 layer->parent_id = it->second;
             else if (!layer->parent_id.empty())
                 layer->parent_id.clear();
+        }
+        for (auto &layer_id : t->live_text_column_order) {
+            auto it = layer_id_map.find(layer_id);
+            if (it != layer_id_map.end())
+                layer_id = it->second;
         }
     }
 

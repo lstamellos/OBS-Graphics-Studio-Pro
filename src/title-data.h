@@ -235,9 +235,15 @@ struct Title {
 
     std::vector<std::shared_ptr<Layer>> layers;  /* bottom → top order */
     std::vector<std::vector<std::string>> live_text_rows;
+    std::vector<std::string> live_text_column_order; /* exposed text layer IDs by logical cue column */
+    std::string live_text_header_state; /* base64-encoded dock header layout */
     int current_cue_row = -1; /* runtime-only active live text row */
     int pending_cue_row = -1; /* runtime-only next row waiting for outro */
     uint64_t cue_revision = 0; /* runtime-only live text cue counter */
+    bool cue_background_persistence = false; /* runtime-only setting: enable background persistence for cue transitions */
+    bool cue_text_persistence = false; /* runtime-only setting: freeze unchanged exposed text columns while cueing */
+    bool cue_persistence_transition = false; /* runtime-only active persistent transition between cue rows */
+    std::vector<bool> cue_persistent_text_columns; /* runtime-only exposed text columns held at pause/loop */
 
     /* Helpers */
     std::shared_ptr<Layer> find_layer(const std::string &layer_id) const;
