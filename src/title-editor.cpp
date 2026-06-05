@@ -23,6 +23,8 @@
 #include <QImage>
 #include <QImageReader>
 #include <QSize>
+#include <QSizeF>
+#include <QRectF>
 #include <QSvgRenderer>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -180,7 +182,7 @@ static QImage editor_load_layer_image(const QString &path, const QSize &fallback
 
 static const QColor C_TEXT     { 0xcccccc };
 static const QColor C_RULER    { 0x1e1e1e };
-static const QColor C_KF_DOT   { 0xf0a020 };
+static const QColor C_KF_DOT   { 0xffd23f };
 static const QColor C_PLAYHEAD { 0xff4444 };
 
 static QIcon keyframe_diamond_icon(bool active, bool outlined = false)
@@ -650,8 +652,68 @@ static QPointF rotated_scaled_delta(double dx, double dy, double rot_deg, double
 }
 
 
+static QString autosize_display_text(const Layer &layer)
+{
+    QString text = layer.type == LayerType::Clock ? QString::fromStdString(layer.clock_format)
+                                                   : QString::fromStdString(layer.text_content);
+    if (layer.text_style == 1)
+        text = text.toUpper();
+    return text.isEmpty() ? QStringLiteral(" ") : text;
+}
+
+static QFont autosize_font_for_layer(const Layer &layer)
+{
+    QFont font(QString::fromStdString(layer.font_family));
+    font.setPointSize(layer.font_size);
+    font.setBold(layer.font_bold);
+    font.setItalic(layer.font_italic);
+    font.setUnderline(layer.text_underline);
+    font.setStrikeOut(layer.text_strikethrough);
+    font.setKerning(layer.font_kerning);
+    return font;
+}
+
+static QSizeF auto_text_box_size(const Layer &layer)
+{
+    if (!layer.text_auto_size || !(layer.type == LayerType::Text || layer.type == LayerType::Clock || layer.type == LayerType::Ticker))
+        return QSizeF(layer.rect_width, layer.rect_height);
+    QFontMetricsF metrics(autosize_font_for_layer(layer));
+    QString text = autosize_display_text(layer);
+    const double max_w = std::max(1.0f, layer.max_text_box_width);
+    const double max_h = std::max(1.0f, layer.max_text_box_height);
+    QRectF bounds = metrics.boundingRect(QRectF(0, 0, max_w, max_h * 4.0),
+                                         Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop,
+                                         text);
+    double pad = std::max(2.0, (double)layer.stroke_width * 2.0 + 4.0);
+    double w = std::clamp(std::ceil(bounds.width() + pad), 1.0, max_w);
+    double h = std::clamp(std::ceil(bounds.height() + pad), 1.0, max_h);
+    return QSizeF(w, h);
+}
+
+static double eval_crop_value(const AnimatedProperty &prop, double t)
+{
+    return std::max(0.0, prop.is_animated() ? prop.evaluate(t) : prop.static_value);
+}
+
+static QRectF evaluated_crop_rect(const Layer &layer, double t, const QRectF &box)
+{
+    double left = eval_crop_value(layer.crop_left, t);
+    double top = eval_crop_value(layer.crop_top, t);
+    double right = eval_crop_value(layer.crop_right, t);
+    double bottom = eval_crop_value(layer.crop_bottom, t);
+    double max_x = std::max(0.0, box.width() - 1.0);
+    double max_y = std::max(0.0, box.height() - 1.0);
+    left = std::clamp(left, 0.0, max_x);
+    right = std::clamp(right, 0.0, std::max(0.0, box.width() - left - 1.0));
+    top = std::clamp(top, 0.0, max_y);
+    bottom = std::clamp(bottom, 0.0, std::max(0.0, box.height() - top - 1.0));
+    return box.adjusted(left, top, -right, -bottom);
+}
+
 static double eval_box_width(const Layer &layer, double t)
 {
+    if (layer.text_auto_size && !layer.box_width.is_animated())
+        return std::max(1.0, auto_text_box_size(layer).width());
     const double width = layer.box_width.is_animated()
         ? layer.box_width.evaluate(t)
         : static_cast<double>(layer.rect_width);
@@ -660,6 +722,8 @@ static double eval_box_width(const Layer &layer, double t)
 
 static double eval_box_height(const Layer &layer, double t)
 {
+    if (layer.text_auto_size && !layer.box_height.is_animated())
+        return std::max(1.0, auto_text_box_size(layer).height());
     const double height = layer.box_height.is_animated()
         ? layer.box_height.evaluate(t)
         : static_cast<double>(layer.rect_height);
@@ -975,23 +1039,24 @@ static void style_color_button(QPushButton *button, uint32_t argb)
 }
 
 
-static QColor keyframe_color(EasingType easing)
+static QColor keyframe_color(EasingType)
+{
+    return C_KF_DOT;
+}
+
+static QString keyframe_symbol(EasingType easing)
 {
     switch (easing) {
-    case EasingType::Linear:
-        return C_KF_DOT;
-    case EasingType::Hold:
-        return QColor(0xd8, 0x44, 0x44);
+    case EasingType::Linear: return QString::fromUtf8("◆");
+    case EasingType::Hold: return QString::fromUtf8("■");
+    case EasingType::Bezier: return QString::fromUtf8("⧗");
     case EasingType::EaseIn:
     case EasingType::EaseOut:
     case EasingType::EaseInOut:
-        return QColor(0x43, 0xd1, 0x7a);
-    case EasingType::Bezier:
-        return QColor(0x55, 0xbc, 0xff);
-    default:
-        return C_KF_DOT;
+    default: return QString::fromUtf8("●");
     }
 }
+
 
 static QString easing_label(EasingType easing)
 {
@@ -1012,6 +1077,7 @@ static std::vector<AnimatedProperty *> timeline_properties(Layer &layer)
             &layer.scale_x, &layer.scale_y,
             &layer.rotation, &layer.opacity,
             &layer.box_width, &layer.box_height,
+            &layer.crop_left, &layer.crop_top, &layer.crop_right, &layer.crop_bottom,
             &layer.origin_x_prop, &layer.origin_y_prop,
             &layer.text_color_a, &layer.text_color_r,
             &layer.text_color_g, &layer.text_color_b,
@@ -1029,6 +1095,7 @@ static QString property_label(const std::string &name)
     if (name == "pos_x" || name == "pos_y") return obsgs_tr("OBSTitles.Position");
     if (name == "scale_x" || name == "scale_y") return obsgs_tr("OBSTitles.Scale");
     if (name == "box_width" || name == "box_height") return obsgs_tr("OBSTitles.Size");
+    if (name == "crop_left" || name == "crop_top" || name == "crop_right" || name == "crop_bottom") return QStringLiteral("Crop");
     if (name == "origin_x" || name == "origin_y") return obsgs_tr("OBSTitles.Origin");
     if (name == "text_color_a" || name == "text_color_r" ||
         name == "text_color_g" || name == "text_color_b") return obsgs_tr("OBSTitles.TextColor");
@@ -1062,9 +1129,39 @@ static QString property_value_text(const AnimatedProperty &prop, const Layer &la
     if (prop.name == "origin_x")
         return QString("%1,%2").arg(layer.origin_x_prop.static_value, 0, 'f', 2)
                                 .arg(layer.origin_y_prop.static_value, 0, 'f', 2);
+    if (prop.name == "crop_left")
+        return QString("L%1 T%2 R%3 B%4").arg(layer.crop_left.static_value, 0, 'f', 0)
+                                          .arg(layer.crop_top.static_value, 0, 'f', 0)
+                                          .arg(layer.crop_right.static_value, 0, 'f', 0)
+                                          .arg(layer.crop_bottom.static_value, 0, 'f', 0);
     if (prop.name == "opacity" || prop.name == "shadow_opacity") value *= 100.0;
     if (prop.name == "shadow_enabled") return value >= 0.5 ? obsgs_tr("OBSTitles.On") : obsgs_tr("OBSTitles.Off");
     return QString::number(value, 'f', (prop.name == "opacity" || prop.name == "shadow_opacity") ? 1 : 2);
+}
+
+
+static void restore_property_defaults(Layer &layer, AnimatedProperty &prop)
+{
+    auto reset = [](AnimatedProperty &p, double value) {
+        p.static_value = value;
+        p.keyframes.clear();
+    };
+    const std::string &name = prop.name;
+    if (name == "pos_x") reset(prop, 0.0);
+    else if (name == "pos_y") reset(prop, 0.0);
+    else if (name == "scale_x" || name == "scale_y") reset(prop, 1.0);
+    else if (name == "rotation" || name.rfind("crop_", 0) == 0) reset(prop, 0.0);
+    else if (name == "opacity") reset(prop, 1.0);
+    else if (name == "box_width") { layer.rect_width = 1920.0f; reset(prop, layer.rect_width); }
+    else if (name == "box_height") { layer.rect_height = 100.0f; reset(prop, layer.rect_height); }
+    else if (name == "origin_x" || name == "origin_y") reset(prop, 0.5);
+    else if (name == "shadow_enabled") { layer.shadow_enabled = false; reset(prop, 0.0); }
+    else if (name == "shadow_opacity") { layer.shadow_opacity = 0.6f; reset(prop, 0.6); }
+    else if (name == "shadow_distance") { layer.shadow_distance = 8.0f; reset(prop, 8.0); }
+    else if (name == "shadow_angle") { layer.shadow_angle = 135.0f; reset(prop, 135.0); }
+    else if (name == "shadow_blur") { layer.shadow_blur = 4.0f; reset(prop, 4.0); }
+    else if (name == "shadow_spread") { layer.shadow_spread = 0.0f; reset(prop, 0.0); }
+    else reset(prop, prop.static_value);
 }
 
 struct TimelineRow {
@@ -1868,17 +1965,7 @@ void TitleEditor::build_toolbar()
     toolbar_->addAction(act_redo_);
     update_undo_redo_actions();
 
-    toolbar_->addSeparator();
-
-    /* Save button */
-    auto *btn_save = new QPushButton(obsgs_tr("OBSTitles.Save"), toolbar_);
-    btn_save->setIcon(obs_icon("save.svg"));
-    btn_save->setStyleSheet(
-        "QPushButton { color:#fff; background:#0078d4; border:none;"
-        "  border-radius:3px; padding:4px 10px; }"
-        "QPushButton:hover { background:#1088e4; }");
-    connect(btn_save, &QPushButton::clicked, this, &TitleEditor::save_title);
-    toolbar_->addWidget(btn_save);
+    /* Save is available from the File menu and keyboard shortcut; the editor toolbar intentionally omits a Save button. */
 }
 
 
@@ -2771,6 +2858,32 @@ CanvasPreview::DragMode CanvasPreview::hit_test_selected(const QPointF &view_pt)
     if (r.adjusted(-handle, -handle, handle, handle).contains(local)) return DragMode::Move;
     return DragMode::None;
 }
+
+CanvasPreview::DragMode CanvasPreview::hit_test_crop_handles(const QPointF &view_pt) const
+{
+    auto layer = selected_layer();
+    if (!layer || layer->locked) return DragMode::None;
+    if (!(layer->type == LayerType::Text || layer->type == LayerType::Clock || layer->type == LayerType::Ticker ||
+          layer->type == LayerType::Image || layer->type == LayerType::SolidRect || layer->type == LayerType::Shape))
+        return DragMode::None;
+    double lt = playhead_ - layer->in_time;
+    QPointF local = canvas_to_layer(*layer, view_to_canvas(view_pt));
+    QRectF crop = evaluated_crop_rect(*layer, lt, layer_local_rect(*layer));
+    double handle = 8.0 / std::max(0.1, view_scale());
+    auto near_pt = [&](const QPointF &p) {
+        return std::abs(local.x() - p.x()) <= handle && std::abs(local.y() - p.y()) <= handle;
+    };
+    if (near_pt(crop.topLeft())) return DragMode::CropNW;
+    if (near_pt(QPointF(crop.center().x(), crop.top()))) return DragMode::CropN;
+    if (near_pt(crop.topRight())) return DragMode::CropNE;
+    if (near_pt(QPointF(crop.right(), crop.center().y()))) return DragMode::CropE;
+    if (near_pt(crop.bottomRight())) return DragMode::CropSE;
+    if (near_pt(QPointF(crop.center().x(), crop.bottom()))) return DragMode::CropS;
+    if (near_pt(crop.bottomLeft())) return DragMode::CropSW;
+    if (near_pt(QPointF(crop.left(), crop.center().y()))) return DragMode::CropW;
+    return DragMode::None;
+}
+
 void CanvasPreview::begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers)
 {
     drag_mode_ = DragMode::Marquee;
@@ -2900,12 +3013,35 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
         return;
     }
 
+
     auto layer = layers.front();
     if (!layer) return;
     double lt = std::clamp(playhead_ - layer->in_time, 0.0,
                            std::max(0.0, layer->out_time - layer->in_time));
 
-    if (drag_mode_ == DragMode::Move) {
+    const bool crop_drag = drag_mode_ == DragMode::CropNW || drag_mode_ == DragMode::CropN || drag_mode_ == DragMode::CropNE ||
+                           drag_mode_ == DragMode::CropE || drag_mode_ == DragMode::CropSE || drag_mode_ == DragMode::CropS ||
+                           drag_mode_ == DragMode::CropSW || drag_mode_ == DragMode::CropW;
+    if (crop_drag) {
+        QPointF local = canvas_to_layer(*layer, canvas);
+        QRectF r = layer_local_rect(*layer);
+        double left = drag_start_crop_left_;
+        double top = drag_start_crop_top_;
+        double right = drag_start_crop_right_;
+        double bottom = drag_start_crop_bottom_;
+        if (drag_mode_ == DragMode::CropNW || drag_mode_ == DragMode::CropSW || drag_mode_ == DragMode::CropW)
+            left = std::clamp(local.x() - r.left(), 0.0, r.width() - right - 1.0);
+        if (drag_mode_ == DragMode::CropNE || drag_mode_ == DragMode::CropSE || drag_mode_ == DragMode::CropE)
+            right = std::clamp(r.right() - local.x(), 0.0, r.width() - left - 1.0);
+        if (drag_mode_ == DragMode::CropNW || drag_mode_ == DragMode::CropNE || drag_mode_ == DragMode::CropN)
+            top = std::clamp(local.y() - r.top(), 0.0, r.height() - bottom - 1.0);
+        if (drag_mode_ == DragMode::CropSW || drag_mode_ == DragMode::CropSE || drag_mode_ == DragMode::CropS)
+            bottom = std::clamp(r.bottom() - local.y(), 0.0, r.height() - top - 1.0);
+        set_animated_value(layer->crop_left, lt, left);
+        set_animated_value(layer->crop_top, lt, top);
+        set_animated_value(layer->crop_right, lt, right);
+        set_animated_value(layer->crop_bottom, lt, bottom);
+    } else if (drag_mode_ == DragMode::Move) {
         if (modifiers & Qt::ShiftModifier) {
             if (std::abs(delta.x()) >= std::abs(delta.y()))
                 delta.setY(0.0);
@@ -2992,8 +3128,11 @@ void CanvasPreview::render_to_pixmap()
         p.scale(layer->scale_x.evaluate(lt), layer->scale_y.evaluate(lt));
 
         QRectF box = layer_local_rect(*layer);
+        QRectF crop_box = evaluated_crop_rect(*layer, lt, box);
 
         if (layer->type == LayerType::SolidRect || layer->type == LayerType::Shape) {
+            p.save();
+            p.setClipRect(crop_box);
             QColor fc = color_from_argb(eval_fill_color(*layer, lt));
             if (eval_shadow_enabled(*layer, lt)) {
                 QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
@@ -3036,9 +3175,12 @@ void CanvasPreview::render_to_pixmap()
             if (!eval_outline_on_front(*layer, lt)) draw_outline();
             draw_shape(QBrush(fc), QPen(Qt::NoPen));
             if (eval_outline_on_front(*layer, lt)) draw_outline();
+            p.restore();
         }
 
         if (layer->type == LayerType::Image) {
+            p.save();
+            p.setClipRect(crop_box);
             if (layer->background_enabled) {
                 QColor bg = evaluated_background_color(*layer);
                 if (bg.alpha() > 0) {
@@ -3059,9 +3201,12 @@ void CanvasPreview::render_to_pixmap()
                 p.drawRect(box);
                 p.drawText(box, Qt::AlignCenter, obsgs_tr("OBSTitles.MissingImage"));
             }
+            p.restore();
         }
 
         if (layer->type == LayerType::Text || layer->type == LayerType::Clock || layer->type == LayerType::Ticker) {
+            p.save();
+            p.setClipRect(crop_box);
             QColor tc = color_from_argb(eval_text_color(*layer, lt));
             QFont f = font_for_layer(*layer);
             p.setFont(f);
@@ -3200,6 +3345,20 @@ void CanvasPreview::paintEvent(QPaintEvent *)
         p.setPen(QPen(QColor(0, 120, 255, handles ? 230 : 150), 1.5 / scale, Qt::DashLine));
         p.drawRect(box);
         if (handles) {
+            QRectF crop = evaluated_crop_rect(layer, lt, box);
+            p.setPen(QPen(QColor(255, 210, 63, 240), 1.5 / scale, Qt::DashLine));
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(crop);
+            p.setPen(QPen(QColor(255, 210, 63, 255), 1.0 / scale));
+            p.setBrush(QColor(255, 245, 160));
+            const QPointF crop_points[] = {
+                crop.topLeft(), QPointF(crop.center().x(), crop.top()), crop.topRight(),
+                QPointF(crop.right(), crop.center().y()), crop.bottomRight(),
+                QPointF(crop.center().x(), crop.bottom()), crop.bottomLeft(),
+                QPointF(crop.left(), crop.center().y())
+            };
+            for (const QPointF &pt : crop_points)
+                p.drawEllipse(pt, handle * 0.36, handle * 0.36);
             p.setPen(QPen(QColor(0, 120, 255, 255), 1.0 / scale));
             p.setBrush(QColor(255, 255, 255));
             const QPointF handle_points[] = {
@@ -3268,7 +3427,7 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
 
     if (ev->button() != Qt::LeftButton) return;
 
-    drag_mode_ = hit_test_selected(ev->pos());
+    drag_mode_ = (ev->modifiers() & Qt::AltModifier) ? hit_test_crop_handles(ev->pos()) : hit_test_selected(ev->pos());
     if (drag_mode_ == DragMode::None) {
         QPointF canvas = view_to_canvas(ev->pos());
         for (auto it = title_->layers.rbegin(); it != title_->layers.rend(); ++it) {
@@ -3334,9 +3493,17 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
     drag_start_h_ = std::max(1.0f, layer->rect_height);
     drag_start_origin_x_ = layer->origin_x;
     drag_start_origin_y_ = layer->origin_y;
+    drag_start_crop_left_ = eval_crop_value(layer->crop_left, lt);
+    drag_start_crop_top_ = eval_crop_value(layer->crop_top, lt);
+    drag_start_crop_right_ = eval_crop_value(layer->crop_right, lt);
+    drag_start_crop_bottom_ = eval_crop_value(layer->crop_bottom, lt);
     auto cursor_for_mode = [](DragMode mode) {
         if (mode == DragMode::Move) return Qt::ClosedHandCursor;
         if (mode == DragMode::Origin) return Qt::CrossCursor;
+        if (mode == DragMode::CropN || mode == DragMode::CropS) return Qt::SizeVerCursor;
+        if (mode == DragMode::CropE || mode == DragMode::CropW) return Qt::SizeHorCursor;
+        if (mode == DragMode::CropNE || mode == DragMode::CropSW) return Qt::SizeBDiagCursor;
+        if (mode == DragMode::CropNW || mode == DragMode::CropSE) return Qt::SizeFDiagCursor;
         if (mode == DragMode::ResizeN || mode == DragMode::ResizeS) return Qt::SizeVerCursor;
         if (mode == DragMode::ResizeE || mode == DragMode::ResizeW) return Qt::SizeHorCursor;
         if (mode == DragMode::ResizeNE || mode == DragMode::ResizeSW) return Qt::SizeBDiagCursor;
@@ -3362,7 +3529,7 @@ void CanvasPreview::mouseMoveEvent(QMouseEvent *ev)
         return;
     }
 
-    DragMode mode = hit_test_selected(ev->pos());
+    DragMode mode = (ev->modifiers() & Qt::AltModifier) ? hit_test_crop_handles(ev->pos()) : hit_test_selected(ev->pos());
     if (mode == DragMode::Move) setCursor(Qt::OpenHandCursor);
     else if (mode == DragMode::Origin) setCursor(Qt::CrossCursor);
     else if (mode == DragMode::ResizeN || mode == DragMode::ResizeS) setCursor(Qt::SizeVerCursor);
@@ -4182,19 +4349,13 @@ void TimelineWidget::paintEvent(QPaintEvent *)
                 int kx = time_to_x(layer->in_time + kf.time);
                 if (kx < 0 || kx > W) continue;
                 int ky = y + rowh / 2;
-                QPolygon diamond;
-                diamond << QPoint(kx,     ky - 5)
-                        << QPoint(kx + 5, ky)
-                        << QPoint(kx,     ky + 5)
-                        << QPoint(kx - 5, ky);
-                QColor kf_fill = layer_color(*layer, row);
-                if (!layer->visible) {
-                    const int gray = qGray(kf_fill.rgb());
-                    kf_fill = QColor(gray, gray, gray).darker(135);
-                }
-                p.setBrush(kf_fill);
+                p.setBrush(Qt::NoBrush);
                 p.setPen(QPen(keyframe_color(kf.easing), 1));
-                p.drawPolygon(diamond);
+                QFont symbol_font = p.font();
+                symbol_font.setPixelSize(13);
+                symbol_font.setBold(true);
+                p.setFont(symbol_font);
+                p.drawText(QRect(kx - 8, ky - 8, 16, 16), Qt::AlignCenter, keyframe_symbol(kf.easing));
             }
         };
 
@@ -4270,17 +4431,41 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     std::shared_ptr<Layer> layer;
     AnimatedProperty *hit_prop = nullptr;
     int hit_idx = -1;
-    if (!hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr)) return;
+    if (!hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr)) {
+        auto rows = timeline_rows(title_);
+        int row = (ev->pos().y() - ruler_height() + scroll_y_) / row_height();
+        if (row >= 0 && row < (int)rows.size() && rows[row].is_property && rows[row].layer && rows[row].prop && !rows[row].layer->locked) {
+            QMenu prop_menu(this);
+            QAction *restore = prop_menu.addAction(QStringLiteral("Restore to Defaults"));
+            QAction *chosen = prop_menu.exec(ev->globalPos());
+            if (chosen == restore) {
+                restore_property_defaults(*rows[row].layer, *rows[row].prop);
+                update();
+                emit keyframe_easing_changed();
+            }
+        }
+        return;
+    }
     if (layer && layer->locked) return;
+
+    QAction *delete_all = nullptr;
 
     const bool has_previous_segment = hit_idx > 0;
     const bool has_next_segment = hit_idx + 1 < (int)hit_prop->keyframes.size();
     if (!has_previous_segment && !has_next_segment) {
         QMenu menu(this);
         menu.setTitle(obsgs_tr("OBSTitles.KeyframeEasing"));
+        QAction *delete_only = hit_prop && !hit_prop->keyframes.empty()
+            ? menu.addAction(QStringLiteral("Delete All Keyframes")) : nullptr;
+        if (delete_only) menu.addSeparator();
         QAction *message = menu.addAction(obsgs_tr("OBSTitles.AddKeyframeForEasing"));
         message->setEnabled(false);
-        menu.exec(ev->globalPos());
+        QAction *chosen = menu.exec(ev->globalPos());
+        if (chosen == delete_only) {
+            hit_prop->keyframes.clear();
+            update();
+            emit keyframe_easing_changed();
+        }
         return;
     }
 
@@ -4314,15 +4499,22 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
         : has_next_segment ? obsgs_tr("OBSTitles.EasingNextSegment") : obsgs_tr("OBSTitles.EasingPreviousSegment"));
     scope->setEnabled(false);
     menu.addSeparator();
+    if (hit_prop && !hit_prop->keyframes.empty()) {
+        delete_all = menu.addAction(QStringLiteral("Delete All Keyframes"));
+        menu.addSeparator();
+    }
 
     auto swatch_icon = [](EasingType easing) {
         QPixmap swatch(12, 12);
         swatch.fill(Qt::transparent);
         QPainter painter(&swatch);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setBrush(keyframe_color(easing));
-        painter.setPen(Qt::NoPen);
-        painter.drawEllipse(1, 1, 10, 10);
+        painter.setPen(keyframe_color(easing));
+        QFont font = painter.font();
+        font.setPixelSize(11);
+        font.setBold(true);
+        painter.setFont(font);
+        painter.drawText(QRect(0, 0, 12, 12), Qt::AlignCenter, keyframe_symbol(easing));
         return QIcon(swatch);
     };
 
@@ -4352,7 +4544,7 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
                  {obsgs_tr("OBSTitles.Hold"), EasingType::Hold},
                  {obsgs_tr("OBSTitles.CustomBezier"), EasingType::Bezier},
              }) {
-            add_easing_action(target_menu, label, easing, indices)->setActionGroup(group);
+            add_easing_action(target_menu, QStringLiteral("%1  %2").arg(keyframe_symbol(easing), label), easing, indices)->setActionGroup(group);
         }
     };
 
@@ -4369,6 +4561,12 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
 
     QAction *chosen = menu.exec(ev->globalPos());
     if (!chosen) return;
+    if (chosen == delete_all) {
+        hit_prop->keyframes.clear();
+        update();
+        emit keyframe_easing_changed();
+        return;
+    }
 
     auto choice = std::find_if(choices.begin(), choices.end(),
                                [&](const EasingChoice &candidate) { return candidate.action == chosen; });
@@ -5181,6 +5379,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_text_fit_min_scale_ = mk_dspin(0.05, 1.0, 0.05);
     spn_text_fit_min_scale_->setDecimals(2);
     spn_text_fit_min_scale_->setToolTip(obsgs_tr("OBSTitles.MinFitScaleTooltip"));
+    chk_text_auto_size_ = new QCheckBox(QStringLiteral("Auto Size"), inner);
+    style_checkbox(chk_text_auto_size_);
+    spn_max_text_w_ = mk_dspin(1.0, 9999.0, 10.0);
+    spn_max_text_h_ = mk_dspin(1.0, 9999.0, 10.0);
     lbl_text_fit_scale_ = new QLabel(obsgs_tr("OBSTitles.Scale100"), inner);
     lbl_text_fit_scale_->setStyleSheet("color:#999;font-size:10px;");
     chk_expose_text_ = new QCheckBox(obsgs_tr("OBSTitles.ExposeInDock"), inner);
@@ -5203,6 +5405,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     dynamic_form->addRow(obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
     dynamic_form->addRow(obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
     dynamic_form->addRow("", lbl_text_fit_scale_);
+    dynamic_form->addRow(QStringLiteral("Auto Size"), chk_text_auto_size_);
+    dynamic_form->addRow(QStringLiteral("Max Text Box Width"), spn_max_text_w_);
+    dynamic_form->addRow(QStringLiteral("Max Text Box Height"), spn_max_text_h_);
     dynamic_form->addRow(obsgs_tr("OBSTitles.LiveEditLabel"), chk_expose_text_);
     dynamic_form->addRow(obsgs_tr("OBSTitles.TickerStyleLabel"), cmb_ticker_style_);
     dynamic_form->addRow(obsgs_tr("OBSTitles.TickerSpeedLabel"), spn_ticker_speed_);
@@ -5233,8 +5438,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_rect_corner_ = mk_dspin(0.0, 1000.0, 1.0);
     btn_kf_width_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleWidthKeyframe"));
     btn_kf_height_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleHeightKeyframe"));
-    rfl->addRow(obsgs_tr("OBSTitles.WidthLabel"), with_kf(spn_layer_w_, btn_kf_width_));
-    rfl->addRow(obsgs_tr("OBSTitles.HeightLabel"), with_kf(spn_layer_h_, btn_kf_height_));
+    rfl->addRow(QStringLiteral("Text Width"), with_kf(spn_layer_w_, btn_kf_width_));
+    rfl->addRow(QStringLiteral("Text Height"), with_kf(spn_layer_h_, btn_kf_height_));
     rfl->addRow(obsgs_tr("OBSTitles.CornerLabel"), with_kf(spn_rect_corner_, mk_kf_button(obsgs_tr("OBSTitles.ToggleCornerKeyframe"))));
     btn_fill_color_ = new QPushButton(inner);
     btn_kf_fill_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleFillColorKeyframe"));
@@ -5252,6 +5457,18 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     rfl->addRow(obsgs_tr("OBSTitles.BackgroundOpacityLabel"), spn_background_opacity_);
     rfl->addRow(obsgs_tr("OBSTitles.BackgroundPaddingLabel"), spn_background_padding_);
     rfl->addRow(obsgs_tr("OBSTitles.BackgroundCornerLabel"), spn_background_corner_);
+    spn_crop_left_ = mk_dspin(0.0, 9999.0, 1.0);
+    spn_crop_top_ = mk_dspin(0.0, 9999.0, 1.0);
+    spn_crop_right_ = mk_dspin(0.0, 9999.0, 1.0);
+    spn_crop_bottom_ = mk_dspin(0.0, 9999.0, 1.0);
+    btn_kf_crop_left_ = mk_kf_button(QStringLiteral("Toggle crop-left keyframe"));
+    btn_kf_crop_top_ = mk_kf_button(QStringLiteral("Toggle crop-top keyframe"));
+    btn_kf_crop_right_ = mk_kf_button(QStringLiteral("Toggle crop-right keyframe"));
+    btn_kf_crop_bottom_ = mk_kf_button(QStringLiteral("Toggle crop-bottom keyframe"));
+    rfl->addRow(QStringLiteral("Crop Left"), with_kf(spn_crop_left_, btn_kf_crop_left_));
+    rfl->addRow(QStringLiteral("Crop Top"), with_kf(spn_crop_top_, btn_kf_crop_top_));
+    rfl->addRow(QStringLiteral("Crop Right"), with_kf(spn_crop_right_, btn_kf_crop_right_));
+    rfl->addRow(QStringLiteral("Crop Bottom"), with_kf(spn_crop_bottom_, btn_kf_crop_bottom_));
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
     spn_outline_width_->setToolTip(obsgs_tr("OBSTitles.OutlineWidthTooltip"));
     btn_outline_color_ = new QPushButton(inner);
@@ -5520,6 +5737,13 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, emit_change](double v) {
                 if (can_edit()) { layer_->text_fit_min_scale = (float)v; emit_change(); }
             });
+    connect(chk_text_auto_size_, &QCheckBox::toggled, this, [this, can_edit, emit_change](bool v) {
+        if (can_edit()) { layer_->text_auto_size = v; emit_change(); load_values(); }
+    });
+    connect(spn_max_text_w_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) { if (can_edit()) { layer_->max_text_box_width = (float)v; emit_change(); } });
+    connect(spn_max_text_h_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) { if (can_edit()) { layer_->max_text_box_height = (float)v; emit_change(); } });
     connect(cmb_ticker_style_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, can_edit, emit_change](int idx) {
                 if (can_edit()) { layer_->ticker_style = cmb_ticker_style_->itemData(idx).toInt(); emit_change(); load_values(); }
@@ -5668,6 +5892,17 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                 }
                 emit_change();
             });
+    auto connect_crop_spin = [&](QDoubleSpinBox *spin, AnimatedProperty Layer::*member) {
+        connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, [this, can_edit, local_time, emit_change, member](double v) {
+                    if (can_edit()) { set_animated_value(layer_.get()->*member, local_time(), v); emit_change(); }
+                });
+    };
+    connect_crop_spin(spn_crop_left_, &Layer::crop_left);
+    connect_crop_spin(spn_crop_top_, &Layer::crop_top);
+    connect_crop_spin(spn_crop_right_, &Layer::crop_right);
+    connect_crop_spin(spn_crop_bottom_, &Layer::crop_bottom);
+
     connect(spn_rect_corner_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, emit_change](double v){
                 if (can_edit()) { layer_->corner_radius = (float)v; emit_change(); }
@@ -5824,6 +6059,19 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         load_values();
         emit_change();
     });
+    auto connect_crop_kf = [&](QPushButton *button, QDoubleSpinBox *spin, AnimatedProperty Layer::*member) {
+        connect(button, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change, spin, member]() {
+            if (!can_edit()) return;
+            toggle_keyframe(layer_.get()->*member, local_time(), spin->value());
+            load_values();
+            emit_change();
+        });
+    };
+    connect_crop_kf(btn_kf_crop_left_, spn_crop_left_, &Layer::crop_left);
+    connect_crop_kf(btn_kf_crop_top_, spn_crop_top_, &Layer::crop_top);
+    connect_crop_kf(btn_kf_crop_right_, spn_crop_right_, &Layer::crop_right);
+    connect_crop_kf(btn_kf_crop_bottom_, spn_crop_bottom_, &Layer::crop_bottom);
+
     connect(btn_kf_text_color_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
         if (!can_edit()) return;
         double t = local_time();
@@ -5990,6 +6238,9 @@ void PropertiesPanel::load_values()
         if (cmb_text_style_) cmb_text_style_->setCurrentIndex(0);
         if (cmb_text_overflow_) cmb_text_overflow_->setCurrentIndex(0);
         if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setValue(0.5);
+        if (chk_text_auto_size_) chk_text_auto_size_->setChecked(false);
+        if (spn_max_text_w_) spn_max_text_w_->setValue(1920.0);
+        if (spn_max_text_h_) spn_max_text_h_->setValue(1080.0);
         if (lbl_text_fit_scale_) lbl_text_fit_scale_->setText(obsgs_tr("OBSTitles.Scale100"));
         if (cmb_text_align_) cmb_text_align_->setCurrentIndex(1);
         if (cmb_text_valign_) cmb_text_valign_->setCurrentIndex(1);
@@ -6004,6 +6255,7 @@ void PropertiesPanel::load_values()
         if (spn_shadow_spread_) spn_shadow_spread_->setValue(0.0);
         for (auto *b : {btn_kf_pos_x_, btn_kf_pos_y_, btn_kf_rotation_, btn_kf_opacity_,
                         btn_kf_origin_x_, btn_kf_origin_y_, btn_kf_width_, btn_kf_height_,
+                        btn_kf_crop_left_, btn_kf_crop_top_, btn_kf_crop_right_, btn_kf_crop_bottom_,
                         btn_kf_text_color_, btn_kf_fill_color_, btn_kf_shadow_enabled_,
                         btn_kf_shadow_opacity_, btn_kf_shadow_distance_, btn_kf_shadow_angle_,
                         btn_kf_shadow_blur_, btn_kf_shadow_spread_, btn_kf_shadow_color_}) {
@@ -6028,16 +6280,26 @@ void PropertiesPanel::load_values()
     text_box_->setVisible(is_text_like);
     if (type_options_box_) type_options_box_->setVisible(is_text_like);
     if (paragraph_box_) paragraph_box_->setVisible(is_text_like);
-    if (dynamic_text_box_) dynamic_text_box_->setVisible(is_text_like);
+    if (dynamic_text_box_) dynamic_text_box_->setVisible(is_text_like || is_image);
     if (bullets_box_) bullets_box_->setVisible(is_text_like);
     text_box_->setTitle("Character");
     txt_content_->setPlaceholderText(is_clock ? "H:i:s" : obsgs_tr("OBSTitles.EnterTextPlaceholder"));
     if (spn_text_fit_min_scale_) spn_text_fit_min_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2 && !is_ticker);
     if (lbl_text_fit_scale_) lbl_text_fit_scale_->setVisible(is_text_like && layer_->text_overflow_mode == 2 && !is_ticker);
+    if (chk_text_auto_size_) chk_text_auto_size_->setVisible(is_text_like);
+    if (spn_max_text_w_) spn_max_text_w_->setVisible(is_text_like && layer_->text_auto_size);
+    if (spn_max_text_h_) spn_max_text_h_->setVisible(is_text_like && layer_->text_auto_size);
     if (auto *dynamic_form = qobject_cast<QFormLayout *>(dynamic_text_box_ ? dynamic_text_box_->layout() : nullptr)) {
         const bool show_ticker_fit = is_text_like && layer_->text_overflow_mode == 2 && !is_ticker;
+        for (QWidget *field : std::initializer_list<QWidget *>{cmb_text_style_, cmb_text_overflow_}) {
+            if (field) field->setVisible(is_text_like);
+            if (auto *label = dynamic_form->labelForField(field)) label->setVisible(is_text_like);
+        }
         if (auto *label = dynamic_form->labelForField(spn_text_fit_min_scale_))
             label->setVisible(show_ticker_fit);
+        if (auto *label = dynamic_form->labelForField(chk_text_auto_size_)) label->setVisible(is_text_like);
+        if (auto *label = dynamic_form->labelForField(spn_max_text_w_)) label->setVisible(is_text_like && layer_->text_auto_size);
+        if (auto *label = dynamic_form->labelForField(spn_max_text_h_)) label->setVisible(is_text_like && layer_->text_auto_size);
         if (cmb_ticker_style_) {
             cmb_ticker_style_->setVisible(is_ticker);
             if (auto *label = dynamic_form->labelForField(cmb_ticker_style_)) label->setVisible(is_ticker);
@@ -6055,14 +6317,20 @@ void PropertiesPanel::load_values()
             if (auto *label = dynamic_form->labelForField(cmb_ticker_direction_)) label->setVisible(is_ticker);
         }
         if (chk_expose_text_) {
-            chk_expose_text_->setVisible(is_text || is_ticker);
+            const bool can_expose = is_text || is_ticker || is_image;
+            chk_expose_text_->setVisible(can_expose);
+            chk_expose_text_->setText(is_image ? QStringLiteral("Expose Image to Live Text Cues") : obsgs_tr("OBSTitles.ExposeInDock"));
             if (auto *label = dynamic_form->labelForField(chk_expose_text_))
-                label->setVisible(is_text || is_ticker);
+                label->setVisible(can_expose);
         }
     }
     rect_box_->setVisible(is_text_like || is_rect || is_image);
     rect_box_->setTitle(is_text_like ? (is_clock ? obsgs_tr("OBSTitles.ClockBox") : (is_ticker ? obsgs_tr("OBSTitles.TickerBox") : obsgs_tr("OBSTitles.TextBox"))) : (is_image ? obsgs_tr("OBSTitles.ImageSize") : obsgs_tr("OBSTitles.ShapeGeometryFill")));
     spn_rect_corner_->setVisible(is_rect);
+    const bool supports_crop = is_text_like || is_rect || is_image;
+    for (QWidget *w : std::initializer_list<QWidget *>{spn_crop_left_, spn_crop_top_, spn_crop_right_, spn_crop_bottom_,
+                                                        btn_kf_crop_left_, btn_kf_crop_top_, btn_kf_crop_right_, btn_kf_crop_bottom_})
+        if (w) w->setVisible(supports_crop);
     btn_fill_color_->setVisible(is_rect);
     btn_kf_text_color_->setVisible(is_text_like);
     btn_kf_fill_color_->setVisible(is_rect);
@@ -6085,6 +6353,8 @@ void PropertiesPanel::load_values()
     if (auto *form = qobject_cast<QFormLayout *>(rect_box_->layout())) {
         if (auto *label = form->labelForField(spn_rect_corner_))
             label->setVisible(is_rect);
+        for (QWidget *field : std::initializer_list<QWidget *>{spn_crop_left_, spn_crop_top_, spn_crop_right_, spn_crop_bottom_})
+            if (auto *label = form->labelForField(field)) label->setVisible(supports_crop);
         if (auto *label = form->labelForField(row_fill_color_))
             label->setVisible(is_rect);
         for (QWidget *field : std::initializer_list<QWidget *>{btn_background_color_, spn_background_opacity_, spn_background_padding_, spn_background_corner_})
@@ -6117,6 +6387,10 @@ void PropertiesPanel::load_values()
 
     spn_layer_w_->setValue(eval_box_width(*layer_, lt));
     spn_layer_h_->setValue(eval_box_height(*layer_, lt));
+    if (spn_crop_left_) spn_crop_left_->setValue(eval_crop_value(layer_->crop_left, lt));
+    if (spn_crop_top_) spn_crop_top_->setValue(eval_crop_value(layer_->crop_top, lt));
+    if (spn_crop_right_) spn_crop_right_->setValue(eval_crop_value(layer_->crop_right, lt));
+    if (spn_crop_bottom_) spn_crop_bottom_->setValue(eval_crop_value(layer_->crop_bottom, lt));
     spn_rect_corner_->setValue(layer_->corner_radius);
     edit_image_path_->setText(QString::fromStdString(layer_->image_path));
     chk_lock_aspect_->setChecked(layer_->lock_aspect_ratio);
@@ -6164,6 +6438,10 @@ void PropertiesPanel::load_values()
     set_prop_kf_icon(btn_kf_origin_y_, layer_->origin_y_prop);
     set_prop_kf_icon(btn_kf_width_, layer_->box_width);
     set_prop_kf_icon(btn_kf_height_, layer_->box_height);
+    set_prop_kf_icon(btn_kf_crop_left_, layer_->crop_left);
+    set_prop_kf_icon(btn_kf_crop_top_, layer_->crop_top);
+    set_prop_kf_icon(btn_kf_crop_right_, layer_->crop_right);
+    set_prop_kf_icon(btn_kf_crop_bottom_, layer_->crop_bottom);
     set_group_kf_icon(btn_kf_text_color_, {&layer_->text_color_a, &layer_->text_color_r,
                                            &layer_->text_color_g, &layer_->text_color_b});
     set_group_kf_icon(btn_kf_fill_color_, {&layer_->fill_color_a, &layer_->fill_color_r,
@@ -6231,6 +6509,9 @@ void PropertiesPanel::load_values()
     int overflow_idx = cmb_text_overflow_->findData(layer_->text_overflow_mode);
     cmb_text_overflow_->setCurrentIndex(overflow_idx >= 0 ? overflow_idx : 0);
     spn_text_fit_min_scale_->setValue(layer_->text_fit_min_scale);
+    if (chk_text_auto_size_) chk_text_auto_size_->setChecked(layer_->text_auto_size);
+    if (spn_max_text_w_) spn_max_text_w_->setValue(layer_->max_text_box_width);
+    if (spn_max_text_h_) spn_max_text_h_->setValue(layer_->max_text_box_height);
     bool is_fit = layer_->text_overflow_mode == 2 && !is_ticker;
     spn_text_fit_min_scale_->setVisible(is_fit);
     lbl_text_fit_scale_->setVisible(is_fit);

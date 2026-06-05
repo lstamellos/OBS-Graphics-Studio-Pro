@@ -137,6 +137,9 @@ struct Layer {
     std::string text_language = "English";
     int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
     float       text_fit_min_scale = 0.5f;
+    bool        text_auto_size = false;
+    float       max_text_box_width = 1920.0f;
+    float       max_text_box_height = 1080.0f;
 
     /* ----- Ticker-specific -----
      * style: 0=horizontal scrolling, 1=vertical line-by-line, 2=vertical smooth.
@@ -181,6 +184,10 @@ struct Layer {
      */
     AnimatedProperty box_width  { "box_width",  1920.0 };
     AnimatedProperty box_height { "box_height", 100.0 };
+    AnimatedProperty crop_left   { "crop_left",   0.0 };
+    AnimatedProperty crop_top    { "crop_top",    0.0 };
+    AnimatedProperty crop_right  { "crop_right",  0.0 };
+    AnimatedProperty crop_bottom { "crop_bottom", 0.0 };
 
     /* ----- Geometry anchor / origin -----
      * Normalized inside the editable bounding box: 0.0 = left/top,
