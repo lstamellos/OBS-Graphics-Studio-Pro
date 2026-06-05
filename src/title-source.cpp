@@ -154,6 +154,15 @@ static bool layer_has_animation(const Layer &layer)
            layer.shadow_color_r.is_animated() ||
            layer.shadow_color_g.is_animated() ||
            layer.shadow_color_b.is_animated() ||
+           layer.background_enabled_prop.is_animated() ||
+           layer.background_opacity_prop.is_animated() ||
+           layer.background_padding_x_prop.is_animated() ||
+           layer.background_padding_y_prop.is_animated() ||
+           layer.background_corner_radius_prop.is_animated() ||
+           layer.background_color_a.is_animated() ||
+           layer.background_color_r.is_animated() ||
+           layer.background_color_g.is_animated() ||
+           layer.background_color_b.is_animated() ||
            layer.text_color_a.is_animated() ||
            layer.text_color_r.is_animated() ||
            layer.text_color_g.is_animated() ||
@@ -196,6 +205,15 @@ static bool layer_animation_keyframe_bounds(const Layer &layer, double &first_ti
     has_bounds |= include_property_bounds(layer, layer.shadow_color_r, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.shadow_color_g, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.shadow_color_b, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_enabled_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_opacity_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_padding_x_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_padding_y_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_corner_radius_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_color_a, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_color_r, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_color_g, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.background_color_b, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.text_color_a, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.text_color_r, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.text_color_g, first_time, last_time);
@@ -336,19 +354,89 @@ static void unpack_color(uint32_t c,
 }
 
 
+static QFont font_for_layer(const Layer &layer);
+static QString display_text_for_style(const Layer &layer);
+static QString overflow_layout_text(const QString &text, const Layer &layer);
+
+static bool is_text_box_auto_size_layer(const Layer &layer)
+{
+    return layer.type == LayerType::Text || layer.type == LayerType::Clock;
+}
+
+static double natural_text_width(const Layer &layer)
+{
+    if (!is_text_box_auto_size_layer(layer)) return 1.0;
+    QFontMetricsF metrics(font_for_layer(layer));
+    QString text = display_text_for_style(layer);
+    if (layer.text_overflow_mode == 2)
+        text = overflow_layout_text(text, layer);
+
+    double width = 1.0;
+    for (const QString &line : text.split('\n'))
+        width = std::max(width, static_cast<double>(metrics.horizontalAdvance(line)));
+    return std::ceil(width);
+}
+
+static double natural_text_height(const Layer &layer, double width)
+{
+    if (!is_text_box_auto_size_layer(layer)) return 1.0;
+    QFont font = font_for_layer(layer);
+    QFontMetricsF metrics(font);
+    QString text = display_text_for_style(layer);
+    if (layer.text_overflow_mode == 2)
+        text = overflow_layout_text(text, layer);
+
+    QTextOption option;
+    option.setWrapMode(layer.text_overflow_mode == 0
+                           ? QTextOption::WrapAtWordBoundaryOrAnywhere
+                           : QTextOption::NoWrap);
+
+    double total_height = 0.0;
+    const double leading = std::clamp((double)layer.text_leading, -200.0, 500.0);
+    bool first_line = true;
+    for (const QString &paragraph : text.split('\n')) {
+        if (paragraph.isEmpty()) {
+            if (!first_line) total_height += leading;
+            total_height += metrics.lineSpacing();
+            first_line = false;
+            continue;
+        }
+        QTextLayout layout(paragraph, font);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            line.setLineWidth(layer.text_overflow_mode == 0 ? std::max(1.0, width) : 1000000.0);
+            if (!first_line) total_height += leading;
+            total_height += line.height();
+            first_line = false;
+            if (layer.text_overflow_mode != 0) break;
+        }
+        layout.endLayout();
+    }
+    return std::ceil(std::max(1.0, total_height));
+}
+
 static double eval_box_width(const Layer &layer, double t)
 {
-    const double width = layer.box_width.is_animated()
+    double width = layer.box_width.is_animated()
         ? layer.box_width.evaluate(t)
         : static_cast<double>(layer.rect_width);
+    if (layer.text_box_width_to_text && is_text_box_auto_size_layer(layer))
+        width = std::min(natural_text_width(layer), std::max(1.0, (double)layer.max_text_box_width));
     return width < 1.0 ? 1.0 : width;
 }
 
 static double eval_box_height(const Layer &layer, double t)
 {
-    const double height = layer.box_height.is_animated()
+    double height = layer.box_height.is_animated()
         ? layer.box_height.evaluate(t)
         : static_cast<double>(layer.rect_height);
+    if (layer.text_box_height_to_text && is_text_box_auto_size_layer(layer)) {
+        const double width = eval_box_width(layer, t);
+        height = std::min(natural_text_height(layer, width), std::max(1.0, (double)layer.max_text_box_height));
+    }
     return height < 1.0 ? 1.0 : height;
 }
 
@@ -824,10 +912,54 @@ static QColor color_from_argb(uint32_t argb)
                   (argb >> 24) & 0xFF);
 }
 
-static QColor evaluated_background_color(const Layer &layer)
+static bool eval_background_enabled(const Layer &layer, double t)
 {
-    QColor color = color_from_argb(layer.background_color);
-    color.setAlphaF(std::clamp((double)color.alphaF() * (double)layer.background_opacity, 0.0, 1.0));
+    return layer.background_enabled_prop.is_animated()
+        ? layer.background_enabled_prop.evaluate(t) >= 0.5
+        : layer.background_enabled;
+}
+
+static double eval_background_opacity(const Layer &layer, double t)
+{
+    return std::clamp(layer.background_opacity_prop.is_animated()
+                          ? layer.background_opacity_prop.evaluate(t)
+                          : (double)layer.background_opacity,
+                      0.0, 1.0);
+}
+
+static double eval_background_padding_x(const Layer &layer, double t)
+{
+    return std::max(0.0, layer.background_padding_x_prop.is_animated()
+                             ? layer.background_padding_x_prop.evaluate(t)
+                             : (double)layer.background_padding_x);
+}
+
+static double eval_background_padding_y(const Layer &layer, double t)
+{
+    return std::max(0.0, layer.background_padding_y_prop.is_animated()
+                             ? layer.background_padding_y_prop.evaluate(t)
+                             : (double)layer.background_padding_y);
+}
+
+static double eval_background_corner_radius(const Layer &layer, double t)
+{
+    return std::max(0.0, layer.background_corner_radius_prop.is_animated()
+                             ? layer.background_corner_radius_prop.evaluate(t)
+                             : (double)layer.background_corner_radius);
+}
+
+static uint32_t eval_background_color(const Layer &layer, double t)
+{
+    return ((uint32_t)eval_channel(layer.background_color_a, (layer.background_color >> 24) & 0xFF, t) << 24) |
+           ((uint32_t)eval_channel(layer.background_color_r, (layer.background_color >> 16) & 0xFF, t) << 16) |
+           ((uint32_t)eval_channel(layer.background_color_g, (layer.background_color >> 8) & 0xFF, t) << 8) |
+           (uint32_t)eval_channel(layer.background_color_b, layer.background_color & 0xFF, t);
+}
+
+static QColor evaluated_background_color(const Layer &layer, double t)
+{
+    QColor color = color_from_argb(eval_background_color(layer, t));
+    color.setAlphaF(std::clamp((double)color.alphaF() * eval_background_opacity(layer, t), 0.0, 1.0));
     return color;
 }
 
@@ -852,8 +984,8 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     int pad = eval_shadow_enabled(layer, t)
         ? (int)std::ceil(std::max(std::abs(off.x()), std::abs(off.y())) + blur + spread + 4.0)
         : 0;
-    if (layer.background_enabled)
-        pad += (int)std::ceil(std::max(0.0f, layer.background_padding));
+    if (eval_background_enabled(layer, t))
+        pad += (int)std::ceil(std::max(eval_background_padding_x(layer, t), eval_background_padding_y(layer, t)));
     int img_w = std::max(1, (int)std::ceil(box_w) + pad * 2);
     int img_h = std::max(1, (int)std::ceil(box_h) + pad * 2);
     QImage text_image(img_w, img_h, QImage::Format_ARGB32_Premultiplied);
@@ -869,14 +1001,16 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     painter.setFont(font);
 
     QRectF base_rect(pad, pad, box_w, box_h);
-    if (layer.background_enabled) {
-        const double bg_pad = std::max(0.0f, layer.background_padding);
-        QRectF bg_rect = base_rect.adjusted(-bg_pad, -bg_pad, bg_pad, bg_pad);
-        QColor bg = evaluated_background_color(layer);
+    if (eval_background_enabled(layer, t)) {
+        const double bg_pad_x = eval_background_padding_x(layer, t);
+        const double bg_pad_y = eval_background_padding_y(layer, t);
+        const double bg_corner = eval_background_corner_radius(layer, t);
+        QRectF bg_rect = base_rect.adjusted(-bg_pad_x, -bg_pad_y, bg_pad_x, bg_pad_y);
+        QColor bg = evaluated_background_color(layer, t);
         if (bg.alpha() > 0) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(bg);
-            painter.drawRoundedRect(bg_rect, layer.background_corner_radius, layer.background_corner_radius);
+            painter.drawRoundedRect(bg_rect, bg_corner, bg_corner);
         }
     }
 
@@ -1081,17 +1215,18 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
     cairo_scale(cr, sx, sy);
     const double origin_x = eval_origin_x(layer, t);
     const double origin_y = eval_origin_y(layer, t);
-    if (layer.background_enabled) {
-        const double bg_pad = std::max(0.0f, layer.background_padding);
-        QColor bg = evaluated_background_color(layer);
+    if (eval_background_enabled(layer, t)) {
+        const double bg_pad_x = eval_background_padding_x(layer, t);
+        const double bg_pad_y = eval_background_padding_y(layer, t);
+        QColor bg = evaluated_background_color(layer, t);
         double br, bgc, bb, ba;
         br = bg.redF(); bgc = bg.greenF(); bb = bg.blueF(); ba = bg.alphaF();
         if (ba > 0.0) {
-            const double x = -origin_x * w - bg_pad;
-            const double y = -origin_y * h - bg_pad;
-            const double bw = w + bg_pad * 2.0;
-            const double bh = h + bg_pad * 2.0;
-            const double radius = std::min<double>(layer.background_corner_radius, std::min(bw, bh) / 2.0);
+            const double x = -origin_x * w - bg_pad_x;
+            const double y = -origin_y * h - bg_pad_y;
+            const double bw = w + bg_pad_x * 2.0;
+            const double bh = h + bg_pad_y * 2.0;
+            const double radius = std::min<double>(eval_background_corner_radius(layer, t), std::min(bw, bh) / 2.0);
             if (radius > 0.0) {
                 cairo_new_sub_path(cr);
                 cairo_arc(cr, x + radius,      y + radius,      radius, kPi,     3*kPi/2);

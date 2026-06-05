@@ -137,6 +137,10 @@ struct Layer {
     std::string text_language = "English";
     int         text_overflow_mode = 0;  /* 0=wrap, 1=clip, 2=horizontal fit */
     float       text_fit_min_scale = 0.5f;
+    bool        text_box_width_to_text = false;
+    bool        text_box_height_to_text = false;
+    float       max_text_box_width = 1920.0f;
+    float       max_text_box_height = 1080.0f;
 
     /* ----- Ticker-specific -----
      * style: 0=horizontal scrolling, 1=vertical line-by-line, 2=vertical smooth.
@@ -169,8 +173,18 @@ struct Layer {
     bool        background_enabled = false;
     uint32_t    background_color = 0xFF000000;
     float       background_opacity = 0.35f;
-    float       background_padding = 16.0f;
+    float       background_padding_x = 0.0f;
+    float       background_padding_y = 0.0f;
     float       background_corner_radius = 0.0f;
+    AnimatedProperty background_enabled_prop { "background_enabled", 0.0 };
+    AnimatedProperty background_opacity_prop { "background_opacity", 0.35 };
+    AnimatedProperty background_padding_x_prop { "background_padding_x", 0.0 };
+    AnimatedProperty background_padding_y_prop { "background_padding_y", 0.0 };
+    AnimatedProperty background_corner_radius_prop { "background_corner_radius", 0.0 };
+    AnimatedProperty background_color_a { "background_color_a", 255.0 };
+    AnimatedProperty background_color_r { "background_color_r", 0.0 };
+    AnimatedProperty background_color_g { "background_color_g", 0.0 };
+    AnimatedProperty background_color_b { "background_color_b", 0.0 };
 
     float       rect_width    = 1920.0f;
     float       rect_height   = 100.0f;
