@@ -1267,10 +1267,10 @@ void TitleDock::build_ui()
                                             obsgs_tr("OBSTitles.MoveCueUpTooltip"));
     btn_row_down_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.MoveDown"), obs_icon("move-down.svg"),
                                               obsgs_tr("OBSTitles.MoveCueDownTooltip"));
-    btn_data_sources_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.DataSources"), QIcon(),
+    btn_data_sources_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.DataSources"),
+                                                  obs_icon("data-sources.svg"),
                                                   obsgs_tr("OBSTitles.DataSourcesTooltip"));
-    btn_data_sources_->setText(obsgs_tr("OBSTitles.DataSources"));
-    btn_data_sources_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    btn_data_sources_->setToolButtonStyle(Qt::ToolButtonIconOnly);
     auto *data_sources_menu = new QMenu(btn_data_sources_);
     data_sources_menu->addAction(obs_icon("import.svg"), obsgs_tr("OBSTitles.ImportData"),
                                  this, &TitleDock::on_import_live_text_data);
@@ -1285,9 +1285,14 @@ void TitleDock::build_ui()
                                  this, &TitleDock::on_show_external_data_settings);
     btn_data_sources_->setMenu(data_sources_menu);
     btn_data_sources_->setPopupMode(QToolButton::InstantPopup);
+    btn_data_sources_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
     btn_external_refresh_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.RefreshExternalData"),
                                                       globe_status_icon(false, live_toolbar),
                                                       obsgs_tr("OBSTitles.RefreshExternalDataTooltip"));
+    btn_external_refresh_->setCheckable(true);
+    btn_external_refresh_->setStyleSheet(QStringLiteral(
+        "QToolButton:checked{background:#1d8f3a;color:white;border-radius:3px;}"
+        "QToolButton:checked:hover{background:#28b84f;}"));
     btn_playlist_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.Playlist"), obs_icon("play.svg"),
                                               obsgs_tr("OBSTitles.PlaylistTooltip"));
     btn_playlist_->setCheckable(true);
@@ -1302,10 +1307,10 @@ void TitleDock::build_ui()
                                                        obsgs_tr("OBSTitles.PlaylistSettingsTooltip"));
     btn_playlist_settings_->setText(QStringLiteral("⚙"));
     btn_playlist_settings_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    btn_persistence_settings_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.Persistence"), QIcon(),
+    btn_persistence_settings_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.Persistence"),
+                                                          obs_icon("persistence.svg"),
                                                           obsgs_tr("OBSTitles.PersistenceTooltip"));
-    btn_persistence_settings_->setText(obsgs_tr("OBSTitles.Persistence"));
-    btn_persistence_settings_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    btn_persistence_settings_->setToolButtonStyle(Qt::ToolButtonIconOnly);
     btn_persistence_settings_->setCheckable(true);
     btn_persistence_settings_->setStyleSheet(QStringLiteral(
         "QToolButton:checked{background:#1d8f3a;color:white;border-radius:3px;}"
@@ -1322,6 +1327,7 @@ void TitleDock::build_ui()
     live_toolbar->addWidget(btn_playlist_settings_);
     live_toolbar->addWidget(btn_persistence_settings_);
     live_toolbar->addWidget(toolbar_spacer(live_toolbar));
+    live_toolbar->addWidget(btn_data_sources_);
     live_toolbar->addWidget(btn_external_refresh_);
 
     live_header->addWidget(text_editor_lbl_);
@@ -1775,6 +1781,8 @@ void TitleDock::update_external_data_controls()
     if (btn_external_refresh_) {
         btn_external_refresh_->setEnabled(has_title && has_exposed);
         btn_external_refresh_->setIcon(globe_status_icon(external_enabled, btn_external_refresh_));
+        QSignalBlocker block(btn_external_refresh_);
+        btn_external_refresh_->setChecked(external_enabled);
         btn_external_refresh_->setToolTip(external_enabled
             ? obsgs_tr("OBSTitles.RefreshExternalDataEnabledTooltip")
             : obsgs_tr("OBSTitles.RefreshExternalDataTooltip"));
