@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <sstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -107,6 +108,35 @@ static void restore_hotkey_binding(const HotkeyRegistration &hotkey)
     obs_data_release(wrapper);
 }
 
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
+    const std::vector<std::shared_ptr<Layer>> &exposed,
+    const std::vector<std::string> &column_order)
+{
+    if (column_order.empty())
+        return exposed;
+
+    std::vector<std::shared_ptr<Layer>> ordered;
+    ordered.reserve(exposed.size());
+    for (const auto &layer_id : column_order) {
+        auto it = std::find_if(exposed.begin(), exposed.end(),
+                               [&](const std::shared_ptr<Layer> &layer) {
+                                   return layer && layer->id == layer_id;
+                               });
+        if (it != exposed.end())
+            ordered.push_back(*it);
+    }
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        auto it = std::find_if(ordered.begin(), ordered.end(),
+                               [&](const std::shared_ptr<Layer> &ordered_layer) {
+                                   return ordered_layer && ordered_layer->id == layer->id;
+                               });
+        if (it == ordered.end())
+            ordered.push_back(layer);
+    }
+    return ordered;
+}
+
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
@@ -116,13 +146,38 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
         if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return exposed;
+    return order_exposed_text_layers(exposed, title->live_text_column_order);
 }
 
 static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
                                      const std::vector<std::shared_ptr<Layer>> &exposed)
 {
     if (!title || exposed.empty()) return;
+
+    std::vector<std::string> new_order;
+    new_order.reserve(exposed.size());
+    for (const auto &layer : exposed)
+        new_order.push_back(layer ? layer->id : std::string());
+
+    const std::vector<std::string> old_order = title->live_text_column_order;
+    if (!old_order.empty() && old_order != new_order) {
+        for (auto &row : title->live_text_rows) {
+            std::vector<std::string> remapped;
+            remapped.reserve(exposed.size());
+            for (size_t new_col = 0; new_col < new_order.size(); ++new_col) {
+                auto it = std::find(old_order.begin(), old_order.end(), new_order[new_col]);
+                if (it != old_order.end()) {
+                    const size_t old_col = (size_t)std::distance(old_order.begin(), it);
+                    remapped.push_back(old_col < row.size() ? row[old_col] : exposed[new_col]->text_content);
+                } else {
+                    remapped.push_back(exposed[new_col]->text_content);
+                }
+            }
+            row = std::move(remapped);
+        }
+    }
+    title->live_text_column_order = std::move(new_order);
+
     if (title->live_text_rows.empty()) {
         std::vector<std::string> row;
         for (const auto &layer : exposed)
@@ -136,6 +191,7 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
             row[i] = exposed[i]->text_content;
     }
 }
+
 
 static void apply_live_text_row(const std::shared_ptr<Title> &title, int row,
                                 const std::vector<std::shared_ptr<Layer>> &exposed)

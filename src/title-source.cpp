@@ -234,6 +234,35 @@ static bool title_has_animation(const std::shared_ptr<Title> &title)
                        });
 }
 
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
+    const std::vector<std::shared_ptr<Layer>> &exposed,
+    const std::vector<std::string> &column_order)
+{
+    if (column_order.empty())
+        return exposed;
+
+    std::vector<std::shared_ptr<Layer>> ordered;
+    ordered.reserve(exposed.size());
+    for (const auto &layer_id : column_order) {
+        auto it = std::find_if(exposed.begin(), exposed.end(),
+                               [&](const std::shared_ptr<Layer> &layer) {
+                                   return layer && layer->id == layer_id;
+                               });
+        if (it != exposed.end())
+            ordered.push_back(*it);
+    }
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        auto it = std::find_if(ordered.begin(), ordered.end(),
+                               [&](const std::shared_ptr<Layer> &ordered_layer) {
+                                   return ordered_layer && ordered_layer->id == layer->id;
+                               });
+        if (it == ordered.end())
+            ordered.push_back(layer);
+    }
+    return ordered;
+}
+
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
@@ -243,7 +272,45 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
         if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return exposed;
+    return order_exposed_text_layers(exposed, title->live_text_column_order);
+}
+
+
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &title)
+{
+    std::vector<std::shared_ptr<Layer>> exposed;
+    for (const auto &layer : title.layers) {
+        if (!layer) continue;
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
+            exposed.push_back(layer);
+    }
+    return order_exposed_text_layers(exposed, title.live_text_column_order);
+}
+
+static double cue_persistence_hold_time(const Title &title)
+{
+    if (title.playback_mode == 1)
+        return std::clamp(title.loop_end, title.loop_start, title.duration);
+    if (title.playback_mode == 2)
+        return std::clamp(title.pause_time, 0.0, title.duration);
+    return std::clamp(title.duration, 0.0, title.duration);
+}
+
+static void clear_cue_persistence_transition(const std::shared_ptr<Title> &title)
+{
+    if (!title || !title->cue_persistence_transition) return;
+    title->cue_persistence_transition = false;
+    title->cue_persistent_text_columns.clear();
+    TitleDataStore::instance().touch_runtime_change();
+}
+
+static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &exposed, const std::shared_ptr<Layer> &layer)
+{
+    for (int i = 0; i < (int)exposed.size(); ++i) {
+        if (exposed[i] == layer)
+            return i;
+    }
+    return -1;
 }
 
 

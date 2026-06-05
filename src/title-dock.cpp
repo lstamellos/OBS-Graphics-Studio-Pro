@@ -69,6 +69,7 @@
 #include <algorithm>
 #include <functional>
 #include <numeric>
+#include <iterator>
 #include <array>
 #include <cmath>
 
@@ -84,6 +85,35 @@ constexpr const char *kPlaylistHoldSecondsKey = "playlistHoldSeconds";
 constexpr const char *kBackgroundPersistenceKey = "backgroundPersistence";
 constexpr const char *kTextPersistenceKey = "textPersistence";
 
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
+    const std::vector<std::shared_ptr<Layer>> &exposed,
+    const std::vector<std::string> &column_order)
+{
+    if (column_order.empty())
+        return exposed;
+
+    std::vector<std::shared_ptr<Layer>> ordered;
+    ordered.reserve(exposed.size());
+    for (const auto &layer_id : column_order) {
+        auto it = std::find_if(exposed.begin(), exposed.end(),
+                               [&](const std::shared_ptr<Layer> &layer) {
+                                   return layer && layer->id == layer_id;
+                               });
+        if (it != exposed.end())
+            ordered.push_back(*it);
+    }
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        auto it = std::find_if(ordered.begin(), ordered.end(),
+                               [&](const std::shared_ptr<Layer> &ordered_layer) {
+                                   return ordered_layer && ordered_layer->id == layer->id;
+                               });
+        if (it == ordered.end())
+            ordered.push_back(layer);
+    }
+    return ordered;
+}
+
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
@@ -93,7 +123,7 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
         if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return exposed;
+    return order_exposed_text_layers(exposed, title->live_text_column_order);
 }
 
 static QString current_scene_collection_titles_label()
@@ -121,6 +151,31 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
                                      const std::vector<std::shared_ptr<Layer>> &exposed)
 {
     if (!title || exposed.empty()) return;
+
+    std::vector<std::string> new_order;
+    new_order.reserve(exposed.size());
+    for (const auto &layer : exposed)
+        new_order.push_back(layer ? layer->id : std::string());
+
+    const std::vector<std::string> old_order = title->live_text_column_order;
+    if (!old_order.empty() && old_order != new_order) {
+        for (auto &row : title->live_text_rows) {
+            std::vector<std::string> remapped;
+            remapped.reserve(exposed.size());
+            for (size_t new_col = 0; new_col < new_order.size(); ++new_col) {
+                auto it = std::find(old_order.begin(), old_order.end(), new_order[new_col]);
+                if (it != old_order.end()) {
+                    const size_t old_col = (size_t)std::distance(old_order.begin(), it);
+                    remapped.push_back(old_col < row.size() ? row[old_col] : exposed[new_col]->text_content);
+                } else {
+                    remapped.push_back(exposed[new_col]->text_content);
+                }
+            }
+            row = std::move(remapped);
+        }
+    }
+    title->live_text_column_order = std::move(new_order);
+
     if (title->live_text_rows.empty()) {
         std::vector<std::string> row;
         for (const auto &layer : exposed)
@@ -134,6 +189,7 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
             row[i] = exposed[i]->text_content;
     }
 }
+
 
 static QIcon obs_icon(const char *file_name)
 {
@@ -1435,12 +1491,30 @@ void TitleDock::on_selection_changed()
 void TitleDock::save_live_text_header_state()
 {
     if (!text_table_ || text_table_->columnCount() <= 0) return;
-    live_text_header_states_[text_table_->columnCount()] = text_table_->horizontalHeader()->saveState();
+    const QByteArray state = text_table_->horizontalHeader()->saveState();
+    live_text_header_states_[text_table_->columnCount()] = state;
+
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title) return;
+    const QByteArray encoded = state.toBase64();
+    title->live_text_header_state.assign(encoded.constData(), (size_t)encoded.size());
+    TitleDataStore::instance().save();
 }
 
 bool TitleDock::restore_live_text_header_state()
 {
     if (!text_table_ || text_table_->columnCount() <= 0) return false;
+
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (title && !title->live_text_header_state.empty()) {
+        const QByteArray encoded(title->live_text_header_state.data(), (int)title->live_text_header_state.size());
+        const QByteArray state = QByteArray::fromBase64(encoded);
+        if (!state.isEmpty() && text_table_->horizontalHeader()->restoreState(state)) {
+            live_text_header_states_[text_table_->columnCount()] = state;
+            return true;
+        }
+    }
+
     auto it = live_text_header_states_.find(text_table_->columnCount());
     if (it == live_text_header_states_.end()) return false;
     return text_table_->horizontalHeader()->restoreState(it->second);
@@ -2056,7 +2130,8 @@ void TitleDock::on_move_live_text_row_up()
     std::sort(moved_rows.begin(), moved_rows.end());
 
     TitleDataStore::instance().save();
-    TitleDataStore::instance().notify_change();
+    TitleDataStore::instance().touch_runtime_change();
+    seen_store_revision_ = TitleDataStore::instance().revision();
     populate_exposed_text();
     apply_live_text_row_selection(moved_rows, restore_checked);
 }
@@ -2109,7 +2184,8 @@ void TitleDock::on_move_live_text_row_down()
     std::sort(moved_rows.begin(), moved_rows.end());
 
     TitleDataStore::instance().save();
-    TitleDataStore::instance().notify_change();
+    TitleDataStore::instance().touch_runtime_change();
+    seen_store_revision_ = TitleDataStore::instance().revision();
     populate_exposed_text();
     apply_live_text_row_selection(moved_rows, restore_checked);
 }
