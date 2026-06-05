@@ -38,6 +38,7 @@ public:
 
     /* Called externally to refresh the list (e.g. after editor saves) */
     void refresh();
+    void update_scene_collection_title();
 
 private slots:
     void on_add();
@@ -80,6 +81,7 @@ private:
     QToolButton *btn_export_ = nullptr;
     QToolButton *btn_edit_   = nullptr;
     QToolButton *btn_scene_  = nullptr;
+    QLabel       *template_lbl_ = nullptr;
     QLabel       *status_lbl_ = nullptr;
     QLabel       *text_editor_lbl_ = nullptr;
     QTableWidget *text_table_ = nullptr;

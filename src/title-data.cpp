@@ -4,6 +4,7 @@
 
 #include "title-data.h"
 #include <obs-module.h>
+#include <obs-frontend-api.h>
 #include <util/platform.h>
 
 #include <nlohmann/json.hpp>
@@ -41,6 +42,59 @@ constexpr int kMaxCanvasDimension = 16384;
 static double finite_or(double value, double fallback)
 {
     return std::isfinite(value) ? value : fallback;
+}
+
+static std::string title_data_dir()
+{
+    char *cfg_dir = obs_module_config_path("");
+    std::string dir(cfg_dir ? cfg_dir : "");
+    bfree(cfg_dir);
+    os_mkdirs(dir.c_str());
+    return dir;
+}
+
+static uint64_t fnv1a64(const std::string &value)
+{
+    uint64_t hash = 14695981039346656037ull;
+    for (unsigned char ch : value) {
+        hash ^= ch;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+static std::string hex64(uint64_t value)
+{
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << value;
+    return out.str();
+}
+
+static std::string current_scene_collection_name()
+{
+    char *collection_name = obs_frontend_get_current_scene_collection();
+    std::string name(collection_name ? collection_name : "");
+    bfree(collection_name);
+    if (name.empty())
+        name = "unknown-scene-collection";
+    return name;
+}
+
+static std::string safe_scene_collection_file_stem(const std::string &name)
+{
+    std::string safe;
+    safe.reserve(std::min<size_t>(name.size(), 80));
+    for (unsigned char ch : name) {
+        if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.')
+            safe.push_back((char)ch);
+        else
+            safe.push_back('_');
+        if (safe.size() >= 80)
+            break;
+    }
+    if (safe.empty())
+        safe = "scene-collection";
+    return safe + "-" + hex64(fnv1a64(name));
 }
 
 static std::string bounded_string(const json &j, const char *key,
@@ -640,11 +694,10 @@ void TitleDataStore::rename_title(const std::string &id, const std::string &n)
 /* ── persistence ──────────────────────────────────────────────────── */
 std::string TitleDataStore::data_path()
 {
-    char *cfg_dir = obs_module_config_path("");
-    std::string dir(cfg_dir);
-    bfree(cfg_dir);
+    const std::string dir = title_data_dir() + "/scene-collection-titles";
     os_mkdirs(dir.c_str());
-    return dir + "/titles.json";
+    const std::string collection_name = current_scene_collection_name();
+    return dir + "/" + safe_scene_collection_file_stem(collection_name) + ".json";
 }
 
 /* ---- JSON serialisation helpers (flat, no macros) ---- */
@@ -1045,7 +1098,13 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
 
 void TitleDataStore::save() const
 {
-    const auto snapshot = titles();
+    std::vector<std::shared_ptr<Title>> snapshot;
+    std::string path;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        snapshot = titles_;
+        path = loaded_path_.empty() ? data_path() : loaded_path_;
+    }
 
     json root = json::array();
     for (auto &t : snapshot) {
@@ -1053,7 +1112,6 @@ void TitleDataStore::save() const
             root.push_back(title_to_json(*t));
     }
 
-    const std::string path = data_path();
     const std::string tmp_path = path + ".tmp";
     {
         std::ofstream f(tmp_path, std::ios::binary | std::ios::trunc);
@@ -1190,10 +1248,16 @@ void TitleDataStore::load()
     json root;
     std::string error;
     if (!read_json_file(path, root, &error)) {
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            loaded_path_ = path;
+            titles_.clear();
+        }
+        notify_change();
         if (error == "Could not open the file.")
-            blog(LOG_INFO, "[OBS Graphics Studio Pro] No saved titles found, starting fresh.");
+            blog(LOG_INFO, "[OBS Graphics Studio Pro] No saved titles found for this scene collection, starting fresh.");
         else
-            blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to read titles.json: %s", error.c_str());
+            blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to read scene collection titles file: %s", error.c_str());
         return;
     }
 
@@ -1213,12 +1277,19 @@ void TitleDataStore::load()
         size_t loaded_count = 0;
         {
             std::lock_guard<std::recursive_mutex> lock(mutex_);
+            loaded_path_ = path;
             titles_ = std::move(loaded);
             loaded_count = titles_.size();
         }
-        touch_runtime_change();
-        blog(LOG_INFO, "[OBS Graphics Studio Pro] Loaded %zu title(s).", loaded_count);
+        notify_change();
+        blog(LOG_INFO, "[OBS Graphics Studio Pro] Loaded %zu title(s) for this scene collection.", loaded_count);
     } catch (std::exception &e) {
-        blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to parse titles.json: %s", e.what());
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            loaded_path_ = path;
+            titles_.clear();
+        }
+        notify_change();
+        blog(LOG_WARNING, "[OBS Graphics Studio Pro] Failed to parse scene collection titles file: %s", e.what());
     }
 }
