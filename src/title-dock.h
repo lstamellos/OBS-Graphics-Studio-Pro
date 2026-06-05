@@ -76,6 +76,9 @@ private:
     void start_playlist_step();
     int next_playlist_row(int current_row, int row_count) const;
     int playlist_step_delay_ms(const std::shared_ptr<Title> &title) const;
+    int playlist_hold_delay_ms() const;
+    bool playlist_row_is_terminal(int row, int row_count) const;
+    void play_playlist_outro();
     void update_playlist_controls();
     void update_playlist_countdown_label();
     void stop_playlist();

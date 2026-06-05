@@ -1570,6 +1570,29 @@ int TitleDock::playlist_step_delay_ms(const std::shared_ptr<Title> &title) const
     return std::max(1, (int)std::round(seconds * 1000.0));
 }
 
+int TitleDock::playlist_hold_delay_ms() const
+{
+    return std::max(1, (int)std::round(playlist_hold_seconds_ * 1000.0));
+}
+
+bool TitleDock::playlist_row_is_terminal(int row, int row_count) const
+{
+    if (row < 0 || row_count <= 0) return false;
+    return playlist_reverse_ ? row == 0 : row == row_count - 1;
+}
+
+void TitleDock::play_playlist_outro()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title) return;
+
+    const int row = title->pending_cue_row >= 0 ? title->pending_cue_row : title->current_cue_row;
+    if (row >= 0)
+        cue_live_text_row(row, true);
+    else if (live_text_playlist_row_count(title) == 1)
+        cue_live_text_row(0, true);
+}
+
 void TitleDock::stop_playlist()
 {
     if (playlist_timer_)
@@ -1613,12 +1636,14 @@ void TitleDock::start_playlist_step()
         playlist_next_row_ = playlist_reverse_ ? row_count - 1 : 0;
 
     const int row = playlist_next_row_;
-    cue_live_text_row(row, false);
+    const bool already_active = title->pending_cue_row < 0 && title->current_cue_row == row;
+    if (!already_active)
+        cue_live_text_row(row, false);
     playlist_next_row_ = next_playlist_row(row, row_count);
-    playlist_stop_after_due_ = !playlist_loop_ &&
-        ((playlist_reverse_ && row == 0) || (!playlist_reverse_ && row == row_count - 1));
+    playlist_stop_after_due_ = !playlist_loop_ && playlist_row_is_terminal(row, row_count);
 
-    playlist_next_due_ms_ = QDateTime::currentMSecsSinceEpoch() + playlist_step_delay_ms(title);
+    playlist_next_due_ms_ = QDateTime::currentMSecsSinceEpoch() +
+        (already_active ? playlist_hold_delay_ms() : playlist_step_delay_ms(title));
     if (playlist_timer_ && !playlist_timer_->isActive())
         playlist_timer_->start();
     update_playlist_countdown_label();
@@ -1628,10 +1653,12 @@ void TitleDock::on_playlist_tick()
 {
     if (!btn_playlist_ || !btn_playlist_->isChecked()) return;
     if (QDateTime::currentMSecsSinceEpoch() >= playlist_next_due_ms_) {
-        if (playlist_stop_after_due_)
+        if (playlist_stop_after_due_) {
+            play_playlist_outro();
             stop_playlist();
-        else
+        } else {
             start_playlist_step();
+        }
     } else {
         update_playlist_countdown_label();
     }
@@ -1652,6 +1679,16 @@ void TitleDock::on_toggle_playlist(bool enabled)
     }
 
     int base = title->pending_cue_row >= 0 ? title->pending_cue_row : title->current_cue_row;
+    if (title->pending_cue_row < 0 && base >= 0 && base < row_count) {
+        playlist_next_row_ = next_playlist_row(base, row_count);
+        playlist_stop_after_due_ = !playlist_loop_ && playlist_row_is_terminal(base, row_count);
+        playlist_next_due_ms_ = QDateTime::currentMSecsSinceEpoch() + playlist_hold_delay_ms();
+        if (playlist_timer_ && !playlist_timer_->isActive())
+            playlist_timer_->start();
+        update_playlist_countdown_label();
+        return;
+    }
+
     if (base >= 0 && base < row_count)
         playlist_next_row_ = base;
     else
