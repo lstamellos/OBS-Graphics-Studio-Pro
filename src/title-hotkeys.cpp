@@ -108,7 +108,7 @@ static void restore_hotkey_binding(const HotkeyRegistration &hotkey)
     obs_data_release(wrapper);
 }
 
-static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
+static std::vector<std::shared_ptr<Layer>> order_exposed_cue_layers(
     const std::vector<std::shared_ptr<Layer>> &exposed,
     const std::vector<std::string> &column_order)
 {
@@ -137,16 +137,16 @@ static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
     return ordered;
 }
 
-static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
+static std::vector<std::shared_ptr<Layer>> exposed_cue_layers(const std::shared_ptr<Title> &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
         if (!layer) continue;
-        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker || layer->type == LayerType::Image) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return order_exposed_text_layers(exposed, title->live_text_column_order);
+    return order_exposed_cue_layers(exposed, title->live_text_column_order);
 }
 
 static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
@@ -168,9 +168,9 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
                 auto it = std::find(old_order.begin(), old_order.end(), new_order[new_col]);
                 if (it != old_order.end()) {
                     const size_t old_col = (size_t)std::distance(old_order.begin(), it);
-                    remapped.push_back(old_col < row.size() ? row[old_col] : exposed[new_col]->text_content);
+                    remapped.push_back(old_col < row.size() ? row[old_col] : (exposed[new_col]->type == LayerType::Image ? exposed[new_col]->image_path : exposed[new_col]->text_content));
                 } else {
-                    remapped.push_back(exposed[new_col]->text_content);
+                    remapped.push_back(exposed[new_col]->type == LayerType::Image ? exposed[new_col]->image_path : exposed[new_col]->text_content);
                 }
             }
             row = std::move(remapped);
@@ -181,14 +181,14 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
     if (title->live_text_rows.empty()) {
         std::vector<std::string> row;
         for (const auto &layer : exposed)
-            row.push_back(layer->text_content);
+            row.push_back(layer->type == LayerType::Image ? layer->image_path : layer->text_content);
         title->live_text_rows.push_back(std::move(row));
     }
     for (auto &row : title->live_text_rows) {
         size_t old_size = row.size();
         row.resize(exposed.size());
         for (size_t i = old_size; i < exposed.size(); ++i)
-            row[i] = exposed[i]->text_content;
+            row[i] = exposed[i]->type == LayerType::Image ? exposed[i]->image_path : exposed[i]->text_content;
     }
 }
 
@@ -197,8 +197,12 @@ static void apply_live_text_row(const std::shared_ptr<Title> &title, int row,
                                 const std::vector<std::shared_ptr<Layer>> &exposed)
 {
     if (!title || row < 0 || row >= (int)title->live_text_rows.size()) return;
-    for (int col = 0; col < (int)exposed.size() && col < (int)title->live_text_rows[row].size(); ++col)
-        exposed[col]->text_content = title->live_text_rows[row][col];
+    for (int col = 0; col < (int)exposed.size() && col < (int)title->live_text_rows[row].size(); ++col) {
+        if (exposed[col]->type == LayerType::Image)
+            exposed[col]->image_path = title->live_text_rows[row][col];
+        else
+            exposed[col]->text_content = title->live_text_rows[row][col];
+    }
 }
 
 static std::string hotkey_safe_id(const std::string &value)
@@ -294,7 +298,7 @@ static void cue_title_row(const std::shared_ptr<Title> &title, int row)
 {
     if (!title) return;
 
-    auto exposed = exposed_text_layers(title);
+    auto exposed = exposed_cue_layers(title);
     normalize_live_text_rows(title, exposed);
 
     if (exposed.empty()) {
@@ -351,7 +355,7 @@ static void cue_relative(const std::shared_ptr<Title> &title, int delta)
 {
     if (!title || delta == 0) return;
 
-    auto exposed = exposed_text_layers(title);
+    auto exposed = exposed_cue_layers(title);
     if (exposed.empty()) return;
     normalize_live_text_rows(title, exposed);
     const int row_count = (int)title->live_text_rows.size();
@@ -405,7 +409,7 @@ static std::vector<HotkeyDescriptor> build_descriptors(std::vector<HotkeySection
         const std::string section_name = title_section_name(title, name_counts);
         sections.push_back({title->id, section_name, nullptr});
 
-        auto exposed = exposed_text_layers(title);
+        auto exposed = exposed_cue_layers(title);
         normalize_live_text_rows(title, exposed);
 
         if (exposed.empty()) {
