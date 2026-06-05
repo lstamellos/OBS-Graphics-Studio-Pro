@@ -195,7 +195,7 @@ protected:
     void resizeEvent(QResizeEvent *ev) override;
 
 private:
-    enum class DragMode { None, Marquee, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin, CropNW, CropN, CropNE, CropE, CropSE, CropS, CropSW, CropW };
+    enum class DragMode { None, Marquee, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
 
     void render_to_pixmap();
     std::shared_ptr<Layer> selected_layer() const;
@@ -210,7 +210,6 @@ private:
     QPointF canvas_to_layer(const Layer &layer, const QPointF &canvas_pt) const;
     QPointF layer_to_canvas(const Layer &layer, const QPointF &layer_pt) const;
     DragMode hit_test_selected(const QPointF &view_pt) const;
-    DragMode hit_test_crop_handles(const QPointF &view_pt) const;
     QRectF layer_canvas_bounds(const Layer &layer) const;
     QRectF selected_canvas_bounds() const;
     void begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
@@ -246,10 +245,6 @@ private:
     float drag_start_h_ = 1.0f;
     float drag_start_origin_x_ = 0.5f;
     float drag_start_origin_y_ = 0.5f;
-    double drag_start_crop_left_ = 0.0;
-    double drag_start_crop_top_ = 0.0;
-    double drag_start_crop_right_ = 0.0;
-    double drag_start_crop_bottom_ = 0.0;
     QRectF drag_start_selection_bounds_;
     struct LayerDragState {
         std::string id;
@@ -482,9 +477,6 @@ private:
     QToolButton     *btn_opentype_features_ = nullptr;
     QComboBox       *cmb_text_overflow_ = nullptr;
     QDoubleSpinBox  *spn_text_fit_min_scale_ = nullptr;
-    QCheckBox       *chk_text_auto_size_ = nullptr;
-    QDoubleSpinBox  *spn_max_text_w_ = nullptr;
-    QDoubleSpinBox  *spn_max_text_h_ = nullptr;
     QComboBox       *cmb_ticker_style_ = nullptr;
     QDoubleSpinBox  *spn_ticker_speed_ = nullptr;
     QDoubleSpinBox  *spn_ticker_line_hold_ = nullptr;
@@ -557,14 +549,6 @@ private:
     QPushButton     *btn_kf_origin_y_ = nullptr;
     QPushButton     *btn_kf_width_ = nullptr;
     QPushButton     *btn_kf_height_ = nullptr;
-    QDoubleSpinBox  *spn_crop_left_ = nullptr;
-    QDoubleSpinBox  *spn_crop_top_ = nullptr;
-    QDoubleSpinBox  *spn_crop_right_ = nullptr;
-    QDoubleSpinBox  *spn_crop_bottom_ = nullptr;
-    QPushButton     *btn_kf_crop_left_ = nullptr;
-    QPushButton     *btn_kf_crop_top_ = nullptr;
-    QPushButton     *btn_kf_crop_right_ = nullptr;
-    QPushButton     *btn_kf_crop_bottom_ = nullptr;
     QPushButton     *btn_kf_text_color_ = nullptr;
     QPushButton     *btn_kf_fill_color_ = nullptr;
 };

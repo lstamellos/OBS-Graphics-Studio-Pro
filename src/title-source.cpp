@@ -23,8 +23,6 @@
 #include <QImage>
 #include <QImageReader>
 #include <QSize>
-#include <QSizeF>
-#include <QRectF>
 #include <QSvgRenderer>
 #include <QString>
 #include <QStringList>
@@ -144,10 +142,6 @@ static bool layer_has_animation(const Layer &layer)
            layer.opacity.is_animated() ||
            layer.box_width.is_animated() ||
            layer.box_height.is_animated() ||
-           layer.crop_left.is_animated() ||
-           layer.crop_top.is_animated() ||
-           layer.crop_right.is_animated() ||
-           layer.crop_bottom.is_animated() ||
            layer.origin_x_prop.is_animated() ||
            layer.origin_y_prop.is_animated() ||
            layer.shadow_enabled_prop.is_animated() ||
@@ -190,10 +184,6 @@ static bool layer_animation_keyframe_bounds(const Layer &layer, double &first_ti
     has_bounds |= include_property_bounds(layer, layer.opacity, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.box_width, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.box_height, first_time, last_time);
-    has_bounds |= include_property_bounds(layer, layer.crop_left, first_time, last_time);
-    has_bounds |= include_property_bounds(layer, layer.crop_top, first_time, last_time);
-    has_bounds |= include_property_bounds(layer, layer.crop_right, first_time, last_time);
-    has_bounds |= include_property_bounds(layer, layer.crop_bottom, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.origin_x_prop, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.origin_y_prop, first_time, last_time);
     has_bounds |= include_property_bounds(layer, layer.shadow_enabled_prop, first_time, last_time);
@@ -244,7 +234,7 @@ static bool title_has_animation(const std::shared_ptr<Title> &title)
                        });
 }
 
-static std::vector<std::shared_ptr<Layer>> order_exposed_cue_layers(
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
     const std::vector<std::shared_ptr<Layer>> &exposed,
     const std::vector<std::string> &column_order)
 {
@@ -273,28 +263,28 @@ static std::vector<std::shared_ptr<Layer>> order_exposed_cue_layers(
     return ordered;
 }
 
-static std::vector<std::shared_ptr<Layer>> exposed_cue_layers(const std::shared_ptr<Title> &title)
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
         if (!layer) continue;
-        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker || layer->type == LayerType::Image) && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return order_exposed_cue_layers(exposed, title->live_text_column_order);
+    return order_exposed_text_layers(exposed, title->live_text_column_order);
 }
 
 
-static std::vector<std::shared_ptr<Layer>> exposed_cue_layers(const Title &title)
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
     for (const auto &layer : title.layers) {
         if (!layer) continue;
-        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker || layer->type == LayerType::Image) && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return order_exposed_cue_layers(exposed, title.live_text_column_order);
+    return order_exposed_text_layers(exposed, title.live_text_column_order);
 }
 
 static double cue_persistence_hold_time(const Title &title)
@@ -328,13 +318,9 @@ static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &e
 static void apply_live_text_row(const std::shared_ptr<Title> &title, int row)
 {
     if (!title || row < 0 || row >= (int)title->live_text_rows.size()) return;
-    auto exposed = exposed_cue_layers(title);
-    for (int col = 0; col < (int)exposed.size() && col < (int)title->live_text_rows[row].size(); ++col) {
-        if (exposed[col]->type == LayerType::Image)
-            exposed[col]->image_path = title->live_text_rows[row][col];
-        else
-            exposed[col]->text_content = title->live_text_rows[row][col];
-    }
+    auto exposed = exposed_text_layers(title);
+    for (int col = 0; col < (int)exposed.size() && col < (int)title->live_text_rows[row].size(); ++col)
+        exposed[col]->text_content = title->live_text_rows[row][col];
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -350,69 +336,8 @@ static void unpack_color(uint32_t c,
 }
 
 
-
-static QString autosize_display_text(const Layer &layer)
-{
-    QString text = layer.type == LayerType::Clock ? QString::fromStdString(layer.clock_format)
-                                                   : QString::fromStdString(layer.text_content);
-    if (layer.text_style == 1)
-        text = text.toUpper();
-    return text.isEmpty() ? QStringLiteral(" ") : text;
-}
-
-static QFont autosize_font_for_layer(const Layer &layer)
-{
-    QFont font(QString::fromStdString(layer.font_family));
-    font.setPointSize(layer.font_size);
-    font.setBold(layer.font_bold);
-    font.setItalic(layer.font_italic);
-    font.setUnderline(layer.text_underline);
-    font.setStrikeOut(layer.text_strikethrough);
-    font.setKerning(layer.font_kerning);
-    return font;
-}
-
-static QSizeF auto_text_box_size(const Layer &layer)
-{
-    if (!layer.text_auto_size || !(layer.type == LayerType::Text || layer.type == LayerType::Clock || layer.type == LayerType::Ticker))
-        return QSizeF(layer.rect_width, layer.rect_height);
-    QFontMetricsF metrics(autosize_font_for_layer(layer));
-    QString text = autosize_display_text(layer);
-    const double max_w = std::max(1.0f, layer.max_text_box_width);
-    const double max_h = std::max(1.0f, layer.max_text_box_height);
-    QRectF bounds = metrics.boundingRect(QRectF(0, 0, max_w, max_h * 4.0),
-                                         Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop,
-                                         text);
-    double pad = std::max(2.0, (double)layer.stroke_width * 2.0 + 4.0);
-    double w = std::clamp(std::ceil(bounds.width() + pad), 1.0, max_w);
-    double h = std::clamp(std::ceil(bounds.height() + pad), 1.0, max_h);
-    return QSizeF(w, h);
-}
-
-static double eval_crop_value(const AnimatedProperty &prop, double t)
-{
-    return std::max(0.0, prop.is_animated() ? prop.evaluate(t) : prop.static_value);
-}
-
-static QRectF evaluated_crop_rect(const Layer &layer, double t, const QRectF &box)
-{
-    double left = eval_crop_value(layer.crop_left, t);
-    double top = eval_crop_value(layer.crop_top, t);
-    double right = eval_crop_value(layer.crop_right, t);
-    double bottom = eval_crop_value(layer.crop_bottom, t);
-    double max_x = std::max(0.0, box.width() - 1.0);
-    double max_y = std::max(0.0, box.height() - 1.0);
-    left = std::clamp(left, 0.0, max_x);
-    right = std::clamp(right, 0.0, std::max(0.0, box.width() - left - 1.0));
-    top = std::clamp(top, 0.0, max_y);
-    bottom = std::clamp(bottom, 0.0, std::max(0.0, box.height() - top - 1.0));
-    return box.adjusted(left, top, -right, -bottom);
-}
-
 static double eval_box_width(const Layer &layer, double t)
 {
-    if (layer.text_auto_size && !layer.box_width.is_animated())
-        return std::max(1.0, auto_text_box_size(layer).width());
     const double width = layer.box_width.is_animated()
         ? layer.box_width.evaluate(t)
         : static_cast<double>(layer.rect_width);
@@ -421,8 +346,6 @@ static double eval_box_width(const Layer &layer, double t)
 
 static double eval_box_height(const Layer &layer, double t)
 {
-    if (layer.text_auto_size && !layer.box_height.is_animated())
-        return std::max(1.0, auto_text_box_size(layer).height());
     const double height = layer.box_height.is_animated()
         ? layer.box_height.evaluate(t)
         : static_cast<double>(layer.rect_height);
@@ -1024,10 +947,6 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     cairo_translate(cr, px, py);
     cairo_rotate(cr, rot);
     cairo_scale(cr, sx, sy);
-    QRectF text_full_box(-eval_origin_x(layer, t) * box_w, -eval_origin_y(layer, t) * box_h, box_w, box_h);
-    QRectF text_crop_box = evaluated_crop_rect(layer, t, text_full_box);
-    cairo_rectangle(cr, text_crop_box.left(), text_crop_box.top(), text_crop_box.width(), text_crop_box.height());
-    cairo_clip(cr);
     cairo_set_source_surface(cr, text_surface, -eval_origin_x(layer, t) * box_w - pad, -eval_origin_y(layer, t) * box_h - pad);
     cairo_paint_with_alpha(cr, alpha);
     cairo_restore(cr);
@@ -1061,9 +980,6 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
     cairo_rotate(cr, rot);
     cairo_scale(cr, sx, sy);
     cairo_translate(cr, x, y);
-    QRectF crop_box = evaluated_crop_rect(layer, t, QRectF(0, 0, w, h));
-    cairo_rectangle(cr, crop_box.left(), crop_box.top(), crop_box.width(), crop_box.height());
-    cairo_clip(cr);
 
     if (eval_shadow_enabled(layer, t)) {
         double sr, sg, sb, sa;
@@ -1165,8 +1081,6 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
     cairo_scale(cr, sx, sy);
     const double origin_x = eval_origin_x(layer, t);
     const double origin_y = eval_origin_y(layer, t);
-    QRectF full_box(-origin_x * w, -origin_y * h, w, h);
-    QRectF crop_box = evaluated_crop_rect(layer, t, full_box);
     if (layer.background_enabled) {
         const double bg_pad = std::max(0.0f, layer.background_padding);
         QColor bg = evaluated_background_color(layer);
@@ -1192,8 +1106,6 @@ static void render_layer_image(cairo_t *cr, const Layer &layer, double t)
             cairo_fill(cr);
         }
     }
-    cairo_rectangle(cr, crop_box.left(), crop_box.top(), crop_box.width(), crop_box.height());
-    cairo_clip(cr);
     cairo_scale(cr, w / argb.width(), h / argb.height());
     cairo_set_source_surface(cr, img_surface,
                              -origin_x * argb.width(),
@@ -1268,7 +1180,7 @@ static void render_title_frame(TitleSourceData *data,
     const bool background_persistence = title.cue_background_persistence &&
         title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
     const double persistence_time = cue_persistence_hold_time(title);
-    const auto exposed = background_persistence ? exposed_cue_layers(title) : std::vector<std::shared_ptr<Layer>>();
+    const auto exposed = background_persistence ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
 
     /* Render layers bottom → top */
     for (auto &layer : title.layers) {
