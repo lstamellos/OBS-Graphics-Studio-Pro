@@ -77,6 +77,8 @@ private:
     int next_playlist_row(int current_row, int row_count) const;
     int playlist_step_delay_ms(const std::shared_ptr<Title> &title) const;
     void update_playlist_controls();
+    void update_playlist_countdown_label();
+    void stop_playlist();
     bool has_checked_live_text_rows() const;
     void apply_live_text_row_selection(const std::vector<int> &rows, bool checked);
     std::string selected_id() const;
@@ -99,6 +101,7 @@ private:
     QLabel       *template_lbl_ = nullptr;
     QLabel       *status_lbl_ = nullptr;
     QLabel       *text_editor_lbl_ = nullptr;
+    QLabel       *playlist_countdown_lbl_ = nullptr;
     QTableWidget *text_table_ = nullptr;
     QToolButton *btn_add_text_row_ = nullptr;
     QToolButton *btn_delete_text_row_ = nullptr;
@@ -114,6 +117,7 @@ private:
     QTimer       *live_refresh_timer_ = nullptr;
     QTimer       *playlist_timer_ = nullptr;
     qint64        playlist_next_due_ms_ = 0;
+    bool          playlist_stop_after_due_ = false;
     int           playlist_next_row_ = 0;
     double        playlist_hold_seconds_ = 5.0;
     bool          playlist_loop_ = false;
