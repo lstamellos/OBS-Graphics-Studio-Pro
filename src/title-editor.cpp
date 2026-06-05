@@ -1868,17 +1868,6 @@ void TitleEditor::build_toolbar()
     toolbar_->addAction(act_redo_);
     update_undo_redo_actions();
 
-    toolbar_->addSeparator();
-
-    /* Save button */
-    auto *btn_save = new QPushButton(obsgs_tr("OBSTitles.Save"), toolbar_);
-    btn_save->setIcon(obs_icon("save.svg"));
-    btn_save->setStyleSheet(
-        "QPushButton { color:#fff; background:#0078d4; border:none;"
-        "  border-radius:3px; padding:4px 10px; }"
-        "QPushButton:hover { background:#1088e4; }");
-    connect(btn_save, &QPushButton::clicked, this, &TitleEditor::save_title);
-    toolbar_->addWidget(btn_save);
 }
 
 
