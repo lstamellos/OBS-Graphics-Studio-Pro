@@ -50,6 +50,7 @@ private slots:
     void on_import();
     void on_edit();
     void on_add_to_scene();
+    void on_toggle_template_view();
     void on_selection_changed();
     void on_add_live_text_row();
     void on_delete_live_text_rows();
@@ -60,6 +61,7 @@ private:
     void build_ui();
     void populate_list();
     void populate_exposed_text();
+    void update_template_view_mode();
     void set_all_live_text_rows_checked(bool checked);
     void update_live_text_select_all_state();
     void save_live_text_header_state();
@@ -81,6 +83,7 @@ private:
     QToolButton *btn_export_ = nullptr;
     QToolButton *btn_edit_   = nullptr;
     QToolButton *btn_scene_  = nullptr;
+    QToolButton *btn_view_   = nullptr;
     QLabel       *template_lbl_ = nullptr;
     QLabel       *status_lbl_ = nullptr;
     QLabel       *text_editor_lbl_ = nullptr;
@@ -90,6 +93,7 @@ private:
     QToolButton *btn_row_up_ = nullptr;
     QToolButton *btn_row_down_ = nullptr;
     bool          updating_exposed_text_ = false;
+    bool          template_icon_view_ = false;
     std::map<int, QByteArray> live_text_header_states_;
     QTimer       *live_refresh_timer_ = nullptr;
     uint64_t      seen_store_revision_ = 0;

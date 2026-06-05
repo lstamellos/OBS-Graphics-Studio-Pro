@@ -480,6 +480,15 @@ static QImage title_screenshot_image(const Title &title)
     return render_title_to_image(title, title_export_screenshot_time(title));
 }
 
+static QIcon title_screenshot_icon(const Title &title, const QSize &size)
+{
+    const QImage screenshot = title_screenshot_image(title);
+    if (screenshot.isNull())
+        return QIcon();
+
+    return QIcon(QPixmap::fromImage(screenshot).scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+}
+
 static QString title_screenshot_png_base64(const QImage &screenshot)
 {
     if (screenshot.isNull())
@@ -1008,12 +1017,16 @@ void TitleDock::build_ui()
                                           obsgs_tr("OBSTitles.EditTooltip"));
     btn_scene_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.AddToScene"), obs_icon("add-to-scene.svg"),
                                            obsgs_tr("OBSTitles.AddToSceneTooltip"));
+    btn_view_ = make_obs_dock_tool_button(template_toolbar, obsgs_tr("OBSTitles.IconView"), obs_icon("icon-view.svg"),
+                                          obsgs_tr("OBSTitles.IconViewTooltip"));
 
     template_toolbar->addWidget(btn_add_);
     template_toolbar->addSeparator();
     template_toolbar->addWidget(btn_dup_);
     template_toolbar->addWidget(btn_del_);
     template_toolbar->addWidget(toolbar_spacer(template_toolbar));
+    template_toolbar->addWidget(btn_view_);
+    template_toolbar->addSeparator();
     template_toolbar->addWidget(btn_rename_);
     template_toolbar->addWidget(btn_export_);
     template_toolbar->addWidget(btn_edit_);
@@ -1097,6 +1110,8 @@ void TitleDock::build_ui()
     sf.setPointSize(std::max(1, sf.pointSize() - 1));
     status_lbl_->setFont(sf);
     template_layout->addWidget(status_lbl_);
+    template_layout->addWidget(template_toolbar);
+    update_template_view_mode();
 
     setWidget(container_);
 
@@ -1115,6 +1130,7 @@ void TitleDock::build_ui()
     connect(btn_export_, &QToolButton::clicked, this, &TitleDock::on_export);
     connect(btn_edit_,  &QToolButton::clicked, this, &TitleDock::on_edit);
     connect(btn_scene_, &QToolButton::clicked, this, &TitleDock::on_add_to_scene);
+    connect(btn_view_, &QToolButton::clicked, this, &TitleDock::on_toggle_template_view);
     connect(btn_add_text_row_, &QToolButton::clicked, this, &TitleDock::on_add_live_text_row);
     connect(btn_delete_text_row_, &QToolButton::clicked, this, &TitleDock::on_delete_live_text_rows);
     connect(btn_row_up_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_up);
@@ -1138,6 +1154,46 @@ void TitleDock::build_ui()
 /* ══════════════════════════════════════════════════════════════════
  *  List population
  * ══════════════════════════════════════════════════════════════════ */
+void TitleDock::update_template_view_mode()
+{
+    if (!list_) return;
+
+    if (template_icon_view_) {
+        list_->setViewMode(QListView::IconMode);
+        list_->setIconSize(QSize(120, 72));
+        list_->setResizeMode(QListView::Adjust);
+        list_->setMovement(QListView::Static);
+        list_->setSpacing(8);
+        list_->setUniformItemSizes(false);
+        if (btn_view_) {
+            btn_view_->setText(obsgs_tr("OBSTitles.ListView"));
+            btn_view_->setAccessibleName(obsgs_tr("OBSTitles.ListView"));
+            btn_view_->setToolTip(obsgs_tr("OBSTitles.ListViewTooltip"));
+            btn_view_->setIcon(obs_icon("list-view.svg"));
+        }
+    } else {
+        list_->setViewMode(QListView::ListMode);
+        list_->setIconSize(QSize());
+        list_->setResizeMode(QListView::Fixed);
+        list_->setMovement(QListView::Static);
+        list_->setSpacing(0);
+        list_->setUniformItemSizes(true);
+        if (btn_view_) {
+            btn_view_->setText(obsgs_tr("OBSTitles.IconView"));
+            btn_view_->setAccessibleName(obsgs_tr("OBSTitles.IconView"));
+            btn_view_->setToolTip(obsgs_tr("OBSTitles.IconViewTooltip"));
+            btn_view_->setIcon(obs_icon("icon-view.svg"));
+        }
+    }
+}
+
+void TitleDock::on_toggle_template_view()
+{
+    template_icon_view_ = !template_icon_view_;
+    update_template_view_mode();
+    populate_list();
+}
+
 void TitleDock::populate_list()
 {
     QString prev_id = QString::fromStdString(selected_id());
@@ -1146,6 +1202,8 @@ void TitleDock::populate_list()
 
     for (auto &t : TitleDataStore::instance().titles()) {
         auto *item = new QListWidgetItem(QString::fromStdString(t->name));
+        if (template_icon_view_)
+            item->setIcon(title_screenshot_icon(*t, QSize(120, 72)));
         item->setData(Qt::UserRole, QString::fromStdString(t->id));
         // Layer count hint as tooltip
         item->setToolTip(
