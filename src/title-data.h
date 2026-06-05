@@ -7,8 +7,9 @@
  * Properties (position, scale, opacity, colour, text …). Properties
  * can be animated over time via Keyframes that live on a Timeline.
  *
- * The TitleDataStore is a singleton that owns all titles and persists
- * them to a JSON file in the OBS profile directory.
+ * The TitleDataStore is a singleton that owns all titles for the active
+ * scene collection and persists them to a scene-collection-specific JSON
+ * file in the OBS profile directory.
  */
 
 #pragma once
@@ -294,6 +295,7 @@ private:
     TitleDataStore() = default;
     mutable std::recursive_mutex         mutex_;
     std::vector<std::shared_ptr<Title>>  titles_;
+    std::string                          loaded_path_;
     std::vector<ChangeCallback>          change_cbs_;
     std::atomic<uint64_t>                revision_ { 0 };
 
