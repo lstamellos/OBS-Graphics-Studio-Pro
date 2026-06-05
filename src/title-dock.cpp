@@ -1270,8 +1270,8 @@ void TitleDock::build_ui()
     btn_data_sources_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.DataSources"),
                                                   obs_icon("data-sources.svg"),
                                                   obsgs_tr("OBSTitles.DataSourcesTooltip"));
-    btn_data_sources_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    btn_data_sources_->setMinimumWidth(obs_toolbar_icon_extent(live_toolbar) + 10);
+    btn_data_sources_->setText(obsgs_tr("OBSTitles.DataSources"));
+    btn_data_sources_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     auto *data_sources_menu = new QMenu(btn_data_sources_);
     data_sources_menu->addAction(obs_icon("import.svg"), obsgs_tr("OBSTitles.ImportData"),
                                  this, &TitleDock::on_import_live_text_data);
@@ -1330,15 +1330,7 @@ void TitleDock::build_ui()
     live_toolbar->addWidget(btn_playlist_settings_);
     live_toolbar->addWidget(btn_persistence_settings_);
     live_toolbar->addWidget(toolbar_spacer(live_toolbar));
-
-    auto *external_tools = new QWidget(live_toolbar);
-    auto *external_tools_layout = new QHBoxLayout(external_tools);
-    external_tools_layout->setContentsMargins(0, 0, 0, 0);
-    external_tools_layout->setSpacing(2);
-    external_tools_layout->addWidget(btn_data_sources_);
-    external_tools_layout->addWidget(btn_external_refresh_);
-    external_tools->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-    live_toolbar->addWidget(external_tools);
+    live_toolbar->addWidget(btn_external_refresh_);
 
     live_header->addWidget(text_editor_lbl_);
     live_header->addStretch();
