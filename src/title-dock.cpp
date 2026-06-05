@@ -1320,6 +1320,7 @@ void TitleDock::build_ui()
     live_toolbar->addWidget(btn_delete_text_row_);
     live_toolbar->addWidget(btn_row_up_);
     live_toolbar->addWidget(btn_row_down_);
+    live_toolbar->addWidget(btn_data_sources_);
     live_toolbar->addSeparator();
     live_toolbar->addWidget(btn_playlist_);
     live_toolbar->addWidget(playlist_countdown_lbl_);
