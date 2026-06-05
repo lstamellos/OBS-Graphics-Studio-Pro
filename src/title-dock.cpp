@@ -1042,6 +1042,7 @@ void TitleDock::build_ui()
     template_header->addWidget(template_lbl_);
     template_header->addStretch();
     template_layout->addLayout(template_header);
+    template_layout->addWidget(template_toolbar);
 
     list_ = new QListWidget(template_section);
     list_->setAlternatingRowColors(true);
