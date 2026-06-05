@@ -7,6 +7,7 @@
 
 #include "title-editor.h"
 #include "title-data.h"
+#include "title-source.h"
 #include "title-assets.h"
 #include "title-localization.h"
 #include "plugin-main.h"
@@ -15,6 +16,8 @@
 
 #include <QApplication>
 
+#include <QBuffer>
+#include <QIODevice>
 #include <QPainter>
 #include <QPainterPath>
 #include <QImage>
@@ -76,6 +79,35 @@
 #include <initializer_list>
 #include <set>
 #include <limits>
+
+namespace {
+
+static double title_manual_screenshot_time(const Title &title)
+{
+    if (title.playback_mode == 1)
+        return std::clamp(title.loop_start, 0.0, title.duration);
+    if (title.playback_mode == 2)
+        return std::clamp(title.pause_time, 0.0, title.duration);
+    return std::clamp(title.duration * 0.5, 0.0, title.duration);
+}
+
+static std::string title_manual_screenshot_png_base64(const Title &title)
+{
+    const QImage screenshot = render_title_to_image(title, title_manual_screenshot_time(title));
+    if (screenshot.isNull())
+        return {};
+
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    if (!screenshot.save(&buffer, "PNG"))
+        return {};
+
+    const QByteArray encoded = png.toBase64();
+    return std::string(encoded.constData(), (size_t)encoded.size());
+}
+
+} // namespace
 
 /* ────────────────────────────────────────────────────────────────── */
 /*  Dark AE-style palette constants                                   */
@@ -1808,6 +1840,8 @@ void TitleEditor::build_toolbar()
         "  border-radius:3px; padding:4px 10px; }"
         "QPushButton:hover { background:#1088e4; }");
     connect(btn_save, &QPushButton::clicked, this, [this]() {
+        if (title_)
+            title_->preview_screenshot_png_base64 = title_manual_screenshot_png_base64(*title_);
         TitleDataStore::instance().save();
         if (title_) emit title_saved(title_->id);
         setWindowTitle(obsgs_tr("OBSTitles.EditorSavedTitle"));

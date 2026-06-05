@@ -35,6 +35,7 @@ constexpr size_t kMaxLiveTextRows = 256;
 constexpr size_t kMaxLiveTextColumns = 32;
 constexpr size_t kMaxNameLength = 256;
 constexpr size_t kMaxTextLength = 8192;
+constexpr size_t kMaxScreenshotBase64Length = 32 * 1024 * 1024;
 constexpr double kMaxDuration = 3600.0;
 constexpr double kMaxPropertyValue = 100000.0;
 constexpr int kMaxCanvasDimension = 16384;
@@ -1026,6 +1027,8 @@ static json title_to_json(const Title &t, bool include_embedded_assets = true,
     jt["live_text_rows"] = live_rows;
     jt["live_text_column_order"] = t.live_text_column_order;
     jt["live_text_header_state"] = t.live_text_header_state;
+    if (!t.preview_screenshot_png_base64.empty())
+        jt["preview_screenshot_png_base64"] = t.preview_screenshot_png_base64;
     return jt;
 }
 
@@ -1088,6 +1091,8 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
         }
     }
     t->live_text_header_state = bounded_string(jt, "live_text_header_state", "", kMaxTextLength);
+    t->preview_screenshot_png_base64 = bounded_string(jt, "preview_screenshot_png_base64", "",
+                                                       kMaxScreenshotBase64Length);
 
     if (regenerate_ids) {
         std::unordered_map<std::string, std::string> layer_id_map;
@@ -1229,6 +1234,16 @@ std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std
             throw std::runtime_error("Unsupported template file format.");
 
         auto imported = title_from_json(jt, true, true, error);
+        if (imported && imported->preview_screenshot_png_base64.empty() && root.is_object()) {
+            json screenshot = root.value("screenshot", json::object());
+            if (screenshot.empty() && root.contains("metadata") && root["metadata"].is_object())
+                screenshot = root["metadata"].value("screenshot", json::object());
+            if (screenshot.is_object()) {
+                const std::string png_base64 = bounded_string(screenshot, "data_base64", "",
+                                                              kMaxScreenshotBase64Length);
+                imported->preview_screenshot_png_base64 = png_base64;
+            }
+        }
         if (error && !error->empty())
             throw std::runtime_error(*error);
         if (!imported || imported->layers.empty())

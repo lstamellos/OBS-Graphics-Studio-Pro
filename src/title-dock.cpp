@@ -548,13 +548,19 @@ static QImage title_screenshot_image(const Title &title)
     return render_title_to_image(title, title_export_screenshot_time(title));
 }
 
-static QIcon title_screenshot_icon(const Title &title, const QSize &size)
+static QIcon title_cached_screenshot_icon(const Title &title, const QSize &size)
 {
-    const QImage screenshot = title_screenshot_image(title);
-    if (screenshot.isNull())
+    if (title.preview_screenshot_png_base64.empty())
         return QIcon();
 
-    return QIcon(QPixmap::fromImage(screenshot).scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    const QByteArray png = QByteArray::fromBase64(
+        QByteArray(title.preview_screenshot_png_base64.data(),
+                   (int)title.preview_screenshot_png_base64.size()));
+    QPixmap pixmap;
+    if (!pixmap.loadFromData(png, "PNG"))
+        return QIcon();
+
+    return QIcon(pixmap.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
 static QString title_screenshot_png_base64(const QImage &screenshot)
@@ -1425,7 +1431,7 @@ void TitleDock::populate_list()
     for (auto &t : TitleDataStore::instance().titles()) {
         auto *item = new QListWidgetItem(QString::fromStdString(t->name));
         if (template_icon_view_)
-            item->setIcon(title_screenshot_icon(*t, QSize(120, 72)));
+            item->setIcon(title_cached_screenshot_icon(*t, QSize(120, 72)));
         item->setData(Qt::UserRole, QString::fromStdString(t->id));
         // Layer count hint as tooltip
         item->setToolTip(
@@ -2625,8 +2631,11 @@ void TitleDock::on_export()
         return;
     }
 
+    title->preview_screenshot_png_base64 = screenshot_base64.toStdString();
+    TitleDataStore::instance().save();
+
     TitleTemplateExportMetadata metadata;
-    metadata.screenshot_png_base64 = screenshot_base64.toStdString();
+    metadata.screenshot_png_base64 = title->preview_screenshot_png_base64;
     bool save_in_template_library = false;
     if (!prompt_template_export_metadata(this, *title, screenshot, metadata, save_in_template_library))
         return;

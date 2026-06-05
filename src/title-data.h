@@ -237,6 +237,7 @@ struct Title {
     std::vector<std::vector<std::string>> live_text_rows;
     std::vector<std::string> live_text_column_order; /* exposed text layer IDs by logical cue column */
     std::string live_text_header_state; /* base64-encoded dock header layout */
+    std::string preview_screenshot_png_base64; /* manually captured title-list thumbnail */
     int current_cue_row = -1; /* runtime-only active live text row */
     int pending_cue_row = -1; /* runtime-only next row waiting for outro */
     uint64_t cue_revision = 0; /* runtime-only live text cue counter */
