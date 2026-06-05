@@ -2003,6 +2003,9 @@ void TitleEditor::restore_undo_snapshot(int index)
     title_->width = snapshot->width;
     title_->height = snapshot->height;
     title_->live_text_rows = snapshot->live_text_rows;
+    title_->live_text_column_order = snapshot->live_text_column_order;
+    title_->live_text_header_state = snapshot->live_text_header_state;
+    title_->external_data_enabled = snapshot->external_data_enabled;
     title_->current_cue_row = snapshot->current_cue_row;
     title_->pending_cue_row = snapshot->pending_cue_row;
     title_->cue_revision = snapshot->cue_revision;
