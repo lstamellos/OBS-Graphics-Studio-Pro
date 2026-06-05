@@ -100,6 +100,8 @@ void obs_module_unload(void)
 static void on_frontend_event(obs_frontend_event event, void * /*priv*/)
 {
     if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+        TitleDataStore::instance().load();
+
         QMainWindow *main =
             static_cast<QMainWindow *>(obs_frontend_get_main_window());
 
@@ -115,11 +117,15 @@ static void on_frontend_event(obs_frontend_event event, void * /*priv*/)
     }
 
     if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP) {
+        TitleDataStore::instance().save();
         title_hotkeys_unregister();
     }
 
     if (event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED && g_frontend_ready) {
+        TitleDataStore::instance().load();
         title_hotkeys_register();
+        if (g_dock)
+            g_dock->update_scene_collection_title();
     }
 
     if (event == OBS_FRONTEND_EVENT_EXIT) {

@@ -394,8 +394,10 @@ install(TARGETS obs-graphics-studio-pro
         RUNTIME DESTINATION ${OBS_TITLES_PLUGIN_NAME}/bin/${OBS_TITLES_ARCH_DIR}
         LIBRARY DESTINATION ${OBS_TITLES_PLUGIN_NAME}/bin/${OBS_TITLES_ARCH_DIR})
 
-# ── Locale files ────────────────────────────────────────────────────
+# ── Data files ──────────────────────────────────────────────────────
 install(DIRECTORY data/locale
+        DESTINATION ${OBS_TITLES_PLUGIN_NAME}/data)
+install(DIRECTORY data/icons
         DESTINATION ${OBS_TITLES_PLUGIN_NAME}/data)
 
 # ── Print summary ────────────────────────────────────────────────────
