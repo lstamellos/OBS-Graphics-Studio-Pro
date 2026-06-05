@@ -47,6 +47,7 @@
 #include <vector>
 #include <algorithm>
 #include <mutex>
+#include <limits>
 
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
@@ -102,7 +103,7 @@ struct TitleSourceData {
     float       speed        = 1.0f;
     bool        auto_advance = false;  /* future: playlist mode */
 
-    enum class CuePhase { FreeRun, IntroLoop, OutroThenIntro };
+    enum class CuePhase { FreeRun, IntroLoop, OutroThenIntro, OutroOnly };
 
     /* Playback state */
     double      playhead     = 0.0;    /* seconds */
@@ -110,6 +111,7 @@ struct TitleSourceData {
     bool        playback_reverse = false;
     uint64_t    seen_cue_revision = 0;
     CuePhase    cue_phase    = CuePhase::FreeRun;
+    int         active_cue_row = -1;
     std::chrono::steady_clock::time_point last_tick;
     std::chrono::steady_clock::time_point last_clock_refresh;
     bool        first_tick   = true;
@@ -162,6 +164,49 @@ static bool layer_has_animation(const Layer &layer)
            layer.fill_color_b.is_animated();
 }
 
+static bool include_property_bounds(const Layer &layer, const AnimatedProperty &prop,
+                                    double &first_time, double &last_time)
+{
+    if (prop.keyframes.empty()) return false;
+    first_time = std::min(first_time, layer.in_time + prop.keyframes.front().time);
+    last_time = std::max(last_time, layer.in_time + prop.keyframes.back().time);
+    return true;
+}
+
+static bool layer_animation_keyframe_bounds(const Layer &layer, double &first_time, double &last_time)
+{
+    bool has_bounds = false;
+    has_bounds |= include_property_bounds(layer, layer.pos_x, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.pos_y, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.scale_x, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.scale_y, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.rotation, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.opacity, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.box_width, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.box_height, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.origin_x_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.origin_y_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_enabled_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_opacity_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_distance_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_angle_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_blur_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_spread_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_a, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_r, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_g, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_b, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_a, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_r, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_g, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_b, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_a, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_r, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_g, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_b, first_time, last_time);
+    return has_bounds;
+}
+
 static bool title_has_clock_layer(const std::shared_ptr<Title> &title)
 {
     if (!title) return false;
@@ -199,6 +244,57 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared
             exposed.push_back(layer);
     }
     return exposed;
+}
+
+
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &title)
+{
+    std::vector<std::shared_ptr<Layer>> exposed;
+    for (const auto &layer : title.layers) {
+        if (!layer) continue;
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
+            exposed.push_back(layer);
+    }
+    return exposed;
+}
+
+static bool exposed_text_animation_bounds(const std::vector<std::shared_ptr<Layer>> &exposed,
+                                           double &first_time, double &last_time)
+{
+    first_time = std::numeric_limits<double>::max();
+    last_time = std::numeric_limits<double>::lowest();
+    bool has_bounds = false;
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        has_bounds |= layer_animation_keyframe_bounds(*layer, first_time, last_time);
+    }
+    return has_bounds && first_time <= last_time;
+}
+
+static double cue_persistence_hold_time(const Title &title)
+{
+    if (title.playback_mode == 1)
+        return std::clamp(title.loop_end, title.loop_start, title.duration);
+    if (title.playback_mode == 2)
+        return std::clamp(title.pause_time, 0.0, title.duration);
+    return std::clamp(title.duration, 0.0, title.duration);
+}
+
+static void clear_cue_persistence_transition(const std::shared_ptr<Title> &title)
+{
+    if (!title || !title->cue_persistence_transition) return;
+    title->cue_persistence_transition = false;
+    title->cue_persistent_text_columns.clear();
+    TitleDataStore::instance().touch_runtime_change();
+}
+
+static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &exposed, const std::shared_ptr<Layer> &layer)
+{
+    for (int i = 0; i < (int)exposed.size(); ++i) {
+        if (exposed[i] == layer)
+            return i;
+    }
+    return -1;
 }
 
 static void apply_live_text_row(const std::shared_ptr<Title> &title, int row)
@@ -1014,11 +1110,33 @@ static void render_title_frame(TitleSourceData *data,
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
+    const bool persistence_transition = title.cue_background_persistence &&
+        title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
+    const double persistence_time = cue_persistence_hold_time(title);
+    const auto exposed = persistence_transition ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
+    double text_first_keyframe = 0.0;
+    double text_last_keyframe = 0.0;
+    const bool has_text_keyframe_bounds = persistence_transition &&
+        exposed_text_animation_bounds(exposed, text_first_keyframe, text_last_keyframe);
+    const bool background_persistence = persistence_transition && has_text_keyframe_bounds &&
+        t >= text_first_keyframe && t <= text_last_keyframe;
+
     /* Render layers bottom → top */
     for (auto &layer : title.layers) {
         if (!layer || !layer->visible) continue;
-        if (t < layer->in_time || t > layer->out_time) continue;
-        double lt = t - layer->in_time;  /* local layer time */
+
+        double layer_time = t;
+        if (background_persistence) {
+            const int exposed_index = exposed_text_layer_index(exposed, layer);
+            const bool persistent_text = exposed_index >= 0 && title.cue_text_persistence &&
+                exposed_index < (int)title.cue_persistent_text_columns.size() &&
+                title.cue_persistent_text_columns[exposed_index];
+            if (exposed_index < 0 || persistent_text)
+                layer_time = persistence_time;
+        }
+
+        if (layer_time < layer->in_time || layer_time > layer->out_time) continue;
+        double lt = layer_time - layer->in_time;  /* local layer time */
 
         switch (layer->type) {
         case LayerType::Text:
@@ -1125,6 +1243,7 @@ static void *source_create(obs_data_t *settings, obs_source_t *source)
         data->seen_cue_revision = title->cue_revision;
     data->playing = false;
     data->waiting_for_cue = true;
+    data->active_cue_row = -1;
     data->dirty = true;
     return data;
 }
@@ -1155,6 +1274,7 @@ static void source_update(void *priv, obs_data_t *settings)
     data->cue_phase = TitleSourceData::CuePhase::FreeRun;
     data->playing = false;
     data->waiting_for_cue = true;
+    data->active_cue_row = -1;
     if (auto title = TitleDataStore::instance().get_title(data->title_id))
         data->seen_cue_revision = title->cue_revision;
     else
@@ -1190,27 +1310,39 @@ static void source_video_tick(void *priv, float seconds)
         double pause_time = std::clamp(title->pause_time, 0.0, title->duration);
         bool has_pending = title->pending_cue_row >= 0 &&
                            title->pending_cue_row < (int)title->live_text_rows.size();
+        bool has_current = title->current_cue_row >= 0 &&
+                           title->current_cue_row < (int)title->live_text_rows.size();
+        bool is_uncue = !has_pending && !has_current && data->active_cue_row >= 0;
         if (title->playback_mode == 1) {
             if (has_pending) {
                 data->playhead = loop_end;
                 data->cue_phase = TitleSourceData::CuePhase::OutroThenIntro;
+            } else if (is_uncue) {
+                data->playhead = loop_end;
+                data->cue_phase = TitleSourceData::CuePhase::OutroOnly;
             } else {
                 data->playhead = 0.0;
                 data->cue_phase = TitleSourceData::CuePhase::IntroLoop;
             }
-        } else if (title->playback_mode == 2 && has_pending) {
+        } else if (title->playback_mode == 2 && (has_pending || is_uncue)) {
             data->playhead = pause_time;
-            data->cue_phase = TitleSourceData::CuePhase::OutroThenIntro;
+            data->cue_phase = has_pending
+                ? TitleSourceData::CuePhase::OutroThenIntro
+                : TitleSourceData::CuePhase::OutroOnly;
         } else {
             if (has_pending) {
                 apply_live_text_row(title, title->pending_cue_row);
                 title->current_cue_row = title->pending_cue_row;
                 title->pending_cue_row = -1;
+                has_current = true;
                 TitleDataStore::instance().touch_runtime_change();
             }
-            data->playhead = 0.0;
+            if (!is_uncue)
+                data->playhead = 0.0;
             data->cue_phase = TitleSourceData::CuePhase::FreeRun;
         }
+        if (has_current)
+            data->active_cue_row = title->current_cue_row;
         data->seen_cue_revision = title->cue_revision;
         data->playback_reverse = false;
         data->waiting_for_cue = false;
@@ -1242,6 +1374,7 @@ static void source_video_tick(void *priv, float seconds)
             double loop_len = std::max(0.001, loop_end - loop_start);
             if (title->loop_type == 1) {
                 if (!data->playback_reverse && data->playhead >= loop_end) {
+                    clear_cue_persistence_transition(title);
                     data->playhead = loop_end - std::fmod(data->playhead - loop_end, loop_len);
                     data->playback_reverse = true;
                 } else if (data->playback_reverse && data->playhead <= loop_start) {
@@ -1249,27 +1382,42 @@ static void source_video_tick(void *priv, float seconds)
                     data->playback_reverse = false;
                 }
             } else if (data->playhead >= loop_end) {
+                clear_cue_persistence_transition(title);
                 data->playhead = loop_start + std::fmod(data->playhead - loop_start, loop_len);
             }
-        } else if (data->cue_phase == TitleSourceData::CuePhase::OutroThenIntro &&
+        } else if ((data->cue_phase == TitleSourceData::CuePhase::OutroThenIntro ||
+                    data->cue_phase == TitleSourceData::CuePhase::OutroOnly) &&
                    data->playhead >= title->duration) {
             double next_intro_time = std::max(0.0, data->playhead - title->duration);
-            if (title->pending_cue_row >= 0 && title->pending_cue_row < (int)title->live_text_rows.size()) {
-                apply_live_text_row(title, title->pending_cue_row);
-                title->current_cue_row = title->pending_cue_row;
-                title->pending_cue_row = -1;
-                TitleDataStore::instance().touch_runtime_change();
-            }
-            if (title->playback_mode == 1) {
-                if (loop_end > loop_start && next_intro_time >= loop_end) {
-                    next_intro_time = loop_start + std::fmod(next_intro_time - loop_start,
-                                                             std::max(0.001, loop_end - loop_start));
-                }
-                data->playhead = std::clamp(next_intro_time, 0.0, title->duration);
-                data->cue_phase = TitleSourceData::CuePhase::IntroLoop;
-            } else {
-                data->playhead = 0.0;
+            if (data->cue_phase == TitleSourceData::CuePhase::OutroOnly) {
+                data->playhead = title->duration;
+                data->playing = false;
                 data->cue_phase = TitleSourceData::CuePhase::FreeRun;
+                data->active_cue_row = -1;
+                title->current_cue_row = -1;
+                title->pending_cue_row = -1;
+                title->cue_persistence_transition = false;
+                title->cue_persistent_text_columns.clear();
+                TitleDataStore::instance().touch_runtime_change();
+            } else {
+                if (title->pending_cue_row >= 0 && title->pending_cue_row < (int)title->live_text_rows.size()) {
+                    apply_live_text_row(title, title->pending_cue_row);
+                    title->current_cue_row = title->pending_cue_row;
+                    title->pending_cue_row = -1;
+                    data->active_cue_row = title->current_cue_row;
+                    TitleDataStore::instance().touch_runtime_change();
+                }
+                if (title->playback_mode == 1) {
+                    if (loop_end > loop_start && next_intro_time >= loop_end) {
+                        next_intro_time = loop_start + std::fmod(next_intro_time - loop_start,
+                                                                 std::max(0.001, loop_end - loop_start));
+                    }
+                    data->playhead = std::clamp(next_intro_time, 0.0, title->duration);
+                    data->cue_phase = TitleSourceData::CuePhase::IntroLoop;
+                } else {
+                    data->playhead = 0.0;
+                    data->cue_phase = TitleSourceData::CuePhase::FreeRun;
+                }
             }
             data->playback_reverse = false;
         } else if (data->cue_phase == TitleSourceData::CuePhase::FreeRun) {
@@ -1294,10 +1442,19 @@ static void source_video_tick(void *priv, float seconds)
                 if (data->playhead >= pause_time) {
                     data->playhead = pause_time;
                     data->playing = false;
+                    clear_cue_persistence_transition(title);
                 }
             } else if (data->playhead >= title->duration) {
                 data->playhead = title->duration;
                 data->playing  = false;
+                if (title->current_cue_row >= 0 || title->pending_cue_row >= 0 || data->active_cue_row >= 0) {
+                    title->current_cue_row = -1;
+                    title->pending_cue_row = -1;
+                    title->cue_persistence_transition = false;
+                    title->cue_persistent_text_columns.clear();
+                    data->active_cue_row = -1;
+                    TitleDataStore::instance().touch_runtime_change();
+                }
             }
         }
         data->dirty = true;
