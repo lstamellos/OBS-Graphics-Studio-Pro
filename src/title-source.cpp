@@ -223,6 +223,14 @@ static double cue_persistence_hold_time(const Title &title)
     return std::clamp(title.duration, 0.0, title.duration);
 }
 
+static void clear_cue_persistence_transition(const std::shared_ptr<Title> &title)
+{
+    if (!title || !title->cue_persistence_transition) return;
+    title->cue_persistence_transition = false;
+    title->cue_persistent_text_columns.clear();
+    TitleDataStore::instance().touch_runtime_change();
+}
+
 static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &exposed, const std::shared_ptr<Layer> &layer)
 {
     for (int i = 0; i < (int)exposed.size(); ++i) {
@@ -1046,7 +1054,7 @@ static void render_title_frame(TitleSourceData *data,
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
     const bool background_persistence = title.cue_background_persistence &&
-        title.current_cue_row >= 0 && !title.live_text_rows.empty();
+        title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
     const double persistence_time = cue_persistence_hold_time(title);
     const auto exposed = background_persistence ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
 
@@ -1303,6 +1311,7 @@ static void source_video_tick(void *priv, float seconds)
             double loop_len = std::max(0.001, loop_end - loop_start);
             if (title->loop_type == 1) {
                 if (!data->playback_reverse && data->playhead >= loop_end) {
+                    clear_cue_persistence_transition(title);
                     data->playhead = loop_end - std::fmod(data->playhead - loop_end, loop_len);
                     data->playback_reverse = true;
                 } else if (data->playback_reverse && data->playhead <= loop_start) {
@@ -1310,6 +1319,7 @@ static void source_video_tick(void *priv, float seconds)
                     data->playback_reverse = false;
                 }
             } else if (data->playhead >= loop_end) {
+                clear_cue_persistence_transition(title);
                 data->playhead = loop_start + std::fmod(data->playhead - loop_start, loop_len);
             }
         } else if ((data->cue_phase == TitleSourceData::CuePhase::OutroThenIntro ||
@@ -1323,6 +1333,8 @@ static void source_video_tick(void *priv, float seconds)
                 data->active_cue_row = -1;
                 title->current_cue_row = -1;
                 title->pending_cue_row = -1;
+                title->cue_persistence_transition = false;
+                title->cue_persistent_text_columns.clear();
                 TitleDataStore::instance().touch_runtime_change();
             } else {
                 if (title->pending_cue_row >= 0 && title->pending_cue_row < (int)title->live_text_rows.size()) {
@@ -1367,6 +1379,7 @@ static void source_video_tick(void *priv, float seconds)
                 if (data->playhead >= pause_time) {
                     data->playhead = pause_time;
                     data->playing = false;
+                    clear_cue_persistence_transition(title);
                 }
             } else if (data->playhead >= title->duration) {
                 data->playhead = title->duration;
@@ -1374,6 +1387,8 @@ static void source_video_tick(void *priv, float seconds)
                 if (title->current_cue_row >= 0 || title->pending_cue_row >= 0 || data->active_cue_row >= 0) {
                     title->current_cue_row = -1;
                     title->pending_cue_row = -1;
+                    title->cue_persistence_transition = false;
+                    title->cue_persistent_text_columns.clear();
                     data->active_cue_row = -1;
                     TitleDataStore::instance().touch_runtime_change();
                 }

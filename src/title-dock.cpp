@@ -1143,6 +1143,11 @@ void TitleDock::build_ui()
                                                           obsgs_tr("OBSTitles.PersistenceTooltip"));
     btn_persistence_settings_->setText(obsgs_tr("OBSTitles.Persistence"));
     btn_persistence_settings_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    btn_persistence_settings_->setCheckable(true);
+    btn_persistence_settings_->setStyleSheet(QStringLiteral(
+        "QToolButton:checked{background:#1d8f3a;color:white;border-radius:3px;}"
+        "QToolButton:checked:hover{background:#28b84f;}"
+        "QToolButton::menu-indicator{image:none;width:0px;}"));
     live_toolbar->addWidget(btn_add_text_row_);
     live_toolbar->addWidget(btn_delete_text_row_);
     live_toolbar->addWidget(btn_row_up_);
@@ -1241,7 +1246,6 @@ void TitleDock::build_ui()
     act_text_persistence_->setCheckable(true);
     btn_persistence_settings_->setMenu(persistence_menu);
     btn_persistence_settings_->setPopupMode(QToolButton::InstantPopup);
-    btn_persistence_settings_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
 
     connect(btn_row_down_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_down);
     connect(btn_playlist_, &QToolButton::toggled, this, &TitleDock::on_toggle_playlist);
@@ -1546,6 +1550,8 @@ void TitleDock::apply_persistence_settings_to_title(const std::shared_ptr<Title>
     const bool has_exposed = !exposed.empty();
     title->cue_background_persistence = background_persistence_ && has_exposed;
     title->cue_text_persistence = title->cue_background_persistence && text_persistence_;
+    if (!title->cue_background_persistence)
+        title->cue_persistence_transition = false;
     if (!title->cue_text_persistence)
         title->cue_persistent_text_columns.clear();
 }
@@ -1554,8 +1560,11 @@ void TitleDock::update_persistence_controls()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     const bool has_exposed = title && !exposed_text_layers(title).empty();
-    if (btn_persistence_settings_)
+    if (btn_persistence_settings_) {
         btn_persistence_settings_->setEnabled(has_exposed);
+        QSignalBlocker block(btn_persistence_settings_);
+        btn_persistence_settings_->setChecked(has_exposed && background_persistence_);
+    }
     if (act_background_persistence_)
         act_background_persistence_->setEnabled(has_exposed);
     if (act_text_persistence_) {
@@ -1597,30 +1606,36 @@ bool TitleDock::cue_live_text_row(int row, bool allow_uncue)
     const bool is_active_cue = title->current_cue_row == row;
     const bool is_pending_cue = title->pending_cue_row == row;
     const int previous_row = title->current_cue_row >= 0 ? title->current_cue_row : title->pending_cue_row;
-    const bool persistence_transition = title->cue_background_persistence &&
+    const bool can_persist_transition = title->cue_background_persistence &&
+        (title->playback_mode == 1 || title->playback_mode == 2) &&
         previous_row >= 0 && previous_row != row;
     const bool needs_outro_before_cue =
-        !persistence_transition &&
         (title->playback_mode == 1 || title->playback_mode == 2) &&
         title->current_cue_row >= 0 && title->current_cue_row != row;
 
+    title->cue_persistence_transition = false;
     title->cue_persistent_text_columns.assign(exposed_now.size(), false);
 
     if (allow_uncue && (is_active_cue || is_pending_cue)) {
         title->current_cue_row = -1;
         title->pending_cue_row = -1;
+        title->cue_persistence_transition = false;
         title->cue_persistent_text_columns.clear();
-    } else if (needs_outro_before_cue) {
-        title->pending_cue_row = row;
-    } else if (!is_active_cue || title->pending_cue_row >= 0) {
+    } else if (can_persist_transition) {
         for (int col = 0; col < (int)exposed_now.size() && col < (int)title->live_text_rows[row].size(); ++col) {
-            if (title->cue_text_persistence && persistence_transition &&
+            if (title->cue_text_persistence &&
                 previous_row >= 0 && previous_row < (int)title->live_text_rows.size() &&
                 col < (int)title->live_text_rows[previous_row].size() &&
                 title->live_text_rows[previous_row][col] == title->live_text_rows[row][col])
                 title->cue_persistent_text_columns[col] = true;
-            exposed_now[col]->text_content = title->live_text_rows[row][col];
         }
+        title->pending_cue_row = row;
+        title->cue_persistence_transition = true;
+    } else if (needs_outro_before_cue) {
+        title->pending_cue_row = row;
+    } else if (!is_active_cue || title->pending_cue_row >= 0) {
+        for (int col = 0; col < (int)exposed_now.size() && col < (int)title->live_text_rows[row].size(); ++col)
+            exposed_now[col]->text_content = title->live_text_rows[row][col];
         title->current_cue_row = row;
         title->pending_cue_row = -1;
     }

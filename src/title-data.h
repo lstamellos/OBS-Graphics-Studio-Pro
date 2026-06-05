@@ -238,8 +238,9 @@ struct Title {
     int current_cue_row = -1; /* runtime-only active live text row */
     int pending_cue_row = -1; /* runtime-only next row waiting for outro */
     uint64_t cue_revision = 0; /* runtime-only live text cue counter */
-    bool cue_background_persistence = false; /* runtime-only: freeze non-exposed layers while cueing */
-    bool cue_text_persistence = false; /* runtime-only: freeze unchanged exposed text columns while cueing */
+    bool cue_background_persistence = false; /* runtime-only setting: enable background persistence for cue transitions */
+    bool cue_text_persistence = false; /* runtime-only setting: freeze unchanged exposed text columns while cueing */
+    bool cue_persistence_transition = false; /* runtime-only active persistent transition between cue rows */
     std::vector<bool> cue_persistent_text_columns; /* runtime-only exposed text columns held at pause/loop */
 
     /* Helpers */
