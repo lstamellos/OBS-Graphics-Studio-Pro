@@ -25,6 +25,7 @@
 #include <QToolBar>
 #include <QTimer>
 #include <QByteArray>
+#include <QDateTime>
 #include <map>
 
 class TitleEditor;
@@ -56,6 +57,8 @@ private slots:
     void on_delete_live_text_rows();
     void on_move_live_text_row_up();
     void on_move_live_text_row_down();
+    void on_toggle_playlist(bool enabled);
+    void on_playlist_tick();
 
 private:
     void build_ui();
@@ -66,6 +69,16 @@ private:
     void update_live_text_select_all_state();
     void save_live_text_header_state();
     bool restore_live_text_header_state();
+    void load_dock_settings();
+    void save_dock_settings() const;
+    bool cue_live_text_row(int row, bool allow_uncue);
+    int live_text_playlist_row_count(const std::shared_ptr<Title> &title) const;
+    void start_playlist_step();
+    int next_playlist_row(int current_row, int row_count) const;
+    int playlist_step_delay_ms(const std::shared_ptr<Title> &title) const;
+    void update_playlist_controls();
+    void update_playlist_countdown_label();
+    void stop_playlist();
     bool has_checked_live_text_rows() const;
     void apply_live_text_row_selection(const std::vector<int> &rows, bool checked);
     std::string selected_id() const;
@@ -75,6 +88,7 @@ private:
     std::vector<int> selected_live_text_rows() const;
 
     QWidget      *container_  = nullptr;
+    QSplitter    *sections_   = nullptr;
     QListWidget  *list_       = nullptr;
     QToolButton *btn_add_    = nullptr;
     QToolButton *btn_dup_    = nullptr;
@@ -87,15 +101,27 @@ private:
     QLabel       *template_lbl_ = nullptr;
     QLabel       *status_lbl_ = nullptr;
     QLabel       *text_editor_lbl_ = nullptr;
+    QLabel       *playlist_countdown_lbl_ = nullptr;
     QTableWidget *text_table_ = nullptr;
     QToolButton *btn_add_text_row_ = nullptr;
     QToolButton *btn_delete_text_row_ = nullptr;
     QToolButton *btn_row_up_ = nullptr;
     QToolButton *btn_row_down_ = nullptr;
+    QToolButton *btn_playlist_ = nullptr;
+    QToolButton *btn_playlist_settings_ = nullptr;
+    QAction     *act_playlist_loop_ = nullptr;
+    QAction     *act_playlist_reverse_ = nullptr;
     bool          updating_exposed_text_ = false;
     bool          template_icon_view_ = false;
     std::map<int, QByteArray> live_text_header_states_;
     QTimer       *live_refresh_timer_ = nullptr;
+    QTimer       *playlist_timer_ = nullptr;
+    qint64        playlist_next_due_ms_ = 0;
+    bool          playlist_stop_after_due_ = false;
+    int           playlist_next_row_ = 0;
+    double        playlist_hold_seconds_ = 5.0;
+    bool          playlist_loop_ = false;
+    bool          playlist_reverse_ = false;
     uint64_t      seen_store_revision_ = 0;
 
     TitleEditor  *editor_     = nullptr;
