@@ -47,6 +47,7 @@
 #include <vector>
 #include <algorithm>
 #include <mutex>
+#include <limits>
 
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
@@ -163,6 +164,49 @@ static bool layer_has_animation(const Layer &layer)
            layer.fill_color_b.is_animated();
 }
 
+static bool include_property_bounds(const Layer &layer, const AnimatedProperty &prop,
+                                    double &first_time, double &last_time)
+{
+    if (prop.keyframes.empty()) return false;
+    first_time = std::min(first_time, layer.in_time + prop.keyframes.front().time);
+    last_time = std::max(last_time, layer.in_time + prop.keyframes.back().time);
+    return true;
+}
+
+static bool layer_animation_keyframe_bounds(const Layer &layer, double &first_time, double &last_time)
+{
+    bool has_bounds = false;
+    has_bounds |= include_property_bounds(layer, layer.pos_x, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.pos_y, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.scale_x, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.scale_y, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.rotation, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.opacity, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.box_width, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.box_height, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.origin_x_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.origin_y_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_enabled_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_opacity_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_distance_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_angle_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_blur_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_spread_prop, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_a, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_r, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_g, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.shadow_color_b, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_a, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_r, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_g, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.text_color_b, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_a, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_r, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_g, first_time, last_time);
+    has_bounds |= include_property_bounds(layer, layer.fill_color_b, first_time, last_time);
+    return has_bounds;
+}
+
 static bool title_has_clock_layer(const std::shared_ptr<Title> &title)
 {
     if (!title) return false;
@@ -212,6 +256,19 @@ static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &titl
             exposed.push_back(layer);
     }
     return exposed;
+}
+
+static bool exposed_text_animation_bounds(const std::vector<std::shared_ptr<Layer>> &exposed,
+                                           double &first_time, double &last_time)
+{
+    first_time = std::numeric_limits<double>::max();
+    last_time = std::numeric_limits<double>::lowest();
+    bool has_bounds = false;
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        has_bounds |= layer_animation_keyframe_bounds(*layer, first_time, last_time);
+    }
+    return has_bounds && first_time <= last_time;
 }
 
 static double cue_persistence_hold_time(const Title &title)
@@ -1053,10 +1110,16 @@ static void render_title_frame(TitleSourceData *data,
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-    const bool background_persistence = title.cue_background_persistence &&
+    const bool persistence_transition = title.cue_background_persistence &&
         title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
     const double persistence_time = cue_persistence_hold_time(title);
-    const auto exposed = background_persistence ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
+    const auto exposed = persistence_transition ? exposed_text_layers(title) : std::vector<std::shared_ptr<Layer>>();
+    double text_first_keyframe = 0.0;
+    double text_last_keyframe = 0.0;
+    const bool has_text_keyframe_bounds = persistence_transition &&
+        exposed_text_animation_bounds(exposed, text_first_keyframe, text_last_keyframe);
+    const bool background_persistence = persistence_transition && has_text_keyframe_bounds &&
+        t >= text_first_keyframe && t <= text_last_keyframe;
 
     /* Render layers bottom → top */
     for (auto &layer : title.layers) {
