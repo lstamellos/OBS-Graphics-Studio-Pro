@@ -1271,6 +1271,7 @@ void TitleDock::build_ui()
                                                   obs_icon("data-sources.svg"),
                                                   obsgs_tr("OBSTitles.DataSourcesTooltip"));
     btn_data_sources_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    btn_data_sources_->setMinimumWidth(obs_toolbar_icon_extent(live_toolbar) + 10);
     auto *data_sources_menu = new QMenu(btn_data_sources_);
     data_sources_menu->addAction(obs_icon("import.svg"), obsgs_tr("OBSTitles.ImportData"),
                                  this, &TitleDock::on_import_live_text_data);
@@ -1290,6 +1291,7 @@ void TitleDock::build_ui()
                                                       globe_status_icon(false, live_toolbar),
                                                       obsgs_tr("OBSTitles.RefreshExternalDataTooltip"));
     btn_external_refresh_->setCheckable(true);
+    btn_external_refresh_->setMinimumWidth(obs_toolbar_icon_extent(live_toolbar) + 10);
     btn_external_refresh_->setStyleSheet(QStringLiteral(
         "QToolButton:checked{background:#1d8f3a;color:white;border-radius:3px;}"
         "QToolButton:checked:hover{background:#28b84f;}"));
@@ -1311,6 +1313,7 @@ void TitleDock::build_ui()
                                                           obs_icon("persistence.svg"),
                                                           obsgs_tr("OBSTitles.PersistenceTooltip"));
     btn_persistence_settings_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    btn_persistence_settings_->setMinimumWidth(obs_toolbar_icon_extent(live_toolbar) + 10);
     btn_persistence_settings_->setCheckable(true);
     btn_persistence_settings_->setStyleSheet(QStringLiteral(
         "QToolButton:checked{background:#1d8f3a;color:white;border-radius:3px;}"
@@ -1327,8 +1330,15 @@ void TitleDock::build_ui()
     live_toolbar->addWidget(btn_playlist_settings_);
     live_toolbar->addWidget(btn_persistence_settings_);
     live_toolbar->addWidget(toolbar_spacer(live_toolbar));
-    live_toolbar->addWidget(btn_data_sources_);
-    live_toolbar->addWidget(btn_external_refresh_);
+
+    auto *external_tools = new QWidget(live_toolbar);
+    auto *external_tools_layout = new QHBoxLayout(external_tools);
+    external_tools_layout->setContentsMargins(0, 0, 0, 0);
+    external_tools_layout->setSpacing(2);
+    external_tools_layout->addWidget(btn_data_sources_);
+    external_tools_layout->addWidget(btn_external_refresh_);
+    external_tools->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    live_toolbar->addWidget(external_tools);
 
     live_header->addWidget(text_editor_lbl_);
     live_header->addStretch();
