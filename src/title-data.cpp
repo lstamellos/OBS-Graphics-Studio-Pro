@@ -1027,6 +1027,7 @@ static json title_to_json(const Title &t, bool include_embedded_assets = true,
     jt["live_text_rows"] = live_rows;
     jt["live_text_column_order"] = t.live_text_column_order;
     jt["live_text_header_state"] = t.live_text_header_state;
+    jt["external_data_enabled"] = t.external_data_enabled;
     if (!t.preview_screenshot_png_base64.empty())
         jt["preview_screenshot_png_base64"] = t.preview_screenshot_png_base64;
     return jt;
@@ -1091,6 +1092,7 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
         }
     }
     t->live_text_header_state = bounded_string(jt, "live_text_header_state", "", kMaxTextLength);
+    t->external_data_enabled = json_bool(jt, "external_data_enabled", false);
     t->preview_screenshot_png_base64 = bounded_string(jt, "preview_screenshot_png_base64", "",
                                                        kMaxScreenshotBase64Length);
 

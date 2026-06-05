@@ -14,6 +14,7 @@
 
 #include <QAction>
 #include <QBuffer>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
@@ -33,8 +34,10 @@
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QIcon>
 #include <QStyle>
 #include <QStyleOptionButton>
@@ -58,8 +61,10 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
+#include <QPen>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QTabWidget>
 #include <QTableWidgetItem>
 #include <QFile>
 #include <QFileDialog>
@@ -247,6 +252,81 @@ static QWidget *toolbar_spacer(QWidget *parent)
     auto *spacer = new QWidget(parent);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     return spacer;
+}
+
+static QIcon globe_status_icon(bool enabled, QWidget *widget)
+{
+    const int extent = obs_toolbar_icon_extent(widget);
+    QPixmap pixmap(extent, extent);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor color = enabled ? QColor(38, 184, 79) : QColor(145, 145, 145);
+    QPen pen(color, std::max(1, extent / 10));
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    const QRectF globe_rect(pen.widthF() / 2.0, pen.widthF() / 2.0,
+                            extent - pen.widthF(), extent - pen.widthF());
+    painter.drawEllipse(globe_rect);
+    painter.drawLine(QPointF(extent / 2.0, globe_rect.top()), QPointF(extent / 2.0, globe_rect.bottom()));
+    painter.drawArc(globe_rect.adjusted(extent * 0.22, 0, -extent * 0.22, 0), 90 * 16, 180 * 16);
+    painter.drawArc(globe_rect.adjusted(extent * 0.22, 0, -extent * 0.22, 0), -90 * 16, 180 * 16);
+    painter.drawLine(QPointF(globe_rect.left(), extent / 2.0), QPointF(globe_rect.right(), extent / 2.0));
+    return QIcon(pixmap);
+}
+
+static QJsonArray live_text_rows_to_json(const std::vector<std::vector<std::string>> &rows)
+{
+    QJsonArray json_rows;
+    for (const auto &row : rows) {
+        QJsonArray json_row;
+        for (const auto &cell : row)
+            json_row.append(QString::fromStdString(cell));
+        json_rows.append(json_row);
+    }
+    return json_rows;
+}
+
+static bool live_text_rows_from_json(const QJsonDocument &doc,
+                                     std::vector<std::vector<std::string>> &rows,
+                                     QString *error)
+{
+    QJsonArray json_rows;
+    if (doc.isArray()) {
+        json_rows = doc.array();
+    } else if (doc.isObject()) {
+        const QJsonObject root = doc.object();
+        const QJsonValue rows_value = root.value(QStringLiteral("rows"));
+        const QJsonValue live_rows_value = root.value(QStringLiteral("live_text_rows"));
+        if (rows_value.isArray())
+            json_rows = rows_value.toArray();
+        else if (live_rows_value.isArray())
+            json_rows = live_rows_value.toArray();
+        else {
+            if (error) *error = QStringLiteral("The JSON file must contain a rows or live_text_rows array.");
+            return false;
+        }
+    } else {
+        if (error) *error = QStringLiteral("The selected file is not a valid live text cue JSON document.");
+        return false;
+    }
+
+    rows.clear();
+    rows.reserve(json_rows.size());
+    for (const QJsonValue &row_value : json_rows) {
+        if (!row_value.isArray()) {
+            if (error) *error = QStringLiteral("Each imported live text cue row must be a JSON array.");
+            return false;
+        }
+        std::vector<std::string> row;
+        const QJsonArray json_row = row_value.toArray();
+        row.reserve(json_row.size());
+        for (const QJsonValue &cell_value : json_row)
+            row.push_back(cell_value.toVariant().toString().toStdString());
+        rows.push_back(std::move(row));
+    }
+    return true;
 }
 
 static void set_bold_label(QLabel *label)
@@ -1187,6 +1267,34 @@ void TitleDock::build_ui()
                                             obsgs_tr("OBSTitles.MoveCueUpTooltip"));
     btn_row_down_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.MoveDown"), obs_icon("move-down.svg"),
                                               obsgs_tr("OBSTitles.MoveCueDownTooltip"));
+    btn_data_sources_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.DataSources"),
+                                                  obs_icon("data-sources.svg"),
+                                                  obsgs_tr("OBSTitles.DataSourcesTooltip"));
+    btn_data_sources_->setText(obsgs_tr("OBSTitles.DataSources"));
+    btn_data_sources_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    auto *data_sources_menu = new QMenu(btn_data_sources_);
+    data_sources_menu->addAction(obs_icon("import.svg"), obsgs_tr("OBSTitles.ImportData"),
+                                 this, &TitleDock::on_import_live_text_data);
+    data_sources_menu->addAction(obs_icon("import.svg"), obsgs_tr("OBSTitles.ImportAppendData"),
+                                 this, &TitleDock::on_import_append_live_text_data);
+    data_sources_menu->addAction(obs_icon("export.svg"), obsgs_tr("OBSTitles.ExportData"),
+                                 this, &TitleDock::on_export_live_text_data);
+    data_sources_menu->addSeparator();
+    data_sources_menu->addAction(obsgs_tr("OBSTitles.EnableExternalDataSource"),
+                                 this, &TitleDock::on_toggle_external_data_source);
+    data_sources_menu->addAction(obsgs_tr("OBSTitles.Settings"),
+                                 this, &TitleDock::on_show_external_data_settings);
+    btn_data_sources_->setMenu(data_sources_menu);
+    btn_data_sources_->setPopupMode(QToolButton::InstantPopup);
+    btn_data_sources_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator{image:none;width:0px;}"));
+    btn_external_refresh_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.RefreshExternalData"),
+                                                      globe_status_icon(false, live_toolbar),
+                                                      obsgs_tr("OBSTitles.RefreshExternalDataTooltip"));
+    btn_external_refresh_->setCheckable(true);
+    btn_external_refresh_->setMinimumWidth(obs_toolbar_icon_extent(live_toolbar) + 10);
+    btn_external_refresh_->setStyleSheet(QStringLiteral(
+        "QToolButton:checked{background:#1d8f3a;color:white;border-radius:3px;}"
+        "QToolButton:checked:hover{background:#28b84f;}"));
     btn_playlist_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.Playlist"), obs_icon("play.svg"),
                                               obsgs_tr("OBSTitles.PlaylistTooltip"));
     btn_playlist_->setCheckable(true);
@@ -1201,10 +1309,11 @@ void TitleDock::build_ui()
                                                        obsgs_tr("OBSTitles.PlaylistSettingsTooltip"));
     btn_playlist_settings_->setText(QStringLiteral("⚙"));
     btn_playlist_settings_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    btn_persistence_settings_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.Persistence"), QIcon(),
+    btn_persistence_settings_ = make_obs_dock_tool_button(live_toolbar, obsgs_tr("OBSTitles.Persistence"),
+                                                          obs_icon("persistence.svg"),
                                                           obsgs_tr("OBSTitles.PersistenceTooltip"));
-    btn_persistence_settings_->setText(obsgs_tr("OBSTitles.Persistence"));
-    btn_persistence_settings_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    btn_persistence_settings_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    btn_persistence_settings_->setMinimumWidth(obs_toolbar_icon_extent(live_toolbar) + 10);
     btn_persistence_settings_->setCheckable(true);
     btn_persistence_settings_->setStyleSheet(QStringLiteral(
         "QToolButton:checked{background:#1d8f3a;color:white;border-radius:3px;}"
@@ -1214,11 +1323,14 @@ void TitleDock::build_ui()
     live_toolbar->addWidget(btn_delete_text_row_);
     live_toolbar->addWidget(btn_row_up_);
     live_toolbar->addWidget(btn_row_down_);
+    live_toolbar->addWidget(btn_data_sources_);
     live_toolbar->addSeparator();
     live_toolbar->addWidget(btn_playlist_);
     live_toolbar->addWidget(playlist_countdown_lbl_);
     live_toolbar->addWidget(btn_playlist_settings_);
     live_toolbar->addWidget(btn_persistence_settings_);
+    live_toolbar->addWidget(toolbar_spacer(live_toolbar));
+    live_toolbar->addWidget(btn_external_refresh_);
 
     live_header->addWidget(text_editor_lbl_);
     live_header->addStretch();
@@ -1310,6 +1422,7 @@ void TitleDock::build_ui()
     btn_persistence_settings_->setPopupMode(QToolButton::InstantPopup);
 
     connect(btn_row_down_, &QToolButton::clicked, this, &TitleDock::on_move_live_text_row_down);
+    connect(btn_external_refresh_, &QToolButton::clicked, this, &TitleDock::on_refresh_external_data);
     connect(btn_playlist_, &QToolButton::toggled, this, &TitleDock::on_toggle_playlist);
     connect(act_playlist_loop_, &QAction::toggled, this, [this](bool checked) {
         playlist_loop_ = checked;
@@ -1658,6 +1771,36 @@ void TitleDock::update_persistence_controls()
         apply_persistence_settings_to_title(title);
 }
 
+void TitleDock::update_external_data_controls()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    const bool has_title = (bool)title;
+    const bool has_exposed = title && !exposed_text_layers(title).empty();
+    const bool external_enabled = title && title->external_data_enabled;
+
+    if (btn_data_sources_)
+        btn_data_sources_->setEnabled(has_title && has_exposed);
+    if (btn_external_refresh_) {
+        btn_external_refresh_->setEnabled(has_title && has_exposed);
+        btn_external_refresh_->setIcon(globe_status_icon(external_enabled, btn_external_refresh_));
+        QSignalBlocker block(btn_external_refresh_);
+        btn_external_refresh_->setChecked(external_enabled);
+        btn_external_refresh_->setToolTip(external_enabled
+            ? obsgs_tr("OBSTitles.RefreshExternalDataEnabledTooltip")
+            : obsgs_tr("OBSTitles.RefreshExternalDataTooltip"));
+    }
+
+    if (btn_data_sources_ && btn_data_sources_->menu() && btn_data_sources_->menu()->actions().size() >= 5) {
+        auto actions = btn_data_sources_->menu()->actions();
+        for (QAction *action : actions)
+            action->setEnabled(has_title && has_exposed);
+        if (QAction *toggle = actions.at(4))
+            toggle->setText(external_enabled
+                ? obsgs_tr("OBSTitles.DisableExternalDataSource")
+                : obsgs_tr("OBSTitles.EnableExternalDataSource"));
+    }
+}
+
 bool TitleDock::cue_live_text_row(int row, bool allow_uncue)
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
@@ -1921,6 +2064,7 @@ void TitleDock::populate_exposed_text()
         if (btn_row_down_) btn_row_down_->setEnabled(false);
         update_playlist_controls();
         update_persistence_controls();
+        update_external_data_controls();
         update_live_text_select_all_state();
         return;
     }
@@ -1959,6 +2103,7 @@ void TitleDock::populate_exposed_text()
         text_table_->setCellWidget(0, 1, cue);
         update_playlist_controls();
         update_persistence_controls();
+        update_external_data_controls();
         update_live_text_select_all_state();
         return;
     }
@@ -2026,7 +2171,211 @@ void TitleDock::populate_exposed_text()
     }
     update_playlist_controls();
     update_persistence_controls();
+    update_external_data_controls();
     update_live_text_select_all_state();
+}
+
+void TitleDock::on_export_live_text_data()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title) return;
+
+    auto exposed = exposed_text_layers(title);
+    normalize_live_text_rows(title, exposed);
+
+    QString path = QFileDialog::getSaveFileName(
+        this, obsgs_tr("OBSTitles.ExportData"), QString(),
+        QStringLiteral("JSON files (*.json);;All files (*.*)"));
+    if (path.isEmpty()) return;
+    if (!path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive))
+        path += QStringLiteral(".json");
+
+    QJsonArray columns;
+    for (const auto &layer : exposed) {
+        QJsonObject column;
+        column.insert(QStringLiteral("id"), QString::fromStdString(layer->id));
+        column.insert(QStringLiteral("name"), live_text_layer_header(layer));
+        columns.append(column);
+    }
+
+    QJsonObject root;
+    root.insert(QStringLiteral("format"), QStringLiteral("OBS Graphics Studio Pro live text cues"));
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("title"), QString::fromStdString(title->name));
+    root.insert(QStringLiteral("columns"), columns);
+    root.insert(QStringLiteral("rows"), live_text_rows_to_json(title->live_text_rows));
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ExportData"),
+                             obsgs_tr("OBSTitles.ExportDataFailed"));
+        return;
+    }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    status_lbl_->setText(obsgs_tr("OBSTitles.ExportedStatusFormat").arg(QFileInfo(path).fileName()));
+}
+
+void TitleDock::on_import_live_text_data()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title) return;
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, obsgs_tr("OBSTitles.ImportData"), QString(),
+        QStringLiteral("JSON files (*.json);;All files (*.*)"));
+    if (path.isEmpty()) return;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportData"),
+                             obsgs_tr("OBSTitles.ImportDataFailed"));
+        return;
+    }
+
+    QJsonParseError parse_error;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parse_error);
+    if (parse_error.error != QJsonParseError::NoError) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportData"), parse_error.errorString());
+        return;
+    }
+
+    std::vector<std::vector<std::string>> imported_rows;
+    QString error;
+    if (!live_text_rows_from_json(doc, imported_rows, &error)) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportData"), error);
+        return;
+    }
+
+    auto exposed = exposed_text_layers(title);
+    normalize_live_text_rows(title, exposed);
+    const int existing_rows = (int)title->live_text_rows.size();
+    const int imported_row_count = (int)imported_rows.size();
+    if (imported_row_count > existing_rows) {
+        const auto answer = QMessageBox::question(
+            this, obsgs_tr("OBSTitles.ImportData"),
+            obsgs_tr("OBSTitles.ImportDataCropWarning")
+                .arg(imported_row_count)
+                .arg(existing_rows),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+        imported_rows.resize(existing_rows);
+    }
+
+    for (auto &row : imported_rows)
+        row.resize(exposed.size());
+    title->live_text_rows = std::move(imported_rows);
+    normalize_live_text_rows(title, exposed);
+    title->current_cue_row = -1;
+    title->pending_cue_row = -1;
+    ++title->cue_revision;
+    TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
+    populate_exposed_text();
+    status_lbl_->setText(obsgs_tr("OBSTitles.ImportedStatusFormat").arg(QFileInfo(path).fileName()));
+}
+
+void TitleDock::on_import_append_live_text_data()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title) return;
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, obsgs_tr("OBSTitles.ImportAppendData"), QString(),
+        QStringLiteral("JSON files (*.json);;All files (*.*)"));
+    if (path.isEmpty()) return;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportAppendData"),
+                             obsgs_tr("OBSTitles.ImportDataFailed"));
+        return;
+    }
+
+    QJsonParseError parse_error;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parse_error);
+    if (parse_error.error != QJsonParseError::NoError) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportAppendData"), parse_error.errorString());
+        return;
+    }
+
+    std::vector<std::vector<std::string>> imported_rows;
+    QString error;
+    if (!live_text_rows_from_json(doc, imported_rows, &error)) {
+        QMessageBox::warning(this, obsgs_tr("OBSTitles.ImportAppendData"), error);
+        return;
+    }
+
+    auto exposed = exposed_text_layers(title);
+    normalize_live_text_rows(title, exposed);
+    for (auto &row : imported_rows) {
+        row.resize(exposed.size());
+        title->live_text_rows.push_back(std::move(row));
+    }
+    normalize_live_text_rows(title, exposed);
+    TitleDataStore::instance().save();
+    TitleDataStore::instance().notify_change();
+    populate_exposed_text();
+    status_lbl_->setText(obsgs_tr("OBSTitles.ImportedStatusFormat").arg(QFileInfo(path).fileName()));
+}
+
+void TitleDock::on_toggle_external_data_source()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title) return;
+    title->external_data_enabled = !title->external_data_enabled;
+    TitleDataStore::instance().save();
+    TitleDataStore::instance().touch_runtime_change();
+    seen_store_revision_ = TitleDataStore::instance().revision();
+    update_external_data_controls();
+}
+
+void TitleDock::on_show_external_data_settings()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(obsgs_tr("OBSTitles.ExternalDataSource"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *header = new QLabel(obsgs_tr("OBSTitles.ExternalDataSource"), &dialog);
+    set_bold_label(header);
+    layout->addWidget(header);
+
+    auto *tabs = new QTabWidget(&dialog);
+    const QStringList names = {
+        QStringLiteral("CSV"),
+        QStringLiteral("URL"),
+        QStringLiteral("RSS Feed"),
+        QStringLiteral("Data Sources Settings")
+    };
+    for (const QString &name : names) {
+        auto *tab = new QWidget(tabs);
+        auto *tab_layout = new QVBoxLayout(tab);
+        auto *placeholder = new QLabel(obsgs_tr("OBSTitles.ExternalDataSettingsPlaceholder"), tab);
+        placeholder->setWordWrap(true);
+        tab_layout->addWidget(placeholder);
+        tab_layout->addStretch();
+        tabs->addTab(tab, name);
+    }
+    layout->addWidget(tabs);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+    dialog.resize(520, 360);
+    dialog.exec();
+}
+
+void TitleDock::on_refresh_external_data()
+{
+    auto title = TitleDataStore::instance().get_title(selected_id());
+    if (!title) return;
+    auto exposed = exposed_text_layers(title);
+    normalize_live_text_rows(title, exposed);
+    TitleDataStore::instance().save();
+    TitleDataStore::instance().touch_runtime_change();
+    seen_store_revision_ = TitleDataStore::instance().revision();
+    populate_exposed_text();
+    status_lbl_->setText(obsgs_tr("OBSTitles.ExternalDataRefreshed"));
 }
 
 void TitleDock::on_add_live_text_row()
