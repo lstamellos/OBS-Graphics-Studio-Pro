@@ -1,6 +1,8 @@
 #include "title-hotkeys.h"
 #include "title-data.h"
 #include <obs-module.h>
+#include <QSettings>
+#include <QString>
 
 #include <algorithm>
 #include <cctype>
@@ -42,11 +44,68 @@ std::vector<HotkeySection> g_sections;
 std::vector<HotkeyRegistration> g_hotkeys;
 std::map<std::string, obs_source_t *> g_section_sources;
 std::string g_hotkey_signature;
+std::map<std::string, std::string> g_persisted_hotkey_bindings;
 bool g_hotkeys_active = false;
 bool g_change_callback_registered = false;
 bool g_hotkey_section_source_registered = false;
 
 constexpr const char *kHotkeySectionSourceId = "obs_graphics_studio_pro_hotkey_section";
+constexpr const char *kDockSettingsGroup = "TitleDock";
+constexpr const char *kBackgroundPersistenceKey = "backgroundPersistence";
+constexpr const char *kTextPersistenceKey = "textPersistence";
+constexpr const char *kHotkeySettingsGroup = "Hotkeys";
+
+static void load_persisted_hotkey_bindings()
+{
+    QSettings settings(QStringLiteral("OBSGraphicsStudioPro"), QStringLiteral("Dock"));
+    settings.beginGroup(QString::fromUtf8(kHotkeySettingsGroup));
+    g_persisted_hotkey_bindings.clear();
+    for (const auto &key : settings.childKeys())
+        g_persisted_hotkey_bindings[key.toStdString()] = settings.value(key).toString().toStdString();
+    settings.endGroup();
+}
+
+static void save_persisted_hotkey_bindings()
+{
+    QSettings settings(QStringLiteral("OBSGraphicsStudioPro"), QStringLiteral("Dock"));
+    settings.beginGroup(QString::fromUtf8(kHotkeySettingsGroup));
+    settings.remove(QString());
+    for (const auto &[name, json] : g_persisted_hotkey_bindings)
+        settings.setValue(QString::fromStdString(name), QString::fromStdString(json));
+    settings.endGroup();
+}
+
+static void remember_hotkey_binding(const HotkeyRegistration &hotkey)
+{
+    if (hotkey.id == OBS_INVALID_HOTKEY_ID) return;
+    obs_data_array_t *bindings = obs_hotkey_save(hotkey.id);
+    if (!bindings) return;
+
+    obs_data_t *wrapper = obs_data_create();
+    obs_data_set_array(wrapper, "bindings", bindings);
+    const char *json = obs_data_get_json(wrapper);
+    if (json && *json)
+        g_persisted_hotkey_bindings[hotkey.descriptor.name] = json;
+
+    obs_data_release(wrapper);
+    obs_data_array_release(bindings);
+}
+
+static void restore_hotkey_binding(const HotkeyRegistration &hotkey)
+{
+    if (hotkey.id == OBS_INVALID_HOTKEY_ID) return;
+    auto it = g_persisted_hotkey_bindings.find(hotkey.descriptor.name);
+    if (it == g_persisted_hotkey_bindings.end() || it->second.empty()) return;
+
+    obs_data_t *wrapper = obs_data_create_from_json(it->second.c_str());
+    if (!wrapper) return;
+    obs_data_array_t *bindings = obs_data_get_array(wrapper, "bindings");
+    if (bindings) {
+        obs_hotkey_load(hotkey.id, bindings);
+        obs_data_array_release(bindings);
+    }
+    obs_data_release(wrapper);
+}
 
 static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
@@ -149,6 +208,32 @@ static void register_hotkey_section_source_type()
     g_hotkey_section_source_registered = true;
 }
 
+static void load_persistence_settings(bool &background_persistence, bool &text_persistence)
+{
+    QSettings settings(QStringLiteral("OBSGraphicsStudioPro"), QStringLiteral("Dock"));
+    settings.beginGroup(QString::fromUtf8(kDockSettingsGroup));
+    background_persistence = settings.value(QString::fromUtf8(kBackgroundPersistenceKey), false).toBool();
+    text_persistence = background_persistence &&
+        settings.value(QString::fromUtf8(kTextPersistenceKey), false).toBool();
+    settings.endGroup();
+}
+
+static void apply_persistence_settings_to_title(const std::shared_ptr<Title> &title,
+                                                const std::vector<std::shared_ptr<Layer>> &exposed)
+{
+    if (!title) return;
+    bool background_persistence = false;
+    bool text_persistence = false;
+    load_persistence_settings(background_persistence, text_persistence);
+    const bool has_exposed = !exposed.empty();
+    title->cue_background_persistence = background_persistence && has_exposed;
+    title->cue_text_persistence = title->cue_background_persistence && text_persistence;
+    if (!title->cue_background_persistence)
+        title->cue_persistence_transition = false;
+    if (!title->cue_text_persistence)
+        title->cue_persistent_text_columns.clear();
+}
+
 static void cue_title_row(const std::shared_ptr<Title> &title, int row)
 {
     if (!title) return;
@@ -159,12 +244,40 @@ static void cue_title_row(const std::shared_ptr<Title> &title, int row)
     if (exposed.empty()) {
         title->current_cue_row = -1;
         title->pending_cue_row = -1;
+        title->cue_persistence_transition = false;
+        title->cue_persistent_text_columns.clear();
     } else {
         if (row < 0 || row >= (int)title->live_text_rows.size()) return;
+        apply_persistence_settings_to_title(title, exposed);
+        const bool is_active_cue = title->current_cue_row == row;
+        const bool is_pending_cue = title->pending_cue_row == row;
+        const int previous_row = title->current_cue_row >= 0 ? title->current_cue_row : title->pending_cue_row;
+        const bool can_persist_transition = title->cue_background_persistence &&
+            (title->playback_mode == 1 || title->playback_mode == 2) &&
+            previous_row >= 0 && previous_row != row;
         const bool needs_outro_before_cue =
             (title->playback_mode == 1 || title->playback_mode == 2) &&
             title->current_cue_row >= 0 && title->current_cue_row != row;
-        if (needs_outro_before_cue) {
+
+        title->cue_persistence_transition = false;
+        title->cue_persistent_text_columns.assign(exposed.size(), false);
+
+        if (is_active_cue || is_pending_cue) {
+            title->current_cue_row = -1;
+            title->pending_cue_row = -1;
+            title->cue_persistence_transition = false;
+            title->cue_persistent_text_columns.clear();
+        } else if (can_persist_transition) {
+            for (int col = 0; col < (int)exposed.size() && col < (int)title->live_text_rows[row].size(); ++col) {
+                if (title->cue_text_persistence &&
+                    previous_row >= 0 && previous_row < (int)title->live_text_rows.size() &&
+                    col < (int)title->live_text_rows[previous_row].size() &&
+                    title->live_text_rows[previous_row][col] == title->live_text_rows[row][col])
+                    title->cue_persistent_text_columns[col] = true;
+            }
+            title->pending_cue_row = row;
+            title->cue_persistence_transition = true;
+        } else if (needs_outro_before_cue) {
             title->pending_cue_row = row;
         } else {
             apply_live_text_row(title, row, exposed);
@@ -301,9 +414,12 @@ static std::string descriptor_signature(const std::vector<HotkeyDescriptor> &des
 static void unregister_all_hotkeys()
 {
     for (auto &hotkey : g_hotkeys) {
-        if (hotkey.id != OBS_INVALID_HOTKEY_ID)
+        if (hotkey.id != OBS_INVALID_HOTKEY_ID) {
+            remember_hotkey_binding(hotkey);
             obs_hotkey_unregister(hotkey.id);
+        }
     }
+    save_persisted_hotkey_bindings();
     g_hotkeys.clear();
     g_hotkey_signature.clear();
 }
@@ -371,6 +487,7 @@ static void refresh_hotkeys()
             registration.descriptor.description.c_str(),
             hotkey_callback,
             &registration.descriptor);
+        restore_hotkey_binding(registration);
     }
     g_hotkey_signature = std::move(signature);
 }
@@ -381,6 +498,7 @@ void title_hotkeys_register()
 {
     if (g_hotkeys_active) return;
     register_hotkey_section_source_type();
+    load_persisted_hotkey_bindings();
     g_hotkeys_active = true;
     refresh_hotkeys();
     if (!g_change_callback_registered) {
