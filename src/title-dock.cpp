@@ -58,7 +58,6 @@
 #include <QStringList>
 #include <QHeaderView>
 #include <QLineEdit>
-#include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
@@ -91,7 +90,7 @@ constexpr const char *kPlaylistHoldSecondsKey = "playlistHoldSeconds";
 constexpr const char *kBackgroundPersistenceKey = "backgroundPersistence";
 constexpr const char *kTextPersistenceKey = "textPersistence";
 
-static std::vector<std::shared_ptr<Layer>> order_exposed_cue_layers(
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
     const std::vector<std::shared_ptr<Layer>> &exposed,
     const std::vector<std::string> &column_order)
 {
@@ -120,16 +119,16 @@ static std::vector<std::shared_ptr<Layer>> order_exposed_cue_layers(
     return ordered;
 }
 
-static std::vector<std::shared_ptr<Layer>> exposed_cue_layers(const std::shared_ptr<Title> &title)
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const std::shared_ptr<Title> &title)
 {
     std::vector<std::shared_ptr<Layer>> exposed;
     if (!title) return exposed;
     for (const auto &layer : title->layers) {
         if (!layer) continue;
-        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker || layer->type == LayerType::Image) && layer->expose_text)
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
             exposed.push_back(layer);
     }
-    return order_exposed_cue_layers(exposed, title->live_text_column_order);
+    return order_exposed_text_layers(exposed, title->live_text_column_order);
 }
 
 static QString current_scene_collection_titles_label()
@@ -149,10 +148,6 @@ static QString live_text_layer_header(const std::shared_ptr<Layer> &layer)
     if (!layer) return obsgs_tr("OBSTitles.Text");
     QString name = QString::fromStdString(layer->name).trimmed();
     if (!name.isEmpty()) return name;
-    if (layer->type == LayerType::Image) {
-        name = QFileInfo(QString::fromStdString(layer->image_path)).fileName().trimmed();
-        return name.isEmpty() ? obsgs_tr("OBSTitles.Image") : name;
-    }
     name = QString::fromStdString(layer->text_content).trimmed();
     return name.isEmpty() ? obsgs_tr("OBSTitles.Text") : name;
 }
@@ -176,9 +171,9 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
                 auto it = std::find(old_order.begin(), old_order.end(), new_order[new_col]);
                 if (it != old_order.end()) {
                     const size_t old_col = (size_t)std::distance(old_order.begin(), it);
-                    remapped.push_back(old_col < row.size() ? row[old_col] : (exposed[new_col]->type == LayerType::Image ? exposed[new_col]->image_path : exposed[new_col]->text_content));
+                    remapped.push_back(old_col < row.size() ? row[old_col] : exposed[new_col]->text_content);
                 } else {
-                    remapped.push_back(exposed[new_col]->type == LayerType::Image ? exposed[new_col]->image_path : exposed[new_col]->text_content);
+                    remapped.push_back(exposed[new_col]->text_content);
                 }
             }
             row = std::move(remapped);
@@ -189,14 +184,14 @@ static void normalize_live_text_rows(const std::shared_ptr<Title> &title,
     if (title->live_text_rows.empty()) {
         std::vector<std::string> row;
         for (const auto &layer : exposed)
-            row.push_back(layer->type == LayerType::Image ? layer->image_path : layer->text_content);
+            row.push_back(layer->text_content);
         title->live_text_rows.push_back(std::move(row));
     }
     for (auto &row : title->live_text_rows) {
         size_t old_size = row.size();
         row.resize(exposed.size());
         for (size_t i = old_size; i < exposed.size(); ++i)
-            row[i] = exposed[i]->type == LayerType::Image ? exposed[i]->image_path : exposed[i]->text_content;
+            row[i] = exposed[i]->text_content;
     }
 }
 
@@ -1259,7 +1254,7 @@ void TitleDock::build_ui()
     live_header->setContentsMargins(0, 0, 0, 0);
     live_header->setSpacing(0);
 
-    /* ── exposed cue section ── */
+    /* ── exposed text section ── */
     text_editor_lbl_ = new QLabel(obsgs_tr("OBSTitles.LiveText"), live_section);
     set_bold_label(text_editor_lbl_);
 
@@ -1744,7 +1739,7 @@ std::vector<int> TitleDock::selected_live_text_rows() const
 void TitleDock::apply_persistence_settings_to_title(const std::shared_ptr<Title> &title)
 {
     if (!title) return;
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     const bool has_exposed = !exposed.empty();
     title->cue_background_persistence = background_persistence_ && has_exposed;
     title->cue_text_persistence = title->cue_background_persistence && text_persistence_;
@@ -1757,7 +1752,7 @@ void TitleDock::apply_persistence_settings_to_title(const std::shared_ptr<Title>
 void TitleDock::update_persistence_controls()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
-    const bool has_exposed = title && !exposed_cue_layers(title).empty();
+    const bool has_exposed = title && !exposed_text_layers(title).empty();
     if (btn_persistence_settings_) {
         btn_persistence_settings_->setEnabled(has_exposed);
         QSignalBlocker block(btn_persistence_settings_);
@@ -1780,7 +1775,7 @@ void TitleDock::update_external_data_controls()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     const bool has_title = (bool)title;
-    const bool has_exposed = title && !exposed_cue_layers(title).empty();
+    const bool has_exposed = title && !exposed_text_layers(title).empty();
     const bool external_enabled = title && title->external_data_enabled;
 
     if (btn_data_sources_)
@@ -1811,7 +1806,7 @@ bool TitleDock::cue_live_text_row(int row, bool allow_uncue)
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) return false;
 
-    auto exposed_now = exposed_cue_layers(title);
+    auto exposed_now = exposed_text_layers(title);
     normalize_live_text_rows(title, exposed_now);
 
     if (exposed_now.empty()) {
@@ -1862,12 +1857,8 @@ bool TitleDock::cue_live_text_row(int row, bool allow_uncue)
     } else if (needs_outro_before_cue) {
         title->pending_cue_row = row;
     } else if (!is_active_cue || title->pending_cue_row >= 0) {
-        for (int col = 0; col < (int)exposed_now.size() && col < (int)title->live_text_rows[row].size(); ++col) {
-            if (exposed_now[col]->type == LayerType::Image)
-                exposed_now[col]->image_path = title->live_text_rows[row][col];
-            else
-                exposed_now[col]->text_content = title->live_text_rows[row][col];
-        }
+        for (int col = 0; col < (int)exposed_now.size() && col < (int)title->live_text_rows[row].size(); ++col)
+            exposed_now[col]->text_content = title->live_text_rows[row][col];
         title->current_cue_row = row;
         title->pending_cue_row = -1;
     }
@@ -1883,7 +1874,7 @@ bool TitleDock::cue_live_text_row(int row, bool allow_uncue)
 int TitleDock::live_text_playlist_row_count(const std::shared_ptr<Title> &title) const
 {
     if (!title) return 0;
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     if (exposed.empty())
         return 1;
     return (int)title->live_text_rows.size();
@@ -2078,7 +2069,7 @@ void TitleDock::populate_exposed_text()
         return;
     }
 
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     normalize_live_text_rows(title, exposed);
 
     const bool has_exposed = !exposed.empty();
@@ -2145,48 +2136,20 @@ void TitleDock::populate_exposed_text()
         select_item->setTextAlignment(Qt::AlignCenter);
         text_table_->setItem(row, 0, select_item);
         for (int col = 0; col < (int)exposed.size(); ++col) {
-            const bool image_column = exposed[col] && exposed[col]->type == LayerType::Image;
-            auto *cell = new QWidget(text_table_);
-            auto *cell_layout = new QVBoxLayout(cell);
-            cell_layout->setContentsMargins(2, 2, 2, 2);
-            cell_layout->setSpacing(2);
-            QLabel *thumb = nullptr;
-            if (image_column) {
-                thumb = new QLabel(cell);
-                thumb->setMinimumHeight(44);
-                thumb->setAlignment(Qt::AlignCenter);
-                thumb->setStyleSheet("QLabel{background:#202020;border:1px solid #444;}");
-                cell_layout->addWidget(thumb);
-                text_table_->setRowHeight(row, std::max(text_table_->rowHeight(row), 78));
-            }
-            auto *edit = new QLineEdit(QString::fromStdString(title->live_text_rows[row][col]), cell);
+            auto *edit = new QLineEdit(QString::fromStdString(title->live_text_rows[row][col]), text_table_);
             edit->setPlaceholderText(live_text_layer_header(exposed[col]));
             edit->setStyleSheet("QLineEdit{padding:3px;}");
-            auto update_thumb = [thumb](const QString &path) {
-                if (!thumb) return;
-                QPixmap pix(path);
-                if (pix.isNull()) {
-                    thumb->setPixmap(QPixmap());
-                    thumb->setText(path.isEmpty() ? QStringLiteral("Drop or browse image path") : QStringLiteral("Image not found"));
-                    return;
-                }
-                thumb->setText(QString());
-                thumb->setPixmap(pix.scaled(QSize(180, 52), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            };
-            update_thumb(edit->text());
-            connect(edit, &QLineEdit::textEdited, this, [this, title, row, col, update_thumb](const QString &text) {
+            connect(edit, &QLineEdit::textEdited, this, [this, title, row, col](const QString &text) {
                 if (row < 0 || row >= (int)title->live_text_rows.size() ||
                     col < 0 || col >= (int)title->live_text_rows[row].size()) return;
                 updating_exposed_text_ = true;
                 title->live_text_rows[row][col] = text.toStdString();
-                update_thumb(text);
                 TitleDataStore::instance().save();
                 TitleDataStore::instance().touch_runtime_change();
                 seen_store_revision_ = TitleDataStore::instance().revision();
                 updating_exposed_text_ = false;
             });
-            cell_layout->addWidget(edit);
-            text_table_->setCellWidget(row, col + 1, cell);
+            text_table_->setCellWidget(row, col + 1, edit);
         }
 
         auto *cue = new QPushButton("▶", text_table_);
@@ -2217,7 +2180,7 @@ void TitleDock::on_export_live_text_data()
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) return;
 
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     normalize_live_text_rows(title, exposed);
 
     QString path = QFileDialog::getSaveFileName(
@@ -2283,7 +2246,7 @@ void TitleDock::on_import_live_text_data()
         return;
     }
 
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     normalize_live_text_rows(title, exposed);
     const int existing_rows = (int)title->live_text_rows.size();
     const int imported_row_count = (int)imported_rows.size();
@@ -2344,7 +2307,7 @@ void TitleDock::on_import_append_live_text_data()
         return;
     }
 
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     normalize_live_text_rows(title, exposed);
     for (auto &row : imported_rows) {
         row.resize(exposed.size());
@@ -2406,7 +2369,7 @@ void TitleDock::on_refresh_external_data()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) return;
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     normalize_live_text_rows(title, exposed);
     TitleDataStore::instance().save();
     TitleDataStore::instance().touch_runtime_change();
@@ -2419,7 +2382,7 @@ void TitleDock::on_add_live_text_row()
 {
     auto title = TitleDataStore::instance().get_title(selected_id());
     if (!title) return;
-    auto exposed = exposed_cue_layers(title);
+    auto exposed = exposed_text_layers(title);
     if (exposed.empty()) return;
 
     auto selected_rows = selected_live_text_rows();
@@ -2464,7 +2427,7 @@ void TitleDock::on_delete_live_text_rows()
             --title->pending_cue_row;
     }
 
-    auto exposed_now = exposed_cue_layers(title);
+    auto exposed_now = exposed_text_layers(title);
     normalize_live_text_rows(title, exposed_now);
     TitleDataStore::instance().save();
     TitleDataStore::instance().notify_change();
