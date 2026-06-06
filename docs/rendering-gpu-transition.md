@@ -84,7 +84,7 @@ The graph should continue to expose a final OBS texture and keep source registra
 
 ## Editor preview compatibility
 
-`CanvasPreview` remains a Qt Widgets preview to avoid adding optional Qt OpenGL runtime DLL dependencies that can prevent OBS from loading third-party plugins on Windows. The editor still shares the same visual semantics as the OBS GPU renderer: complex text/shape styles are converted to layer-local texture assets, and the roadmap is to route the editor preview through the same persistent OBS render-target graph once an embeddable OBS preview texture is available without additional Qt runtime dependencies.
+`CanvasPreview` remains a Qt Widgets surface to avoid adding optional Qt OpenGL runtime DLL dependencies that can prevent OBS from loading third-party plugins on Windows, but its title frame now renders through the same OBS-compatible libobs GPU pipeline used by the live source. The GPU frame is rendered to an OBS render target and staged back to Qt for editor overlays, so the editor canvas stays OBS-backend compatible without depending on QOpenGLWidget.
 
 ## Non-breaking integration rules
 

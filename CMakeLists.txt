@@ -163,9 +163,9 @@ if(NOT libobs_FOUND OR NOT obs-frontend-api_FOUND)
 endif()
 
 # ── Find Qt ─────────────────────────────────────────────────────────
-# Keep the editor preview on Qt Widgets only.  Do not require Qt OpenGLWidgets:
-# that optional module is not present in all OBS Windows dependency bundles and
-# can prevent both MSVC builds and OBS plugin loading.
+# Keep the editor preview on Qt Widgets + libobs GPU readback.  Do not require
+# Qt OpenGLWidgets: that optional module is not present in all OBS Windows
+# dependency bundles and can prevent both MSVC builds and OBS plugin loading.
 find_package(Qt6 COMPONENTS Core Widgets Svg QUIET)
 if(NOT Qt6_FOUND)
   find_package(Qt5 5.15 COMPONENTS Core Widgets Svg REQUIRED)

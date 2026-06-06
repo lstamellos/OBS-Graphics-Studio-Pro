@@ -2,12 +2,15 @@
  * title-editor.cpp
  *
  * After Effects-style title editor.
- * CanvasPreview stays on Qt Widgets to avoid adding optional Qt OpenGL runtime DLLs that can prevent OBS from loading the plugin. The live source remains OBS GPU-rendered.
+ * CanvasPreview uses the OBS-compatible libobs GPU renderer and readback path
+ * while staying on Qt Widgets to avoid optional Qt OpenGL runtime DLLs that can
+ * prevent OBS from loading the plugin.
  */
 
 #include "title-editor.h"
 #include "title-data.h"
 #include "title-source.h"
+#include "title-renderer-gpu.h"
 #include "title-assets.h"
 #include "title-localization.h"
 #include "plugin-main.h"
@@ -3349,7 +3352,8 @@ void TitleEditor::on_title_modified(bool push_undo)
 /* ══════════════════════════════════════════════════════════════════
  *  CanvasPreview
  * ══════════════════════════════════════════════════════════════════ */
-CanvasPreview::CanvasPreview(QWidget *parent) : QWidget(parent)
+CanvasPreview::CanvasPreview(QWidget *parent) : QWidget(parent),
+    gpu_pipeline_(std::make_unique<obsgs::ObsGpuRenderPipeline>())
 {
     setMinimumSize(400, 225);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -3358,8 +3362,12 @@ CanvasPreview::CanvasPreview(QWidget *parent) : QWidget(parent)
     setFocusPolicy(Qt::StrongFocus);
 }
 
+CanvasPreview::~CanvasPreview() = default;
+
 void CanvasPreview::set_title(std::shared_ptr<Title> t)
 {
+    if (gpu_pipeline_)
+        gpu_pipeline_->reset();
     title_ = t;
     dirty_ = true;
     pan_offset_ = QPointF(0, 0);
@@ -4231,187 +4239,14 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
 }
 void CanvasPreview::render_to_pixmap()
 {
-    if (!title_) { frame_pixmap_ = QPixmap(); return; }
-
-    QImage img(title_->width, title_->height, QImage::Format_ARGB32_Premultiplied);
-    img.fill(Qt::transparent);
-
-    QPainter p(&img);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setRenderHint(QPainter::TextAntialiasing, true);
-
-    if (title_->bg_color >> 24) {
-        QColor bg((title_->bg_color >> 16) & 0xFF,
-                  (title_->bg_color >>  8) & 0xFF,
-                  (title_->bg_color >>  0) & 0xFF,
-                  (title_->bg_color >> 24) & 0xFF);
-        p.fillRect(img.rect(), bg);
+    if (!title_) {
+        frame_pixmap_ = QPixmap();
+        return;
     }
 
-    double t = playhead_;
-
-    for (auto &layer : title_->layers) {
-        if (!layer->visible) continue;
-        if (t < layer->in_time || t > layer->out_time) continue;
-        double lt = t - layer->in_time;
-
-        p.save();
-        p.setOpacity(layer->opacity.evaluate(lt));
-        p.translate(layer->pos_x.evaluate(lt), layer->pos_y.evaluate(lt));
-        p.rotate(layer->rotation.evaluate(lt));
-        p.scale(layer->scale_x.evaluate(lt), layer->scale_y.evaluate(lt));
-
-        QRectF box = layer_local_rect(*layer);
-        if (box.width() <= 0.0 || box.height() <= 0.0) {
-            p.restore();
-            continue;
-        }
-
-        if (layer->type == LayerType::SolidRect || layer->type == LayerType::Shape) {
-            QColor fc = color_from_argb(eval_fill_color(*layer, lt));
-            if (eval_shadow_enabled(*layer, lt)) {
-                QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
-                sc.setAlphaF(std::clamp((double)sc.alphaF() * eval_shadow_opacity(*layer, lt), 0.0, 1.0));
-                QPointF off = shadow_offset(*layer, lt);
-                double blur = eval_shadow_blur(*layer, lt);
-                double spread = eval_shadow_spread(*layer, lt);
-                int passes = shadow_pass_count(blur);
-                for (int pass = passes; pass >= 1; --pass) {
-                    QColor pass_color = sc;
-                    pass_color.setAlphaF(sc.alphaF() / passes);
-                    double radius = blur * pass / passes;
-                    QRectF shadow_box = box.adjusted(-spread - radius, -spread - radius,
-                                                     spread + radius, spread + radius).translated(off);
-                    p.setBrush(pass_color);
-                    p.setPen(Qt::NoPen);
-                    double corner = std::max(0.0, layer->corner_radius + spread + radius);
-                    if (corner > 0) p.drawRoundedRect(shadow_box, corner, corner);
-                    else p.drawRect(shadow_box);
-                }
-            }
-            double outline_width = eval_outline_width(*layer, lt);
-            QColor outline = color_from_argb(eval_outline_color(*layer, lt));
-            outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(*layer, lt), 0.0, 1.0));
-            auto draw_shape = [&](const QBrush &brush, const QPen &pen) {
-                p.setBrush(brush);
-                p.setPen(pen);
-                if (layer->corner_radius > 0)
-                    p.drawRoundedRect(box, layer->corner_radius, layer->corner_radius);
-                else
-                    p.drawRect(box);
-            };
-            auto draw_outline = [&]() {
-                if (outline_width <= 0.0 || outline.alpha() <= 0) return;
-                bool previous_aa = p.testRenderHint(QPainter::Antialiasing);
-                p.setRenderHint(QPainter::Antialiasing, eval_outline_antialias(*layer, lt));
-                draw_shape(QBrush(Qt::NoBrush), QPen(outline, outline_width, Qt::SolidLine, Qt::SquareCap, outline_pen_join_style(*layer)));
-                p.setRenderHint(QPainter::Antialiasing, previous_aa);
-            };
-            if (!eval_outline_on_front(*layer, lt)) draw_outline();
-            const QBrush fill_brush = layer->fill_type == 1 ? gradient_fill_brush(*layer, box) : QBrush(fc);
-            draw_shape(fill_brush, QPen(Qt::NoPen));
-            if (eval_outline_on_front(*layer, lt)) draw_outline();
-        }
-
-        if (layer->type == LayerType::Image) {
-            if (eval_background_enabled(*layer, lt)) {
-                QColor bg = evaluated_background_color(*layer, lt);
-                if (bg.alpha() > 0 || layer->fill_type == 1) {
-                    const double pad_x = eval_background_padding_x(*layer, lt);
-                    const double pad_y = eval_background_padding_y(*layer, lt);
-                    const double corner = eval_background_corner_radius(*layer, lt);
-                    QRectF bg_box = box.adjusted(-pad_x, -pad_y, pad_x, pad_y);
-                    p.setPen(Qt::NoPen);
-                    p.setBrush(layer->fill_type == 1 ? gradient_fill_brush(*layer, bg_box, eval_background_opacity(*layer, lt)) : QBrush(bg));
-                    p.drawRoundedRect(bg_box, corner, corner);
-                }
-            }
-            QImage image = editor_load_layer_image(QString::fromStdString(layer->image_path),
-                                                   box.size().toSize());
-            if (!image.isNull()) {
-                p.drawImage(box, image);
-            } else {
-                p.setBrush(QColor(0x33, 0x33, 0x33));
-                p.setPen(QPen(QColor(0xff, 0x55, 0x55), 2));
-                p.drawRect(box);
-                p.drawText(box, Qt::AlignCenter, obsgs_tr("OBSTitles.MissingImage"));
-            }
-        }
-
-        if (layer->type == LayerType::Text || layer->type == LayerType::Clock || layer->type == LayerType::Ticker) {
-            QColor tc = color_from_argb(eval_text_color(*layer, lt));
-            QFont f = font_for_layer(*layer);
-            p.setFont(f);
-            QString text = display_text_for_style(*layer);
-            if (eval_background_enabled(*layer, lt)) {
-                QColor bg = evaluated_background_color(*layer, lt);
-                if (bg.alpha() > 0 || layer->fill_type == 1) {
-                    const double pad_x = eval_background_padding_x(*layer, lt);
-                    const double pad_y = eval_background_padding_y(*layer, lt);
-                    const double corner = eval_background_corner_radius(*layer, lt);
-                    QRectF bg_box = box.adjusted(-pad_x, -pad_y, pad_x, pad_y);
-                    p.setPen(Qt::NoPen);
-                    p.setBrush(layer->fill_type == 1 ? gradient_fill_brush(*layer, bg_box, eval_background_opacity(*layer, lt)) : QBrush(bg));
-                    p.drawRoundedRect(bg_box, corner, corner);
-                }
-            }
-            QRectF text_box = text_rect_for_style(box, *layer);
-            p.save();
-            p.setClipRect(text_box);
-            Qt::AlignmentFlag ha = Qt::AlignHCenter;
-            if (layer->align_h == 0) ha = Qt::AlignLeft;
-            if (layer->align_h == 2) ha = Qt::AlignRight;
-            Qt::AlignmentFlag va = Qt::AlignVCenter;
-            if (layer->align_v == 0) va = Qt::AlignTop;
-            if (layer->align_v == 2) va = Qt::AlignBottom;
-            QPainterPath text_path = layer->type == LayerType::Ticker
-                ? ticker_text_path(f, text_box, ha | va, text, *layer)
-                : text_overflow_path(f, text_box, ha | va, text, *layer);
-            text_path = apply_vertical_character_scale(text_path, text_box, ha | va, *layer);
-            if (eval_shadow_enabled(*layer, lt)) {
-                QColor sc = color_from_argb(eval_shadow_color(*layer, lt));
-                sc.setAlphaF(std::clamp((double)sc.alphaF() * eval_shadow_opacity(*layer, lt), 0.0, 1.0));
-                QPointF off = shadow_offset(*layer, lt);
-                double blur = eval_shadow_blur(*layer, lt);
-                double spread = eval_shadow_spread(*layer, lt);
-                int passes = shadow_pass_count(blur);
-                for (int pass = passes; pass >= 1; --pass) {
-                    QColor pass_color = sc;
-                    pass_color.setAlphaF(sc.alphaF() / passes);
-                    p.setPen(Qt::NoPen);
-                    p.setBrush(pass_color);
-                    double radius = blur * pass / passes;
-                    for (double dx : {-spread - radius, 0.0, spread + radius})
-                        for (double dy : {-spread - radius, 0.0, spread + radius})
-                            p.drawPath(text_path.translated(off + QPointF(dx, dy)));
-                }
-            }
-            double outline_width = eval_outline_width(*layer, lt);
-            QColor outline = color_from_argb(eval_outline_color(*layer, lt));
-            outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(*layer, lt), 0.0, 1.0));
-            auto draw_text_fill = [&]() {
-                p.setPen(Qt::NoPen);
-                p.setBrush(layer->fill_type == 1 ? gradient_fill_brush(*layer, text_box) : QBrush(tc));
-                p.drawPath(text_path);
-            };
-            auto draw_text_outline = [&]() {
-                if (outline_width <= 0.0 || outline.alpha() <= 0) return;
-                bool previous_aa = p.testRenderHint(QPainter::Antialiasing);
-                p.setRenderHint(QPainter::Antialiasing, eval_outline_antialias(*layer, lt));
-                p.setPen(QPen(outline, outline_width, Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(*layer)));
-                p.setBrush(Qt::NoBrush);
-                p.drawPath(text_path);
-                p.setRenderHint(QPainter::Antialiasing, previous_aa);
-            };
-            if (!eval_outline_on_front(*layer, lt)) draw_text_outline();
-            draw_text_fill();
-            if (eval_outline_on_front(*layer, lt)) draw_text_outline();
-            p.restore();
-        }
-
-        p.restore();
-    }
-
+    QImage img = gpu_pipeline_
+        ? gpu_pipeline_->render_title_to_qimage(*title_, playhead_)
+        : obsgs::render_title_to_qimage(*title_, playhead_);
     frame_pixmap_ = QPixmap::fromImage(img);
     dirty_ = false;
 }
@@ -4419,6 +4254,7 @@ void CanvasPreview::render_to_pixmap()
 void CanvasPreview::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
     p.fillRect(rect(), QColor(0x11, 0x11, 0x11));
 
     if (!title_) return;

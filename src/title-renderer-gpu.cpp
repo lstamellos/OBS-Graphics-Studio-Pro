@@ -42,10 +42,42 @@
 #include <initializer_list>
 #include <utility>
 #include <sstream>
+#include <cstring>
 
 namespace obsgs {
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
+constexpr double kLayerAssetSupersample = 2.0;
+constexpr int kMaxLayerAssetTextureSize = 8192;
+
+
+thread_local int g_graphics_lock_depth = 0;
+
+class ScopedObsGraphicsLock {
+public:
+    ScopedObsGraphicsLock()
+    {
+        if (!obs_get_video())
+            return;
+        active_ = true;
+        if (g_graphics_lock_depth++ == 0)
+            obs_enter_graphics();
+    }
+
+    ~ScopedObsGraphicsLock()
+    {
+        if (!active_)
+            return;
+        if (--g_graphics_lock_depth == 0)
+            obs_leave_graphics();
+    }
+
+    ScopedObsGraphicsLock(const ScopedObsGraphicsLock &) = delete;
+    ScopedObsGraphicsLock &operator=(const ScopedObsGraphicsLock &) = delete;
+
+private:
+    bool active_ = false;
+};
 
 constexpr const char *kShadowEffectSource = R"(
 uniform float4x4 ViewProj;
@@ -95,7 +127,22 @@ static bool path_is_svg(const std::string &path)
            qpath.endsWith(QStringLiteral(".svgz"), Qt::CaseInsensitive);
 }
 
-static QImage load_layer_image(const Layer &layer, double t = 0.0)
+static QImage premultiplied_bgra_image(const QImage &image)
+{
+    if (image.isNull())
+        return QImage();
+    return image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
+static double bounded_supersample_for_size(double width, double height)
+{
+    const double max_dimension = std::max(width, height);
+    if (max_dimension <= 0.0)
+        return 1.0;
+    return std::clamp(kMaxLayerAssetTextureSize / max_dimension, 1.0, kLayerAssetSupersample);
+}
+
+static QImage load_layer_image(const Layer &layer, double t = 0.0, double device_scale = 1.0)
 {
     if (layer.image_path.empty())
         return QImage();
@@ -105,22 +152,109 @@ static QImage load_layer_image(const Layer &layer, double t = 0.0)
         QSvgRenderer renderer(path);
         if (!renderer.isValid())
             return QImage();
-        QSize size(std::max(1, static_cast<int>(std::ceil(layer.box_width.is_animated() ? layer.box_width.evaluate(t) : static_cast<double>(layer.rect_width)))),
-                   std::max(1, static_cast<int>(std::ceil(layer.box_height.is_animated() ? layer.box_height.evaluate(t) : static_cast<double>(layer.rect_height)))));
-        if (!size.isValid() || size.isEmpty())
-            size = renderer.defaultSize();
-        if (!size.isValid() || size.isEmpty())
-            size = QSize(256, 256);
-        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        QSize logical_size(std::max(1, static_cast<int>(std::ceil(layer.box_width.is_animated() ? layer.box_width.evaluate(t) : static_cast<double>(layer.rect_width)))),
+                           std::max(1, static_cast<int>(std::ceil(layer.box_height.is_animated() ? layer.box_height.evaluate(t) : static_cast<double>(layer.rect_height)))));
+        if (!logical_size.isValid() || logical_size.isEmpty())
+            logical_size = renderer.defaultSize();
+        if (!logical_size.isValid() || logical_size.isEmpty())
+            logical_size = QSize(256, 256);
+
+        const double scale = std::min(bounded_supersample_for_size(logical_size.width(), logical_size.height()),
+                                      std::clamp(device_scale, 1.0, kLayerAssetSupersample));
+        QSize raster_size(std::max(1, static_cast<int>(std::ceil(logical_size.width() * scale))),
+                          std::max(1, static_cast<int>(std::ceil(logical_size.height() * scale))));
+        QImage image(raster_size, QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         QPainter painter(&image);
-        renderer.render(&painter);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        renderer.render(&painter, QRectF(0.0, 0.0, raster_size.width(), raster_size.height()));
+        painter.end();
         return image;
     }
 
     QImageReader reader(path);
     reader.setAutoTransform(true);
-    return reader.read();
+    return premultiplied_bgra_image(reader.read());
+}
+
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
+    const std::vector<std::shared_ptr<Layer>> &exposed,
+    const std::vector<std::string> &column_order)
+{
+    if (column_order.empty())
+        return exposed;
+
+    std::vector<std::shared_ptr<Layer>> ordered;
+    ordered.reserve(exposed.size());
+    for (const auto &layer_id : column_order) {
+        auto it = std::find_if(exposed.begin(), exposed.end(),
+                               [&](const std::shared_ptr<Layer> &layer) {
+                                   return layer && layer->id == layer_id;
+                               });
+        if (it != exposed.end())
+            ordered.push_back(*it);
+    }
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        auto it = std::find_if(ordered.begin(), ordered.end(),
+                               [&](const std::shared_ptr<Layer> &ordered_layer) {
+                                   return ordered_layer && ordered_layer->id == layer->id;
+                               });
+        if (it == ordered.end())
+            ordered.push_back(layer);
+    }
+    return ordered;
+}
+
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &title)
+{
+    std::vector<std::shared_ptr<Layer>> exposed;
+    for (const auto &layer : title.layers) {
+        if (!layer) continue;
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
+            exposed.push_back(layer);
+    }
+    return order_exposed_text_layers(exposed, title.live_text_column_order);
+}
+
+static double cue_persistence_hold_time(const Title &title)
+{
+    if (title.playback_mode == 1)
+        return std::clamp(title.loop_end, title.loop_start, title.duration);
+    if (title.playback_mode == 2)
+        return std::clamp(title.pause_time, 0.0, title.duration);
+    return std::clamp(title.duration, 0.0, title.duration);
+}
+
+static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &exposed, const std::shared_ptr<Layer> &layer)
+{
+    if (!layer)
+        return -1;
+    for (int i = 0; i < (int)exposed.size(); ++i) {
+        if (exposed[i] && exposed[i]->id == layer->id)
+            return i;
+    }
+    return -1;
+}
+
+static double cue_persistent_layer_time(const Title &title, const std::shared_ptr<Layer> &layer,
+                                        double frame_time,
+                                        const std::vector<std::shared_ptr<Layer>> &exposed,
+                                        bool background_persistence)
+{
+    if (!background_persistence)
+        return frame_time;
+
+    const int exposed_index = exposed_text_layer_index(exposed, layer);
+    const bool persistent_text = exposed_index >= 0 && title.cue_text_persistence &&
+        exposed_index < (int)title.cue_persistent_text_columns.size() &&
+        title.cue_persistent_text_columns[exposed_index];
+    if (exposed_index < 0 || persistent_text)
+        return cue_persistence_hold_time(title);
+
+    return frame_time;
 }
 
 static bool layer_has_animated_transform(const Layer &layer)
@@ -796,19 +930,24 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
     const double pad_top = std::ceil(std::max({outline, bg_pad_y, 1.0}));
     const double pad_right = std::ceil(std::max({outline, bg_pad_x, 1.0}));
     const double pad_bottom = std::ceil(std::max({outline, bg_pad_y, 1.0}));
-    const int image_w = std::max(1, static_cast<int>(std::ceil(box_w + pad_left + pad_right)));
-    const int image_h = std::max(1, static_cast<int>(std::ceil(box_h + pad_top + pad_bottom)));
+    const double logical_w = std::max(1.0, box_w + pad_left + pad_right);
+    const double logical_h = std::max(1.0, box_h + pad_top + pad_bottom);
+    const double device_scale = bounded_supersample_for_size(logical_w, logical_h);
+    const int image_w = std::max(1, static_cast<int>(std::ceil(logical_w * device_scale)));
+    const int image_h = std::max(1, static_cast<int>(std::ceil(logical_h * device_scale)));
 
     asset.image = QImage(image_w, image_h, QImage::Format_ARGB32_Premultiplied);
     asset.image.fill(Qt::transparent);
-    asset.width = image_w;
-    asset.height = image_h;
+    asset.width = logical_w;
+    asset.height = logical_h;
     asset.origin_x = (pad_left + eval_origin_x(layer, t) * box_w) / std::max(1.0, asset.width);
     asset.origin_y = (pad_top + eval_origin_y(layer, t) * box_h) / std::max(1.0, asset.height);
 
     QPainter painter(&asset.image);
+    painter.scale(device_scale, device_scale);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     const QRectF box(pad_left, pad_top, box_w, box_h);
     auto fill_brush = [&](const QRectF &target, double opacity = 1.0) {
         return layer.fill_type == 1 ? gradient_fill_brush(layer, target, opacity)
@@ -881,7 +1020,7 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
 static QImage image_with_opacity(const QImage &image, double opacity)
 {
     const double alpha = std::clamp(opacity, 0.0, 1.0);
-    QImage result = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    QImage result = premultiplied_bgra_image(image);
     if (alpha >= 0.9999)
         return result;
     result.detach();
@@ -896,10 +1035,10 @@ static QImage image_with_opacity(const QImage &image, double opacity)
 
 static void vec4_from_argb(uint32_t argb, double opacity, vec4 &out)
 {
-    out.x = static_cast<float>(((argb >> 16) & 0xFF) / 255.0);
-    out.y = static_cast<float>(((argb >> 8) & 0xFF) / 255.0);
-    out.z = static_cast<float>((argb & 0xFF) / 255.0);
     out.w = static_cast<float>(((argb >> 24) & 0xFF) / 255.0 * std::clamp(opacity, 0.0, 1.0));
+    out.x = static_cast<float>(((argb >> 16) & 0xFF) / 255.0) * out.w;
+    out.y = static_cast<float>(((argb >> 8) & 0xFF) / 255.0) * out.w;
+    out.z = static_cast<float>((argb & 0xFF) / 255.0) * out.w;
 }
 
 static bool draw_solid_quad(double px, double py, double width, double height,
@@ -1126,12 +1265,13 @@ bool GpuTextureFrame::ensure_dynamic_bgra(uint32_t width, uint32_t height)
 {
     if (texture_ && width_ == width && height_ == height)
         return true;
+    if (!obs_get_video())
+        return false;
 
-    obs_enter_graphics();
+    ScopedObsGraphicsLock graphics_lock;
     if (texture_)
         gs_texture_destroy(texture_);
     texture_ = gs_texture_create(width, height, GS_BGRA, 1, nullptr, GS_DYNAMIC);
-    obs_leave_graphics();
 
     if (!texture_) {
         width_ = 0;
@@ -1146,12 +1286,11 @@ bool GpuTextureFrame::ensure_dynamic_bgra(uint32_t width, uint32_t height)
 
 bool GpuTextureFrame::upload_bgra_asset(const uint8_t *pixels, uint32_t linesize)
 {
-    if (!texture_ || !pixels)
+    if (!texture_ || !pixels || !obs_get_video())
         return false;
 
-    obs_enter_graphics();
+    ScopedObsGraphicsLock graphics_lock;
     gs_texture_set_image(texture_, pixels, linesize, false);
-    obs_leave_graphics();
     return true;
 }
 
@@ -1163,9 +1302,10 @@ void GpuTextureFrame::reset()
         return;
     }
 
-    obs_enter_graphics();
-    gs_texture_destroy(texture_);
-    obs_leave_graphics();
+    if (obs_get_video()) {
+        ScopedObsGraphicsLock graphics_lock;
+        gs_texture_destroy(texture_);
+    }
     texture_ = nullptr;
     width_ = 0;
     height_ = 0;
@@ -1175,9 +1315,10 @@ ObsGpuRenderPipeline::~ObsGpuRenderPipeline()
 {
     reset();
     if (shadow_effect_) {
-        obs_enter_graphics();
-        gs_effect_destroy(shadow_effect_);
-        obs_leave_graphics();
+        if (obs_get_video()) {
+            ScopedObsGraphicsLock graphics_lock;
+            gs_effect_destroy(shadow_effect_);
+        }
         shadow_effect_ = nullptr;
     }
 }
@@ -1187,10 +1328,12 @@ gs_effect_t *ObsGpuRenderPipeline::ensure_shadow_effect()
     if (shadow_effect_)
         return shadow_effect_;
 
+    if (!obs_get_video())
+        return nullptr;
+
     char *errors = nullptr;
-    obs_enter_graphics();
+    ScopedObsGraphicsLock graphics_lock;
     shadow_effect_ = gs_effect_create(kShadowEffectSource, "obsgs-gpu-shadow.effect", &errors);
-    obs_leave_graphics();
     if (errors) {
         blog(LOG_WARNING, "OBS Graphics Studio Pro shadow effect compile log: %s", errors);
         bfree(errors);
@@ -1227,18 +1370,21 @@ GpuTitlePlan ObsGpuRenderPipeline::build_migration_plan(const Title &title) cons
     return plan;
 }
 
-GpuTextureFrame *ObsGpuRenderPipeline::texture_for_image_layer(const Layer &layer, double opacity)
+GpuTextureFrame *ObsGpuRenderPipeline::texture_for_image_layer(const Layer &layer, double t, double opacity)
 {
     if (layer.image_path.empty())
         return nullptr;
 
     const int opacity_key = std::clamp(static_cast<int>(std::round(opacity * 255.0)), 0, 255);
-    const std::string key = layer.image_path + "#opacity=" + std::to_string(opacity_key);
+    const int width_key = std::max(1, static_cast<int>(std::ceil(eval_box_width(layer, t))));
+    const int height_key = std::max(1, static_cast<int>(std::ceil(eval_box_height(layer, t))));
+    const std::string key = layer.image_path + "#t=" + std::to_string(width_key) + "x" + std::to_string(height_key) +
+        "#opacity=" + std::to_string(opacity_key);
     auto existing = image_textures_.find(key);
     if (existing != image_textures_.end())
         return existing->second.get();
 
-    QImage image = load_layer_image(layer);
+    QImage image = load_layer_image(layer, t, path_is_svg(layer.image_path) ? kLayerAssetSupersample : 1.0);
     if (image.isNull())
         return nullptr;
 
@@ -1280,6 +1426,11 @@ GpuTextureFrame *ObsGpuRenderPipeline::texture_for_raster_layer(const Layer &lay
 bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
 {
     const double clamped_time = std::clamp(time_seconds, 0.0, std::max(0.0, title.duration));
+    const bool background_persistence = title.cue_background_persistence &&
+        title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
+    const auto exposed = background_persistence
+        ? exposed_text_layers(title)
+        : std::vector<std::shared_ptr<Layer>>();
 
     draw_solid_quad(0.0, 0.0, std::max(1, title.width), std::max(1, title.height),
                     0.0, 0.0, 1.0, 1.0, 0.0, title.bg_color, 1.0);
@@ -1287,10 +1438,11 @@ bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
     for (const auto &layer : title.layers) {
         if (!layer || !layer->visible)
             continue;
-        if (clamped_time < layer->in_time || clamped_time > layer->out_time)
+        const double layer_time = cue_persistent_layer_time(title, layer, clamped_time, exposed, background_persistence);
+        if (layer_time < layer->in_time || layer_time > layer->out_time)
             continue;
 
-        const double lt = clamped_time - layer->in_time;
+        const double lt = layer_time - layer->in_time;
         const double px = layer->pos_x.evaluate(lt);
         const double py = layer->pos_y.evaluate(lt);
         const double sx = layer->scale_x.evaluate(lt);
@@ -1317,7 +1469,7 @@ bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
             break;
         }
         case LayerType::Image: {
-            GpuTextureFrame *texture = texture_for_image_layer(*layer, alpha);
+            GpuTextureFrame *texture = texture_for_image_layer(*layer, lt, alpha);
             if (!texture)
                 break;
             const double w = eval_box_width(*layer, lt) > 0.0 ? eval_box_width(*layer, lt) : texture->width();
@@ -1348,23 +1500,31 @@ void ObsGpuRenderPipeline::reset()
 }
 
 
-QImage render_title_to_qimage(const Title &title, double time_seconds)
+static QImage render_title_to_qimage_cpu(const Title &title, double time_seconds)
 {
     QImage frame(std::max(1, title.width), std::max(1, title.height), QImage::Format_ARGB32_Premultiplied);
     frame.fill(Qt::transparent);
     QPainter painter(&frame);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     painter.fillRect(frame.rect(), color_from_argb(title.bg_color));
 
     const double clamped_time = std::clamp(time_seconds, 0.0, std::max(0.0, title.duration));
+    const bool background_persistence = title.cue_background_persistence &&
+        title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
+    const auto exposed = background_persistence
+        ? exposed_text_layers(title)
+        : std::vector<std::shared_ptr<Layer>>();
+
     for (const auto &layer : title.layers) {
         if (!layer || !layer->visible)
             continue;
-        if (clamped_time < layer->in_time || clamped_time > layer->out_time)
+        const double layer_time = cue_persistent_layer_time(title, layer, clamped_time, exposed, background_persistence);
+        if (layer_time < layer->in_time || layer_time > layer->out_time)
             continue;
 
-        const double lt = clamped_time - layer->in_time;
+        const double lt = layer_time - layer->in_time;
         const double px = layer->pos_x.evaluate(lt);
         const double py = layer->pos_y.evaluate(lt);
         const double sx = layer->scale_x.evaluate(lt);
@@ -1412,5 +1572,76 @@ std::string layer_type_name(LayerType type)
     default: return "Unknown";
     }
 }
+
+
+
+QImage ObsGpuRenderPipeline::render_title_to_qimage(const Title &title, double time_seconds)
+{
+    const uint32_t width = static_cast<uint32_t>(std::max(1, title.width));
+    const uint32_t height = static_cast<uint32_t>(std::max(1, title.height));
+
+    if (!obs_get_video())
+        return render_title_to_qimage_cpu(title, time_seconds);
+
+    QImage frame(static_cast<int>(width), static_cast<int>(height), QImage::Format_ARGB32_Premultiplied);
+    frame.fill(Qt::transparent);
+
+    ScopedObsGraphicsLock graphics_lock;
+
+    gs_texture_t *previous_target = gs_get_render_target();
+    gs_zstencil_t *previous_zstencil = gs_get_zstencil_target();
+    struct gs_rect previous_viewport = {};
+    gs_get_viewport(&previous_viewport);
+
+    gs_texture_t *target = gs_texture_create(width, height, GS_BGRA, 1, nullptr, GS_RENDER_TARGET);
+    gs_stagesurf_t *stage = target ? gs_stagesurface_create(width, height, GS_BGRA) : nullptr;
+    bool mapped = false;
+
+    if (target && stage) {
+        gs_set_render_target(target, nullptr);
+        gs_set_viewport(0, 0, static_cast<int>(width), static_cast<int>(height));
+        vec4 clear_color = {0.0f, 0.0f, 0.0f, 0.0f};
+        gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+
+        gs_projection_push();
+        gs_matrix_push();
+        gs_matrix_identity();
+        gs_ortho(0.0f, static_cast<float>(width), 0.0f, static_cast<float>(height), -100.0f, 100.0f);
+        render_title(title, time_seconds);
+        gs_matrix_pop();
+        gs_projection_pop();
+
+        gs_stage_texture(stage, target);
+        uint8_t *data = nullptr;
+        uint32_t linesize = 0;
+        mapped = gs_stagesurface_map(stage, &data, &linesize);
+        if (mapped && data) {
+            for (uint32_t y = 0; y < height; ++y)
+                std::memcpy(frame.scanLine(static_cast<int>(y)), data + static_cast<size_t>(y) * linesize, static_cast<size_t>(width) * 4);
+            gs_stagesurface_unmap(stage);
+        }
+    }
+
+    gs_set_render_target(previous_target, previous_zstencil);
+    gs_set_viewport(previous_viewport.x, previous_viewport.y, previous_viewport.cx, previous_viewport.cy);
+
+    if (stage)
+        gs_stagesurface_destroy(stage);
+    if (target)
+        gs_texture_destroy(target);
+
+
+    if (!mapped)
+        return render_title_to_qimage_cpu(title, time_seconds);
+
+    return frame;
+}
+
+QImage render_title_to_qimage(const Title &title, double time_seconds)
+{
+    ObsGpuRenderPipeline pipeline;
+    return pipeline.render_title_to_qimage(title, time_seconds);
+}
+
 
 } // namespace obsgs
