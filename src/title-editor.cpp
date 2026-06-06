@@ -1307,16 +1307,44 @@ void TitleEditor::build_ui()
     edit_menu->addSeparator();
     QAction *copy_action = edit_menu->addAction(obsgs_tr("OBSTitles.Copy"));
     copy_action->setShortcut(QKeySequence::Copy);
-    connect(copy_action, &QAction::triggered, this, &TitleEditor::copy_selected_layer);
+    connect(copy_action, &QAction::triggered, this, [this]() {
+        if (editor_focus_accepts_text(focusWidget())) return;
+        if (timeline_ && timeline_->has_selected_keyframes()) {
+            timeline_->copy_keyframe_selection();
+            return;
+        }
+        copy_selected_layer();
+    });
     QAction *cut_action = edit_menu->addAction(obsgs_tr("OBSTitles.Cut"));
     cut_action->setShortcut(QKeySequence::Cut);
-    connect(cut_action, &QAction::triggered, this, &TitleEditor::cut_selected_layer);
+    connect(cut_action, &QAction::triggered, this, [this]() {
+        if (editor_focus_accepts_text(focusWidget())) return;
+        if (timeline_ && timeline_->has_selected_keyframes()) {
+            timeline_->cut_keyframe_selection();
+            return;
+        }
+        cut_selected_layer();
+    });
     QAction *paste_action = edit_menu->addAction(obsgs_tr("OBSTitles.Paste"));
     paste_action->setShortcut(QKeySequence::Paste);
-    connect(paste_action, &QAction::triggered, this, &TitleEditor::paste_layer_from_clipboard);
+    connect(paste_action, &QAction::triggered, this, [this]() {
+        if (editor_focus_accepts_text(focusWidget())) return;
+        if (timeline_ && timeline_->has_keyframe_clipboard()) {
+            timeline_->paste_keyframes_at_playhead();
+            return;
+        }
+        paste_layer_from_clipboard();
+    });
     QAction *delete_action = edit_menu->addAction(obsgs_tr("OBSTitles.Delete"));
     delete_action->setShortcut(QKeySequence::Delete);
-    connect(delete_action, &QAction::triggered, this, &TitleEditor::delete_selected_layer);
+    connect(delete_action, &QAction::triggered, this, [this]() {
+        if (editor_focus_accepts_text(focusWidget())) return;
+        if (timeline_ && timeline_->has_selected_keyframes()) {
+            timeline_->delete_keyframe_selection();
+            return;
+        }
+        delete_selected_layer();
+    });
 
     auto *view_menu = menu_bar->addMenu(QStringLiteral("View"));
     QAction *snap_action = view_menu->addAction(QStringLiteral("Snap"));
