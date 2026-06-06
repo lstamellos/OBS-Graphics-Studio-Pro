@@ -4254,6 +4254,7 @@ void CanvasPreview::render_to_pixmap()
 void CanvasPreview::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
     p.fillRect(rect(), QColor(0x11, 0x11, 0x11));
 
     if (!title_) return;
