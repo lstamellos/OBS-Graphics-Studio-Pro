@@ -22,6 +22,7 @@
 #include <limits>
 #include <utility>
 #include <cctype>
+#include <ctime>
 
 using json = nlohmann::json;
 
@@ -43,6 +44,20 @@ constexpr int kMaxCanvasDimension = 16384;
 static double finite_or(double value, double fallback)
 {
     return std::isfinite(value) ? value : fallback;
+}
+
+static std::string current_iso_utc_string()
+{
+    const std::time_t now = std::time(nullptr);
+    std::tm tm_utc{};
+#if defined(_WIN32)
+    gmtime_s(&tm_utc, &now);
+#else
+    gmtime_r(&now, &tm_utc);
+#endif
+    std::ostringstream out;
+    out << std::put_time(&tm_utc, "%Y-%m-%dT%H:%M:%SZ");
+    return out.str();
 }
 
 static std::string title_data_dir()
@@ -631,6 +646,7 @@ std::shared_ptr<Title> TitleDataStore::create_title(const std::string &name)
     auto t = std::make_shared<Title>();
     t->id   = make_uuid();
     t->name = name;
+    t->creation_date = current_iso_utc_string();
 
     /* Default: one text layer */
     auto layer = std::make_shared<Layer>();
@@ -1055,6 +1071,9 @@ static json title_to_json(const Title &t, bool include_embedded_assets = true,
     json jt;
     jt["id"]       = t.id;
     jt["name"]     = t.name;
+    if (!t.description.empty()) jt["description"] = t.description;
+    if (!t.creator.empty()) jt["creator"] = t.creator;
+    if (!t.creation_date.empty()) jt["creation_date"] = t.creation_date;
     jt["duration"] = t.duration;
     jt["loop_start"] = t.loop_start;
     jt["loop_end"] = t.loop_end;
@@ -1096,6 +1115,9 @@ static std::shared_ptr<Title> title_from_json(const json &jt, bool regenerate_id
 
     t->id       = bounded_string(jt, "id", TitleDataStore::make_uuid(), kMaxNameLength);
     t->name     = bounded_string(jt, "name", "Untitled", kMaxNameLength);
+    t->description = bounded_string(jt, "description", "", kMaxTextLength);
+    t->creator = bounded_string(jt, "creator", "", kMaxNameLength);
+    t->creation_date = bounded_string(jt, "creation_date", "", kMaxNameLength);
     t->duration = std::clamp(finite_or(json_double(jt, "duration", 5.0), 5.0), 0.1, kMaxDuration);
     t->loop_start = std::clamp(finite_or(json_double(jt, "loop_start", std::min(1.0, t->duration)), 0.0), 0.0, t->duration);
     t->loop_end = std::clamp(finite_or(json_double(jt, "loop_end", std::max(t->loop_start, t->duration - 1.0)), t->duration), t->loop_start, t->duration);
@@ -1233,25 +1255,41 @@ bool TitleDataStore::export_title(const std::string &id, const std::string &path
         return false;
     }
 
+    TitleTemplateExportMetadata export_metadata = metadata;
+    if (export_metadata.title.empty()) export_metadata.title = t->name;
+    if (export_metadata.description.empty()) export_metadata.description = t->description;
+    if (export_metadata.creator.empty()) export_metadata.creator = t->creator;
+    if (export_metadata.creation_date.empty()) {
+        export_metadata.creation_date = t->creation_date.empty() ? current_iso_utc_string() : t->creation_date;
+    }
+    if (export_metadata.screenshot_png_base64.empty())
+        export_metadata.screenshot_png_base64 = t->preview_screenshot_png_base64;
+
     json root;
     root["format"] = "obs-graphics-studio-pro-title-template";
     root["version"] = 3;
-    root["template_title"] = metadata.title;
-    root["description"] = metadata.description;
-    root["creator"] = metadata.creator;
-    root["creation_date"] = metadata.creation_date;
+    root["template_title"] = export_metadata.title;
+    root["description"] = export_metadata.description;
+    root["creator"] = export_metadata.creator;
+    root["creation_date"] = export_metadata.creation_date;
     root["screenshot"] = {
         {"mime_type", "image/png"},
-        {"data_base64", metadata.screenshot_png_base64},
+        {"data_base64", export_metadata.screenshot_png_base64},
     };
     root["metadata"] = {
-        {"title", metadata.title},
-        {"description", metadata.description},
-        {"creator", metadata.creator},
-        {"creation_date", metadata.creation_date},
+        {"title", export_metadata.title},
+        {"description", export_metadata.description},
+        {"creator", export_metadata.creator},
+        {"creation_date", export_metadata.creation_date},
         {"screenshot", root["screenshot"]},
     };
-    json exported_title = title_to_json(*t, true, true, error);
+    Title exported_copy = *t;
+    exported_copy.name = export_metadata.title;
+    exported_copy.description = export_metadata.description;
+    exported_copy.creator = export_metadata.creator;
+    exported_copy.creation_date = export_metadata.creation_date;
+    exported_copy.preview_screenshot_png_base64 = export_metadata.screenshot_png_base64;
+    json exported_title = title_to_json(exported_copy, true, true, error);
     if ((error && !error->empty()) || exported_title.empty()) {
         if (error && error->empty())
             *error = "Could not embed all title assets in the export file.";
@@ -1290,6 +1328,17 @@ std::shared_ptr<Title> TitleDataStore::import_title(const std::string &path, std
             throw std::runtime_error("Unsupported template file format.");
 
         auto imported = title_from_json(jt, true, true, error);
+        if (imported && root.is_object()) {
+            json meta = root.value("metadata", json::object());
+            if (imported->name.empty())
+                imported->name = bounded_string(meta, "title", bounded_string(root, "template_title", "Imported Title", kMaxNameLength), kMaxNameLength);
+            if (imported->description.empty())
+                imported->description = bounded_string(meta, "description", bounded_string(root, "description", "", kMaxTextLength), kMaxTextLength);
+            if (imported->creator.empty())
+                imported->creator = bounded_string(meta, "creator", bounded_string(root, "creator", "", kMaxNameLength), kMaxNameLength);
+            if (imported->creation_date.empty())
+                imported->creation_date = bounded_string(meta, "creation_date", bounded_string(root, "creation_date", "", kMaxNameLength), kMaxNameLength);
+        }
         if (imported && imported->preview_screenshot_png_base64.empty() && root.is_object()) {
             json screenshot = root.value("screenshot", json::object());
             if (screenshot.empty() && root.contains("metadata") && root["metadata"].is_object())

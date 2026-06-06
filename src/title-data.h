@@ -245,6 +245,9 @@ struct Layer {
 struct Title {
     std::string id;
     std::string name        = "Untitled";
+    std::string description;
+    std::string creator;
+    std::string creation_date;
     double      duration    = 5.0;   /* total clip duration (seconds) */
     double      loop_start  = 1.0;   /* live-cue loop start (seconds) */
     double      loop_end    = 4.0;   /* live-cue loop end (seconds) */
