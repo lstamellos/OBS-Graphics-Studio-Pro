@@ -20,16 +20,19 @@
 #include <QImage>
 #include <QImageReader>
 #include <QLinearGradient>
+#include <QLocale>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
 #include <QRadialGradient>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QSize>
 #include <QSvgRenderer>
 #include <QTextLayout>
 #include <QTextOption>
+#include <QTransform>
 #include <QVector>
 
 #include <algorithm>
@@ -275,6 +278,21 @@ static bool eval_outline_on_front(const Layer &layer, double)
     return layer.outline_on_front;
 }
 
+static bool eval_outline_antialias(const Layer &layer, double)
+{
+    return layer.outline_antialias;
+}
+
+static Qt::PenJoinStyle outline_pen_join_style(const Layer &layer)
+{
+    switch (layer.outline_join_style) {
+    case 0: return Qt::MiterJoin;
+    case 2: return Qt::BevelJoin;
+    case 1:
+    default: return Qt::RoundJoin;
+    }
+}
+
 static QColor color_from_argb(uint32_t argb, double opacity = 1.0)
 {
     QColor color((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, (argb >> 24) & 0xFF);
@@ -329,72 +347,327 @@ static QBrush gradient_fill_brush(const Layer &layer, const QRectF &box, double 
     return QBrush(gradient);
 }
 
+static QLocale locale_for_text_transform(const QString &text)
+{
+    QLocale locale;
+    for (const QChar ch : text) {
+        const uint u = ch.unicode();
+        if (u >= 0x0370 && u <= 0x03FF)
+            return QLocale(QLocale::Greek, QLocale::Greece);
+        if (QStringLiteral("ıİşŞğĞçÇ").contains(ch))
+            return QLocale(QLocale::Turkish, QLocale::Turkey);
+        if (ch == QChar(0x00DF))
+            return QLocale(QLocale::German, QLocale::Germany);
+    }
+    return locale;
+}
+
+static QString php_date_format(const QString &format, const QDateTime &date_time)
+{
+    QString out;
+    const QDate date = date_time.date();
+    const QTime time = date_time.time();
+    for (int i = 0; i < format.size(); ++i) {
+        const QChar token = format.at(i);
+        if (token == QLatin1Char('\\') && i + 1 < format.size()) {
+            out.append(format.at(++i));
+            continue;
+        }
+        switch (token.unicode()) {
+        case 'd': out += QString("%1").arg(date.day(), 2, 10, QChar('0')); break;
+        case 'D': out += date_time.toString("ddd"); break;
+        case 'j': out += QString::number(date.day()); break;
+        case 'l': out += date_time.toString("dddd"); break;
+        case 'F': out += date_time.toString("MMMM"); break;
+        case 'm': out += QString("%1").arg(date.month(), 2, 10, QChar('0')); break;
+        case 'M': out += date_time.toString("MMM"); break;
+        case 'n': out += QString::number(date.month()); break;
+        case 'Y': out += QString::number(date.year()); break;
+        case 'y': out += QString("%1").arg(date.year() % 100, 2, 10, QChar('0')); break;
+        case 'a': out += (time.hour() < 12 ? "am" : "pm"); break;
+        case 'A': out += (time.hour() < 12 ? "AM" : "PM"); break;
+        case 'g': { int h = time.hour() % 12; out += QString::number(h == 0 ? 12 : h); break; }
+        case 'G': out += QString::number(time.hour()); break;
+        case 'h': { int h = time.hour() % 12; out += QString("%1").arg(h == 0 ? 12 : h, 2, 10, QChar('0')); break; }
+        case 'H': out += QString("%1").arg(time.hour(), 2, 10, QChar('0')); break;
+        case 'i': out += QString("%1").arg(time.minute(), 2, 10, QChar('0')); break;
+        case 's': out += QString("%1").arg(time.second(), 2, 10, QChar('0')); break;
+        case 'U': out += QString::number(date_time.toSecsSinceEpoch()); break;
+        default: out.append(token); break;
+        }
+    }
+    return out;
+}
+
+static QString clock_text_for_layer(const Layer &layer)
+{
+    QString format = QString::fromStdString(layer.clock_format);
+    if (format.isEmpty()) format = QStringLiteral("H:i:s");
+    return php_date_format(format, QDateTime::currentDateTime());
+}
+
+static QString display_text_for_style(const Layer &layer)
+{
+    QString text = layer.type == LayerType::Clock
+        ? clock_text_for_layer(layer)
+        : QString::fromStdString(layer.text_content);
+    if (layer.text_style == 1)
+        return locale_for_text_transform(text).toUpper(text);
+    return text;
+}
+
+static void apply_text_style_to_font(QFont &font, const Layer &layer)
+{
+    if (layer.text_style == 2)
+        font.setCapitalization(QFont::SmallCaps);
+    if (layer.text_style == 3 || layer.text_style == 4)
+        font.setPixelSize(std::max(1, (int)std::round(font.pixelSize() * 0.65)));
+}
+
 static QFont font_for_layer(const Layer &layer)
 {
-    QFont font(QString::fromStdString(layer.font_family));
-    font.setPointSizeF(std::max(1.0, static_cast<double>(layer.font_size)));
+    const QString family = QString::fromStdString(layer.font_family);
+    const QString style = QString::fromStdString(layer.font_style);
+    QFontDatabase fdb;
+    QFont font = !style.isEmpty()
+        ? fdb.font(family, style, layer.font_size)
+        : QFont(family);
+    font.setFamily(family);
+    font.setPixelSize(layer.font_size);
+    if (!style.isEmpty())
+        font.setStyleName(style);
     font.setBold(layer.font_bold);
     font.setItalic(layer.font_italic);
-    font.setUnderline(layer.text_underline);
+    font.setKerning(layer.font_kerning);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, layer.char_tracking);
+    font.setStretch(std::clamp((int)std::round(layer.char_scale_x * 100.0f), 1, 4000));
+    apply_text_style_to_font(font, layer);
     return font;
 }
 
-static QString display_text_for_layer(const Layer &layer)
+static QPainterPath apply_vertical_character_scale(const QPainterPath &path, const QRectF &rect,
+                                                   Qt::Alignment alignment, const Layer &layer)
 {
-    if (layer.type == LayerType::Clock)
-        return QDateTime::currentDateTime().toString(QString::fromStdString(layer.clock_format.empty() ? std::string("hh:mm:ss") : layer.clock_format)
-                                                        .replace(QStringLiteral("H"), QStringLiteral("hh"))
-                                                        .replace(QStringLiteral("i"), QStringLiteral("mm"))
-                                                        .replace(QStringLiteral("s"), QStringLiteral("ss")));
-    return QString::fromStdString(layer.text_content);
+    const double scale_y = std::clamp((double)layer.char_scale_y, 0.1, 5.0);
+    if (std::abs(scale_y - 1.0) < 0.0001)
+        return path;
+
+    const QRectF bounds = path.boundingRect();
+    double anchor_y = bounds.top();
+    if (alignment & Qt::AlignVCenter)
+        anchor_y = bounds.center().y();
+    else if (alignment & Qt::AlignBottom)
+        anchor_y = bounds.bottom();
+    else if (!bounds.isEmpty())
+        anchor_y = rect.top();
+
+    QTransform xf;
+    xf.translate(0.0, anchor_y);
+    xf.scale(1.0, scale_y);
+    xf.translate(0.0, -anchor_y);
+    return xf.map(path);
+}
+
+static QRectF text_rect_for_style(const QRectF &rect, const Layer &layer)
+{
+    if (layer.text_style == 3)
+        return rect.adjusted(0.0, 0.0, 0.0, -rect.height() * 0.28);
+    if (layer.text_style == 4)
+        return rect.adjusted(0.0, rect.height() * 0.28, 0.0, 0.0);
+    return rect;
+}
+
+static QString overflow_layout_text(const QString &text, const Layer &layer)
+{
+    if (layer.text_overflow_mode == 2) {
+        QString single = text;
+        single.replace('\r', ' ');
+        single.replace('\n', ' ');
+        return single;
+    }
+    return text;
+}
+
+static double horizontal_fit_scale(const QFont &font, const QRectF &rect,
+                                   const QString &text, const Layer &layer)
+{
+    if (layer.text_overflow_mode != 2) return 1.0;
+    QFontMetricsF metrics(font);
+    const double text_width = static_cast<double>(metrics.horizontalAdvance(overflow_layout_text(text, layer)));
+    const double natural_width = std::max(1.0, text_width);
+    if (natural_width <= rect.width()) return 1.0;
+    return std::clamp(rect.width() / natural_width,
+                      std::clamp((double)layer.text_fit_min_scale, 0.05, 1.0),
+                      1.0);
+}
+
+static QPainterPath text_overflow_path(const QFont &font, const QRectF &rect,
+                                       Qt::Alignment alignment, const QString &text,
+                                       const Layer &layer)
+{
+    QPainterPath path;
+    QFontMetricsF metrics(font);
+    if (layer.text_overflow_mode == 2) {
+        const QString single = overflow_layout_text(text, layer);
+        const QRectF bounds = metrics.boundingRect(single);
+        const double scale = horizontal_fit_scale(font, rect, text, layer);
+        const double visual_width = bounds.width() * scale;
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - visual_width) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - visual_width;
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(0, y), font, single);
+        QTransform xf;
+        xf.translate(x, 0.0);
+        xf.scale(scale, 1.0);
+        return xf.map(path);
+    }
+
+    struct Line { QString text; double width = 0.0; double ascent = 0.0; double height = 0.0; };
+    std::vector<Line> lines;
+    const QStringList paragraphs = text.split('\n');
+    QTextOption option;
+    option.setWrapMode(layer.text_overflow_mode == 0
+                           ? QTextOption::WrapAtWordBoundaryOrAnywhere
+                           : QTextOption::NoWrap);
+    for (const QString &paragraph : paragraphs) {
+        if (paragraph.isEmpty()) {
+            lines.push_back({QString(), 0.0, metrics.ascent(), metrics.lineSpacing()});
+            continue;
+        }
+        QTextLayout layout(paragraph, font);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            line.setLineWidth(layer.text_overflow_mode == 0 ? rect.width() : 1000000.0);
+            const int start = line.textStart();
+            const int len = line.textLength();
+            lines.push_back({paragraph.mid(start, len), line.naturalTextWidth(), line.ascent(), line.height()});
+            if (layer.text_overflow_mode != 0) break;
+        }
+        layout.endLayout();
+    }
+    double total_height = 0.0;
+    const double leading = std::clamp((double)layer.text_leading, -200.0, 500.0);
+    for (size_t i = 0; i < lines.size(); ++i) {
+        total_height += lines[i].height;
+        if (i + 1 < lines.size())
+            total_height += leading;
+    }
+    double y = rect.top();
+    if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - total_height) / 2.0;
+    else if (alignment & Qt::AlignBottom) y = rect.bottom() - total_height;
+    for (const auto &line : lines) {
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line.width) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line.width;
+        path.addText(QPointF(x, y + line.ascent), font, line.text);
+        y += line.height + leading;
+    }
+    return path;
+}
+
+static double ticker_time_seconds()
+{
+    return QDateTime::currentMSecsSinceEpoch() / 1000.0;
+}
+
+static QStringList ticker_lines(const QString &text)
+{
+    QString normalized = text;
+    normalized.replace('\r', '\n');
+    QStringList raw_lines = normalized.split('\n');
+    QStringList lines;
+    for (const QString &line : raw_lines) {
+        if (!line.trimmed().isEmpty())
+            lines << line;
+    }
+    if (lines.isEmpty()) lines << QString();
+    return lines;
+}
+
+static QPainterPath ticker_text_path(const QFont &font, const QRectF &rect,
+                                     Qt::Alignment alignment, const QString &text,
+                                     const Layer &layer)
+{
+    QPainterPath path;
+    QFontMetricsF metrics(font);
+    const double speed = std::max(1.0, layer.ticker_speed);
+    const double now = ticker_time_seconds();
+
+    if (layer.ticker_style == 0) {
+        QString single = text;
+        single.replace('\r', ' ');
+        single.replace('\n', QStringLiteral("     •     "));
+        const QRectF bounds = metrics.boundingRect(single);
+        const double text_w = std::max(1.0, bounds.width());
+        const double travel = rect.width() + text_w;
+        const double progress = std::fmod(now * speed, travel);
+        const double x = layer.ticker_direction == 0
+            ? rect.left() - text_w + progress
+            : rect.right() - progress;
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(x, y), font, single);
+        return path;
+    }
+
+    const QStringList lines = ticker_lines(text);
+    const int line_count = std::max(1, static_cast<int>(lines.size()));
+    const double line_h = std::max(1.0, metrics.lineSpacing() + std::clamp((double)layer.text_leading, -200.0, 500.0));
+    if (layer.ticker_style == 1) {
+        const double hold = std::max(0.1, layer.ticker_line_hold);
+        int idx = (int)std::floor(now / hold) % line_count;
+        if (layer.ticker_direction == 0) idx = line_count - 1 - idx;
+        const QString line = lines.at(idx);
+        const double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        const QRectF bounds = metrics.boundingRect(line);
+        double y = rect.top() - bounds.top();
+        if (alignment & Qt::AlignVCenter) y = rect.top() + (rect.height() - bounds.height()) / 2.0 - bounds.top();
+        else if (alignment & Qt::AlignBottom) y = rect.bottom() - bounds.height() - bounds.top();
+        path.addText(QPointF(x, y), font, line);
+        return path;
+    }
+
+    const double content_h = line_h * line_count;
+    const double travel = rect.height() + content_h;
+    const double progress = std::fmod(now * speed, travel);
+    const double start_y = layer.ticker_direction == 0
+        ? rect.top() - content_h + progress
+        : rect.bottom() - progress;
+    for (int i = 0; i < line_count; ++i) {
+        const QString line = lines.at(i);
+        const double line_w = metrics.horizontalAdvance(line);
+        double x = rect.left();
+        if (alignment & Qt::AlignHCenter) x = rect.left() + (rect.width() - line_w) / 2.0;
+        else if (alignment & Qt::AlignRight) x = rect.right() - line_w;
+        path.addText(QPointF(x, start_y + i * line_h + metrics.ascent()), font, line);
+    }
+    return path;
 }
 
 static QPainterPath text_path_for_layer(const Layer &layer, const QRectF &rect)
 {
-    QFont font = font_for_layer(layer);
-    const QString text = display_text_for_layer(layer);
-    QPainterPath path;
-    QTextOption option;
-    option.setWrapMode(layer.text_overflow_mode == 0 ? QTextOption::WrapAtWordBoundaryOrAnywhere : QTextOption::NoWrap);
-    option.setAlignment((layer.align_h == 0 ? Qt::AlignLeft : layer.align_h == 2 ? Qt::AlignRight : Qt::AlignHCenter) |
-                        (layer.align_v == 0 ? Qt::AlignTop : layer.align_v == 2 ? Qt::AlignBottom : Qt::AlignVCenter));
-
-    QTextLayout layout(text, font);
-    layout.setTextOption(option);
-    layout.beginLayout();
-    QVector<QTextLine> lines;
-    double total_height = 0.0;
-    const double max_width = std::max(1.0, rect.width());
-    while (true) {
-        QTextLine line = layout.createLine();
-        if (!line.isValid())
-            break;
-        line.setLineWidth(max_width);
-        total_height += line.height();
-        lines.push_back(line);
-        if (layer.text_overflow_mode != 0 && !text.contains('\n'))
-            break;
-    }
-    layout.endLayout();
-
-    double y = rect.top();
-    if (layer.align_v == 1)
-        y += std::max(0.0, (rect.height() - total_height) * 0.5);
-    else if (layer.align_v == 2)
-        y += std::max(0.0, rect.height() - total_height);
-
-    for (QTextLine line : lines) {
-        double x = rect.left();
-        if (layer.align_h == 1)
-            x += std::max(0.0, (rect.width() - line.naturalTextWidth()) * 0.5);
-        else if (layer.align_h == 2)
-            x += std::max(0.0, rect.width() - line.naturalTextWidth());
-        line.setPosition(QPointF(x, y));
-        path.addText(QPointF(x, y + line.ascent()), font, text.mid(line.textStart(), line.textLength()));
-        y += line.height() + layer.text_leading;
-    }
-
-    return path;
+    const QFont font = font_for_layer(layer);
+    const QString text = display_text_for_style(layer);
+    Qt::AlignmentFlag ha = Qt::AlignHCenter;
+    if (layer.align_h == 0) ha = Qt::AlignLeft;
+    if (layer.align_h == 2) ha = Qt::AlignRight;
+    Qt::AlignmentFlag va = Qt::AlignVCenter;
+    if (layer.align_v == 0) va = Qt::AlignTop;
+    if (layer.align_v == 2) va = Qt::AlignBottom;
+    QPainterPath path = layer.type == LayerType::Ticker
+        ? ticker_text_path(font, rect, ha | va, text, layer)
+        : text_overflow_path(font, rect, ha | va, text, layer);
+    return apply_vertical_character_scale(path, rect, ha | va, layer);
 }
 
 static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
@@ -480,7 +753,10 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
         if (eval_outline_on_front(layer, t))
             draw_outline();
     } else if (layer.type == LayerType::Text || layer.type == LayerType::Clock || layer.type == LayerType::Ticker) {
-        QPainterPath path = text_path_for_layer(layer, box);
+        const QRectF text_box = text_rect_for_style(box, layer);
+        const QPainterPath path = text_path_for_layer(layer, text_box);
+        painter.save();
+        painter.setClipRect(text_box);
         if (eval_shadow_enabled(layer, t)) {
             QColor color = color_from_argb(eval_shadow_color(layer, t), eval_shadow_opacity(layer, t));
             const int passes = shadow_pass_count(blur);
@@ -498,14 +774,17 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
         auto draw_outline = [&]() {
             if (outline <= 0.0)
                 return;
+            const bool previous_aa = painter.testRenderHint(QPainter::Antialiasing);
+            painter.setRenderHint(QPainter::Antialiasing, eval_outline_antialias(layer, t));
             painter.setBrush(Qt::NoBrush);
             painter.setPen(QPen(color_from_argb(layer.stroke_color, eval_outline_opacity(layer, t)), outline,
-                                Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                                Qt::SolidLine, Qt::RoundCap, outline_pen_join_style(layer)));
             painter.drawPath(path);
+            painter.setRenderHint(QPainter::Antialiasing, previous_aa);
         };
         auto draw_fill = [&]() {
             painter.setPen(Qt::NoPen);
-            painter.setBrush(fill_brush(box));
+            painter.setBrush(fill_brush(text_box));
             painter.drawPath(path);
         };
         if (!eval_outline_on_front(layer, t))
@@ -513,6 +792,7 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
         draw_fill();
         if (eval_outline_on_front(layer, t))
             draw_outline();
+        painter.restore();
     }
 
     painter.end();
