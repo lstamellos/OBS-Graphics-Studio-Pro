@@ -255,6 +255,7 @@ set(PLUGIN_SOURCES
     src/plugin-main.cpp
     src/title-data.cpp
     src/title-source.cpp
+    src/title-renderer-gpu.cpp
     src/title-hotkeys.cpp
     src/title-dock.cpp
     src/title-editor.cpp
@@ -264,6 +265,7 @@ set(PLUGIN_HEADERS
     src/plugin-main.h
     src/title-data.h
     src/title-source.h
+    src/title-renderer-gpu.h
     src/title-hotkeys.h
     src/title-dock.h
     src/title-editor.h

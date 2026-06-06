@@ -25,10 +25,15 @@ OBS-Graphics-Studio-Pro/
 
 | Component | OBS Integration | Purpose |
 |---|---|---|
-| `TitleSource` | `obs_source_type INPUT` | Renders a title to the OBS video mix per-frame via Cairo → `gs_texture` |
+| `TitleSource` | `obs_source_type INPUT` | Renders a title to the OBS video mix through the GPU transition layer, with Cairo compatibility pixels uploaded to an OBS texture |
+| `GpuTextureFrame` / `ObsGpuRenderPipeline` | libobs `gs_*` graphics | Owns OBS texture lifecycle, uploads, final effect draw, and per-layer GPU migration plans |
 | `TitleDock` | `obs_frontend_add_dock()` | Floating/dockable title list with blank-title creation, Graphics Studio-style templates, and scene-add button |
 | `TitleEditor` | `QDialog` (non-modal) | Full AE-style editor with canvas, layer stack, timeline, properties |
 | `TitleDataStore` | Singleton | Owns all `Title` objects; serialises to `obs-graphics-studio-pro/titles.json` |
+
+### GPU Rendering Transition
+
+A structured rendering audit and migration roadmap is maintained in [`docs/rendering-gpu-transition.md`](docs/rendering-gpu-transition.md). The current implementation keeps the Cairo/Pango path as a non-breaking fallback while introducing an OBS-compatible GPU pipeline abstraction for texture ownership, final effect drawing, and per-layer migration planning.
 
 ---
 
@@ -212,7 +217,7 @@ Titles are saved in the OBS profile config directory:
 ### Adding a new layer type
 
 1. Add a value to `enum class LayerType` in `title-data.h`
-2. Add rendering logic in `title-source.cpp → render_title_frame()` (Cairo)
+2. Add compatibility rendering logic in `title-source.cpp → render_title_frame()` and, when possible, a GPU migration plan/pass in `title-renderer-gpu.*`
 3. Add Qt paint logic in `title-editor.cpp → CanvasPreview::render_to_pixmap()`
 4. Add UI controls in `PropertiesPanel`
 5. Add JSON serialisation in `layer_to_json()` / `layer_from_json()`
