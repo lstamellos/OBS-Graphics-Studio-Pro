@@ -109,6 +109,9 @@ private:
     bool confirm_save_before_close();
     void new_title_contents();
     bool save_title();
+    bool persist_title_changes(bool update_preview_screenshot, bool show_saved_status);
+    void set_live_editing_enabled(bool enabled);
+    void save_live_edit();
     void save_title_as_new();
     void export_title_template(bool save_in_library);
     void copy_title_to_store(const std::shared_ptr<Title> &source, const std::shared_ptr<Title> &dest) const;
@@ -158,12 +161,14 @@ private:
     QAction         *act_prev_kf_ = nullptr;
     QAction         *act_next_kf_ = nullptr;
     QAction         *act_safe_guides_ = nullptr;
+    QAction         *act_live_editing_ = nullptr;
     QAction         *act_undo_ = nullptr;
     QAction         *act_redo_ = nullptr;
     int              alignment_target_ = 3; /* 0=selection, 1=title safe guides, 2=action safe guides, 3=artboard/canvas */
     std::vector<std::shared_ptr<Title>> undo_stack_;
     int              undo_index_ = -1;
     bool             restoring_undo_ = false;
+    bool             live_editing_ = false;
     std::shared_ptr<Layer> layer_clipboard_;
 };
 

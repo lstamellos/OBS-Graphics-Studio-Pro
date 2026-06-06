@@ -1927,7 +1927,8 @@ void TitleEditor::build_toolbar()
         "QToolBar { background:#1a1a1a; border-bottom:1px solid #333; spacing:2px; }"
         "QToolButton { color:#ccc; background:transparent; padding:4px 8px; border:none; }"
         "QToolButton:hover { background:#333; border-radius:3px; }"
-        "QToolButton:pressed { background:#0078d4; }");
+        "QToolButton:pressed { background:#0078d4; }"
+        "QToolButton:checked { background:#0078d4; color:#fff; border-radius:3px; }");
 
     act_rew_ = new QAction(obs_icon("rewind.svg"), obsgs_tr("OBSTitles.Rewind"), this);
     act_prev_kf_ = new QAction(obs_icon("previous-keyframe.svg"), obsgs_tr("OBSTitles.PreviousKeyframe"), this);
@@ -2013,6 +2014,20 @@ void TitleEditor::build_toolbar()
     toolbar_->addAction(act_redo_);
     update_undo_redo_actions();
 
+    auto *toolbar_spacer = new QWidget(toolbar_);
+    toolbar_spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    toolbar_->addWidget(toolbar_spacer);
+
+    act_live_editing_ = new QAction(obsgs_tr("OBSTitles.LiveEditing"), this);
+    act_live_editing_->setCheckable(true);
+    act_live_editing_->setToolTip(obsgs_tr("OBSTitles.LiveEditingTooltip"));
+    connect(act_live_editing_, &QAction::toggled, this, &TitleEditor::set_live_editing_enabled);
+
+    auto *live_editing_button = new QToolButton(toolbar_);
+    live_editing_button->setDefaultAction(act_live_editing_);
+    live_editing_button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    toolbar_->addWidget(live_editing_button);
+
 }
 
 
@@ -2054,7 +2069,7 @@ void TitleEditor::new_title_contents()
     on_title_modified();
 }
 
-bool TitleEditor::save_title()
+bool TitleEditor::persist_title_changes(bool update_preview_screenshot, bool show_saved_status)
 {
     if (!title_) return false;
     auto stored = TitleDataStore::instance().get_title(editing_title_id_.empty() ? title_->id : editing_title_id_);
@@ -2064,14 +2079,39 @@ bool TitleEditor::save_title()
         title_->id = stored->id;
     }
     copy_title_to_store(title_, stored);
-    title_->preview_screenshot_png_base64 = title_manual_screenshot_png_base64(*title_);
-    stored->preview_screenshot_png_base64 = title_->preview_screenshot_png_base64;
+    if (update_preview_screenshot) {
+        title_->preview_screenshot_png_base64 = title_manual_screenshot_png_base64(*title_);
+        stored->preview_screenshot_png_base64 = title_->preview_screenshot_png_base64;
+    }
     TitleDataStore::instance().notify_change();
     TitleDataStore::instance().save();
     emit title_saved(stored->id);
     set_dirty(false);
-    setWindowTitle(obsgs_tr("OBSTitles.EditorSavedTitle"));
+    if (show_saved_status)
+        setWindowTitle(obsgs_tr("OBSTitles.EditorSavedTitle"));
     return true;
+}
+
+bool TitleEditor::save_title()
+{
+    return persist_title_changes(true, true);
+}
+
+void TitleEditor::set_live_editing_enabled(bool enabled)
+{
+    live_editing_ = enabled;
+    if (act_live_editing_ && act_live_editing_->isChecked() != enabled) {
+        QSignalBlocker blocker(act_live_editing_);
+        act_live_editing_->setChecked(enabled);
+    }
+    if (live_editing_ && dirty_)
+        save_live_edit();
+}
+
+void TitleEditor::save_live_edit()
+{
+    if (!live_editing_ || !title_) return;
+    persist_title_changes(false, false);
 }
 
 void TitleEditor::save_title_as_new()
@@ -2325,6 +2365,7 @@ void TitleEditor::restore_undo_snapshot(int index)
     restoring_undo_ = false;
     update_undo_redo_actions();
     set_dirty(true);
+    save_live_edit();
 }
 
 void TitleEditor::update_undo_redo_actions()
@@ -2660,6 +2701,7 @@ void TitleEditor::on_title_modified()
     if (title_props_) title_props_->set_title(title_);
     if (timeline_) timeline_->set_title(title_);
     push_undo_snapshot();
+    save_live_edit();
 }
 
 /* ══════════════════════════════════════════════════════════════════
