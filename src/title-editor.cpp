@@ -93,6 +93,130 @@
 
 namespace {
 
+
+class NumericDragLabel : public QLabel {
+public:
+    NumericDragLabel(const QString &text, QWidget *field, QWidget *parent = nullptr,
+                     std::function<void()> drag_started = {},
+                     std::function<void()> drag_finished = {})
+        : QLabel(text, parent), spin_box_(find_spin_box(field)),
+          drag_started_(std::move(drag_started)), drag_finished_(std::move(drag_finished))
+    {
+        if (!spin_box_) return;
+        setToolTip(obsgs_tr("OBSTitles.DragNumericLabelTooltip"));
+    }
+
+    ~NumericDragLabel() override
+    {
+        if (dragging_)
+            QApplication::restoreOverrideCursor();
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() != Qt::LeftButton || !can_drag()) {
+            QLabel::mousePressEvent(event);
+            return;
+        }
+
+        dragging_ = true;
+        drag_start_x_ = event->globalPosition().x();
+        drag_start_value_ = spin_value();
+        grabMouse(Qt::SizeHorCursor);
+        QApplication::setOverrideCursor(Qt::SizeHorCursor);
+        if (drag_started_)
+            drag_started_();
+        event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (!dragging_) {
+            QLabel::mouseMoveEvent(event);
+            return;
+        }
+        if (!can_drag()) {
+            finish_drag();
+            event->accept();
+            return;
+        }
+
+        const double delta = event->globalPosition().x() - drag_start_x_;
+        set_spin_value(drag_start_value_ + delta * spin_step());
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (!dragging_ || event->button() != Qt::LeftButton) {
+            QLabel::mouseReleaseEvent(event);
+            return;
+        }
+
+        finish_drag();
+        event->accept();
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        if (!dragging_)
+            QLabel::leaveEvent(event);
+    }
+
+private:
+    static QAbstractSpinBox *find_spin_box(QWidget *field)
+    {
+        if (!field) return nullptr;
+        if (auto *spin = qobject_cast<QAbstractSpinBox *>(field)) return spin;
+        return field->findChild<QAbstractSpinBox *>();
+    }
+
+    bool can_drag() const
+    {
+        return spin_box_ && spin_box_->isEnabled() && spin_box_->isVisible() && isEnabled();
+    }
+
+    double spin_value() const
+    {
+        if (auto *spin = qobject_cast<QDoubleSpinBox *>(spin_box_)) return spin->value();
+        if (auto *spin = qobject_cast<QSpinBox *>(spin_box_)) return spin->value();
+        return 0.0;
+    }
+
+    double spin_step() const
+    {
+        if (auto *spin = qobject_cast<QDoubleSpinBox *>(spin_box_)) return spin->singleStep();
+        if (auto *spin = qobject_cast<QSpinBox *>(spin_box_)) return spin->singleStep();
+        return 1.0;
+    }
+
+    void set_spin_value(double value)
+    {
+        if (auto *spin = qobject_cast<QDoubleSpinBox *>(spin_box_)) {
+            spin->setValue(std::clamp(value, spin->minimum(), spin->maximum()));
+        } else if (auto *spin = qobject_cast<QSpinBox *>(spin_box_)) {
+            spin->setValue(std::clamp((int)std::round(value), spin->minimum(), spin->maximum()));
+        }
+    }
+
+    void finish_drag()
+    {
+        dragging_ = false;
+        releaseMouse();
+        QApplication::restoreOverrideCursor();
+        if (drag_finished_)
+            drag_finished_();
+    }
+
+    QAbstractSpinBox *spin_box_ = nullptr;
+    std::function<void()> drag_started_;
+    std::function<void()> drag_finished_;
+    bool dragging_ = false;
+    double drag_start_x_ = 0.0;
+    double drag_start_value_ = 0.0;
+};
+
 static double title_manual_screenshot_time(const Title &title)
 {
     if (title.playback_mode == 1)
@@ -1882,10 +2006,10 @@ void TitleEditor::build_ui()
     connect(props_, &PropertiesPanel::property_changed,
             this, &TitleEditor::on_title_modified);
     connect(title_props_, &TitlePropertiesPanel::title_changed,
-            this, [this]() {
+            this, [this](bool push_undo_snapshot) {
                 if (!title_) return;
                 playhead_ = std::clamp(playhead_, 0.0, title_->duration);
-                on_title_modified();
+                on_title_modified(push_undo_snapshot);
                 timeline_->set_title(title_);
                 on_playhead_changed(playhead_);
             });
@@ -3110,13 +3234,14 @@ void TitleEditor::on_playhead_changed(double t)
         time_lbl_->setText(obsgs_tr("OBSTitles.TimeFpsFormat").arg(format_timecode(t)).arg(obs_frame_rate(), 0, 'f', 2));
 }
 
-void TitleEditor::on_title_modified()
+void TitleEditor::on_title_modified(bool push_undo)
 {
     if (title_) set_dirty(true);
     canvas_->refresh_preview();
     if (title_props_) title_props_->set_title(title_);
     if (timeline_) timeline_->set_title(title_);
-    push_undo_snapshot();
+    if (push_undo)
+        push_undo_snapshot();
     save_live_edit();
 }
 
@@ -6141,21 +6266,37 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     fl->setContentsMargins(8, 10, 8, 6);
     fl->setSpacing(3);
 
+    auto add_form_row = [this](QFormLayout *form, const QString &label_text, QWidget *field) {
+        auto *label = new NumericDragLabel(label_text, field, form->parentWidget(),
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = true;
+                                               emit title_changed(true);
+                                           },
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = false;
+                                               emit title_changed(true);
+                                           });
+        label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->addRow(label, field);
+    };
+
     cmb_playback_mode_ = new QComboBox(this);
     cmb_playback_mode_->addItem(obsgs_tr("OBSTitles.PlayOnce"), 0);
     cmb_playback_mode_->addItem(obsgs_tr("OBSTitles.LoopInOut"), 1);
     cmb_playback_mode_->addItem(obsgs_tr("OBSTitles.PauseAtTimelinePosition"), 2);
-    fl->addRow(obsgs_tr("OBSTitles.PlaybackModeLabel"), cmb_playback_mode_);
+    add_form_row(fl, obsgs_tr("OBSTitles.PlaybackModeLabel"), cmb_playback_mode_);
 
     cmb_loop_type_ = new QComboBox(this);
     cmb_loop_type_->addItem(obsgs_tr("OBSTitles.RestartLoop"), 0);
     cmb_loop_type_->addItem(obsgs_tr("OBSTitles.PingPongLoop"), 1);
-    fl->addRow(obsgs_tr("OBSTitles.LoopTypeLabel"), cmb_loop_type_);
+    add_form_row(fl, obsgs_tr("OBSTitles.LoopTypeLabel"), cmb_loop_type_);
 
     spn_pause_frame_ = new QSpinBox(this);
     spn_pause_frame_->setRange(0, 1000000);
     spn_pause_frame_->setToolTip(obsgs_tr("OBSTitles.PauseFrameTooltip"));
-    fl->addRow(obsgs_tr("OBSTitles.PauseFrameLabel"), spn_pause_frame_);
+    add_form_row(fl, obsgs_tr("OBSTitles.PauseFrameLabel"), spn_pause_frame_);
 
 
     spn_duration_ = new QDoubleSpinBox(this);
@@ -6163,7 +6304,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     spn_duration_->setSingleStep(0.5);
     spn_duration_->setDecimals(2);
     spn_duration_->setSuffix(" s");
-    fl->addRow(obsgs_tr("OBSTitles.LengthLabel"), spn_duration_);
+    add_form_row(fl, obsgs_tr("OBSTitles.LengthLabel"), spn_duration_);
 
     spn_loop_start_ = new QDoubleSpinBox(this);
     spn_loop_start_->setRange(0.0, 3600.0);
@@ -6171,7 +6312,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     spn_loop_start_->setDecimals(2);
     spn_loop_start_->setSuffix(" s");
     spn_loop_start_->setToolTip(obsgs_tr("OBSTitles.LoopStartTooltip"));
-    fl->addRow(obsgs_tr("OBSTitles.LoopStartLabel"), spn_loop_start_);
+    add_form_row(fl, obsgs_tr("OBSTitles.LoopStartLabel"), spn_loop_start_);
 
     spn_loop_end_ = new QDoubleSpinBox(this);
     spn_loop_end_->setRange(0.0, 3600.0);
@@ -6179,7 +6320,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     spn_loop_end_->setDecimals(2);
     spn_loop_end_->setSuffix(" s");
     spn_loop_end_->setToolTip(obsgs_tr("OBSTitles.LoopEndTooltip"));
-    fl->addRow(obsgs_tr("OBSTitles.LoopEndLabel"), spn_loop_end_);
+    add_form_row(fl, obsgs_tr("OBSTitles.LoopEndLabel"), spn_loop_end_);
 
     connect(cmb_playback_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
@@ -6188,14 +6329,14 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 if (title_->playback_mode == 2 && title_->pause_time <= 0.0)
                     title_->pause_time = title_->duration;
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(cmb_loop_type_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
                 if (!title_ || loading_values_) return;
                 title_->loop_type = cmb_loop_type_->currentData().toInt();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(spn_pause_frame_, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -6203,7 +6344,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 if (!title_ || loading_values_) return;
                 title_->pause_time = std::clamp(frame * obs_frame_duration(), 0.0, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
 
@@ -6220,7 +6361,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 title_->loop_end = std::clamp(title_->loop_end, title_->loop_start, title_->duration);
                 title_->pause_time = std::clamp(title_->pause_time, 0.0, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(spn_loop_start_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -6229,7 +6370,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 title_->loop_start = std::clamp(v, 0.0, title_->duration);
                 title_->loop_end = std::clamp(title_->loop_end, title_->loop_start, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(spn_loop_end_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -6237,7 +6378,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 if (!title_ || loading_values_) return;
                 title_->loop_end = std::clamp(v, title_->loop_start, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 }
 
@@ -6319,6 +6460,27 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
         form->setFormAlignment(Qt::AlignTop);
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    };
+
+    auto add_form_row = [this](QFormLayout *form, const QString &label_text, QWidget *field) {
+        if (!form || label_text.isEmpty()) {
+            if (form) form->addRow(label_text, field);
+            return;
+        }
+
+        auto *label = new NumericDragLabel(label_text, field, form->parentWidget(),
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = true;
+                                               emit property_changed(true);
+                                           },
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = false;
+                                               emit property_changed(true);
+                                           });
+        label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->addRow(label, field);
     };
 
     const QString checkbox_style =
@@ -6444,16 +6606,16 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_opacity_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOpacityKeyframe"));
     btn_kf_origin_x_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOriginXKeyframe"));
     btn_kf_origin_y_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOriginYKeyframe"));
-    tfl->addRow(obsgs_tr("OBSTitles.XLabel"),       with_kf(spn_px_, btn_kf_pos_x_));
-    tfl->addRow(obsgs_tr("OBSTitles.YLabel"),       with_kf(spn_py_, btn_kf_pos_y_));
-    tfl->addRow(obsgs_tr("OBSTitles.ScaleXLabel"),  with_kf(spn_scale_x_, btn_kf_scale_x_));
-    tfl->addRow(obsgs_tr("OBSTitles.ScaleYLabel"),  with_kf(spn_scale_y_, btn_kf_scale_y_));
-    tfl->addRow(QString(), chk_scale_lock_);
-    tfl->addRow(obsgs_tr("OBSTitles.RotationLabel"),with_kf(spn_rot_, btn_kf_rotation_));
-    tfl->addRow(obsgs_tr("OBSTitles.OpacityLabel"), with_kf(spn_opacity_, btn_kf_opacity_));
-    tfl->addRow(obsgs_tr("OBSTitles.AnchorLabel"), with_kf(cmb_anchor_, mk_kf_button(obsgs_tr("OBSTitles.ToggleAnchorKeyframe"))));
-    tfl->addRow(obsgs_tr("OBSTitles.OriginXLabel"), with_kf(spn_origin_x_, btn_kf_origin_x_));
-    tfl->addRow(obsgs_tr("OBSTitles.OriginYLabel"), with_kf(spn_origin_y_, btn_kf_origin_y_));
+    add_form_row(tfl, obsgs_tr("OBSTitles.XLabel"),       with_kf(spn_px_, btn_kf_pos_x_));
+    add_form_row(tfl, obsgs_tr("OBSTitles.YLabel"),       with_kf(spn_py_, btn_kf_pos_y_));
+    add_form_row(tfl, obsgs_tr("OBSTitles.ScaleXLabel"),  with_kf(spn_scale_x_, btn_kf_scale_x_));
+    add_form_row(tfl, obsgs_tr("OBSTitles.ScaleYLabel"),  with_kf(spn_scale_y_, btn_kf_scale_y_));
+    add_form_row(tfl, QString(), chk_scale_lock_);
+    add_form_row(tfl, obsgs_tr("OBSTitles.RotationLabel"),with_kf(spn_rot_, btn_kf_rotation_));
+    add_form_row(tfl, obsgs_tr("OBSTitles.OpacityLabel"), with_kf(spn_opacity_, btn_kf_opacity_));
+    add_form_row(tfl, obsgs_tr("OBSTitles.AnchorLabel"), with_kf(cmb_anchor_, mk_kf_button(obsgs_tr("OBSTitles.ToggleAnchorKeyframe"))));
+    add_form_row(tfl, obsgs_tr("OBSTitles.OriginXLabel"), with_kf(spn_origin_x_, btn_kf_origin_x_));
+    add_form_row(tfl, obsgs_tr("OBSTitles.OriginYLabel"), with_kf(spn_origin_y_, btn_kf_origin_y_));
     vl->addWidget(tform_box);
     make_collapsible(tform_box);
 
@@ -6466,20 +6628,30 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         grid->setColumnStretch(3, 1);
         return grid;
     };
-    auto grid_label = [&](const QString &text, QWidget *parent_widget) {
-        auto *label = new QLabel(text, parent_widget);
+    auto grid_label = [&](const QString &text, QWidget *parent_widget, QWidget *field = nullptr) {
+        auto *label = new NumericDragLabel(text, field, parent_widget,
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = true;
+                                               emit property_changed(true);
+                                           },
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = false;
+                                               emit property_changed(true);
+                                           });
         label->setStyleSheet("color:#9f9f9f;font-size:10px;");
         label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         return label;
     };
     auto add_grid_field = [&](QGridLayout *grid, int row, int col, const QString &label_text, QWidget *field) {
         QWidget *parent_widget = grid->parentWidget();
-        grid->addWidget(grid_label(label_text, parent_widget), row, col * 2);
+        grid->addWidget(grid_label(label_text, parent_widget, field), row, col * 2);
         grid->addWidget(field, row, col * 2 + 1);
     };
     auto add_full_width_field = [&](QGridLayout *grid, int row, const QString &label_text, QWidget *field) {
         QWidget *parent_widget = grid->parentWidget();
-        grid->addWidget(grid_label(label_text, parent_widget), row, 0);
+        grid->addWidget(grid_label(label_text, parent_widget, field), row, 0);
         grid->addWidget(field, row, 1, 1, 3);
     };
     auto mk_combo = [&](const QStringList &labels, const QList<int> &values) {
@@ -6677,15 +6849,15 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_ticker_direction_ = new QComboBox(inner);
     cmb_ticker_direction_->setFixedHeight(22);
     cmb_ticker_direction_->setStyleSheet(control_style);
-    dynamic_form->addRow("Text Style", cmb_text_style_);
-    dynamic_form->addRow(obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
-    dynamic_form->addRow(obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
-    dynamic_form->addRow("", lbl_text_fit_scale_);
-    dynamic_form->addRow(obsgs_tr("OBSTitles.LiveEditLabel"), chk_expose_text_);
-    dynamic_form->addRow(obsgs_tr("OBSTitles.TickerStyleLabel"), cmb_ticker_style_);
-    dynamic_form->addRow(obsgs_tr("OBSTitles.TickerSpeedLabel"), spn_ticker_speed_);
-    dynamic_form->addRow(obsgs_tr("OBSTitles.TickerLineHoldLabel"), spn_ticker_line_hold_);
-    dynamic_form->addRow(obsgs_tr("OBSTitles.DirectionLabel"), cmb_ticker_direction_);
+    add_form_row(dynamic_form, "Text Style", cmb_text_style_);
+    add_form_row(dynamic_form, obsgs_tr("OBSTitles.OverflowLabel"), cmb_text_overflow_);
+    add_form_row(dynamic_form, obsgs_tr("OBSTitles.MinFitScaleLabel"), spn_text_fit_min_scale_);
+    add_form_row(dynamic_form, "", lbl_text_fit_scale_);
+    add_form_row(dynamic_form, obsgs_tr("OBSTitles.LiveEditLabel"), chk_expose_text_);
+    add_form_row(dynamic_form, obsgs_tr("OBSTitles.TickerStyleLabel"), cmb_ticker_style_);
+    add_form_row(dynamic_form, obsgs_tr("OBSTitles.TickerSpeedLabel"), spn_ticker_speed_);
+    add_form_row(dynamic_form, obsgs_tr("OBSTitles.TickerLineHoldLabel"), spn_ticker_line_hold_);
+    add_form_row(dynamic_form, obsgs_tr("OBSTitles.DirectionLabel"), cmb_ticker_direction_);
     vl->addWidget(dynamic_text_box_);
     make_collapsible(dynamic_text_box_);
 
@@ -6717,17 +6889,17 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_rect_corner_ = mk_dspin(0.0, 1000.0, 1.0);
     btn_kf_width_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleWidthKeyframe"));
     btn_kf_height_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleHeightKeyframe"));
-    rfl->addRow(obsgs_tr("OBSTitles.WidthLabel"), with_kf(spn_layer_w_, btn_kf_width_));
-    rfl->addRow("", chk_text_box_width_to_text_);
-    rfl->addRow(obsgs_tr("OBSTitles.MaxTextBoxWidthLabel"), spn_max_text_box_width_);
-    rfl->addRow(obsgs_tr("OBSTitles.HeightLabel"), with_kf(spn_layer_h_, btn_kf_height_));
-    rfl->addRow("", chk_text_box_height_to_text_);
-    rfl->addRow(obsgs_tr("OBSTitles.MaxTextBoxHeightLabel"), spn_max_text_box_height_);
-    rfl->addRow(obsgs_tr("OBSTitles.CornerLabel"), with_kf(spn_rect_corner_, mk_kf_button(obsgs_tr("OBSTitles.ToggleCornerKeyframe"))));
+    add_form_row(rfl, obsgs_tr("OBSTitles.WidthLabel"), with_kf(spn_layer_w_, btn_kf_width_));
+    add_form_row(rfl, "", chk_text_box_width_to_text_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.MaxTextBoxWidthLabel"), spn_max_text_box_width_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.HeightLabel"), with_kf(spn_layer_h_, btn_kf_height_));
+    add_form_row(rfl, "", chk_text_box_height_to_text_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.MaxTextBoxHeightLabel"), spn_max_text_box_height_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.CornerLabel"), with_kf(spn_rect_corner_, mk_kf_button(obsgs_tr("OBSTitles.ToggleCornerKeyframe"))));
     btn_fill_color_ = new QPushButton(inner);
     btn_kf_fill_color_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleFillColorKeyframe"));
     row_fill_color_ = with_kf(btn_fill_color_, btn_kf_fill_color_);
-    rfl->addRow(obsgs_tr("OBSTitles.ColorLabel"), row_fill_color_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.ColorLabel"), row_fill_color_);
     chk_background_enabled_ = new QCheckBox(obsgs_tr("OBSTitles.EnableColorBackground"), inner);
     style_checkbox(chk_background_enabled_);
     btn_background_color_ = new QPushButton(inner);
@@ -6748,18 +6920,18 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     row_background_padding_x_ = with_kf(spn_background_padding_x_, btn_kf_background_padding_x_);
     row_background_padding_y_ = with_kf(spn_background_padding_y_, btn_kf_background_padding_y_);
     row_background_corner_ = with_kf(spn_background_corner_, btn_kf_background_corner_);
-    rfl->addRow("", row_background_enabled_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundColorLabel"), row_background_color_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundOpacityLabel"), row_background_opacity_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundHorizontalPaddingLabel"), row_background_padding_x_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundVerticalPaddingLabel"), row_background_padding_y_);
-    rfl->addRow(obsgs_tr("OBSTitles.BackgroundCornerLabel"), row_background_corner_);
+    add_form_row(rfl, "", row_background_enabled_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.BackgroundColorLabel"), row_background_color_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.BackgroundOpacityLabel"), row_background_opacity_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.BackgroundHorizontalPaddingLabel"), row_background_padding_x_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.BackgroundVerticalPaddingLabel"), row_background_padding_y_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.BackgroundCornerLabel"), row_background_corner_);
     spn_outline_width_ = mk_dspin(0.0, 200.0, 1.0);
     spn_outline_width_->setToolTip(obsgs_tr("OBSTitles.OutlineWidthTooltip"));
     btn_outline_color_ = new QPushButton(inner);
     row_outline_color_ = btn_outline_color_;
-    rfl->addRow(obsgs_tr("OBSTitles.OutlineWidthLabel"), spn_outline_width_);
-    rfl->addRow(obsgs_tr("OBSTitles.OutlineColorLabel"), row_outline_color_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.OutlineWidthLabel"), spn_outline_width_);
+    add_form_row(rfl, obsgs_tr("OBSTitles.OutlineColorLabel"), row_outline_color_);
     vl->addWidget(rect_box_);
     make_collapsible(rect_box_);
 
@@ -6789,13 +6961,13 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     cmb_outline_position_->setStyleSheet(control_style);
     chk_outline_antialias_ = new QCheckBox(obsgs_tr("OBSTitles.AntialiasOutline"), inner);
     style_checkbox(chk_outline_antialias_);
-    outline_form->addRow("", chk_outline_enabled_);
-    outline_form->addRow(obsgs_tr("OBSTitles.ColorLabel"), btn_outline_color_);
-    outline_form->addRow(obsgs_tr("OBSTitles.ThicknessLabel"), spn_outline_width_);
-    outline_form->addRow(obsgs_tr("OBSTitles.OpacityLabel"), spn_outline_opacity_);
-    outline_form->addRow(obsgs_tr("OBSTitles.JoinLabel"), cmb_outline_join_);
-    outline_form->addRow(obsgs_tr("OBSTitles.PositionLabelIndented"), cmb_outline_position_);
-    outline_form->addRow("", chk_outline_antialias_);
+    add_form_row(outline_form, "", chk_outline_enabled_);
+    add_form_row(outline_form, obsgs_tr("OBSTitles.ColorLabel"), btn_outline_color_);
+    add_form_row(outline_form, obsgs_tr("OBSTitles.ThicknessLabel"), spn_outline_width_);
+    add_form_row(outline_form, obsgs_tr("OBSTitles.OpacityLabel"), spn_outline_opacity_);
+    add_form_row(outline_form, obsgs_tr("OBSTitles.JoinLabel"), cmb_outline_join_);
+    add_form_row(outline_form, obsgs_tr("OBSTitles.PositionLabelIndented"), cmb_outline_position_);
+    add_form_row(outline_form, "", chk_outline_antialias_);
     vl->addWidget(outline_box_);
     make_collapsible(outline_box_);
 
@@ -6813,9 +6985,9 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_layer_h_->setToolTip(obsgs_tr("OBSTitles.ImageHeightTooltip"));
     chk_lock_aspect_ = new QCheckBox(obsgs_tr("OBSTitles.LockAspectRatio"), inner);
     style_checkbox(chk_lock_aspect_);
-    image_form->addRow(obsgs_tr("OBSTitles.PathLabel"), edit_image_path_);
-    image_form->addRow("", btn_pick_image_);
-    image_form->addRow("", chk_lock_aspect_);
+    add_form_row(image_form, obsgs_tr("OBSTitles.PathLabel"), edit_image_path_);
+    add_form_row(image_form, "", btn_pick_image_);
+    add_form_row(image_form, "", chk_lock_aspect_);
     vl->addWidget(image_box_);
     make_collapsible(image_box_);
 
@@ -6843,14 +7015,14 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_kf_shadow_angle_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowAngleKeyframe"));
     btn_kf_shadow_blur_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowBlurKeyframe"));
     btn_kf_shadow_spread_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleShadowSpreadKeyframe"));
-    sfl->addRow("", with_kf(chk_shadow_enabled_, btn_kf_shadow_enabled_));
-    sfl->addRow(obsgs_tr("OBSTitles.PresetLabel"), cmb_shadow_preset_);
-    sfl->addRow(obsgs_tr("OBSTitles.ColorLabel"), with_kf(btn_shadow_color_, btn_kf_shadow_color_));
-    sfl->addRow(obsgs_tr("OBSTitles.OpacityLabel"), with_kf(spn_shadow_opacity_, btn_kf_shadow_opacity_));
-    sfl->addRow(obsgs_tr("OBSTitles.DistanceLabel"), with_kf(spn_shadow_distance_, btn_kf_shadow_distance_));
-    sfl->addRow(obsgs_tr("OBSTitles.AngleLabel"), with_kf(spn_shadow_angle_, btn_kf_shadow_angle_));
-    sfl->addRow(obsgs_tr("OBSTitles.BlurLabel"), with_kf(spn_shadow_blur_, btn_kf_shadow_blur_));
-    sfl->addRow(obsgs_tr("OBSTitles.SpreadLabel"), with_kf(spn_shadow_spread_, btn_kf_shadow_spread_));
+    add_form_row(sfl, "", with_kf(chk_shadow_enabled_, btn_kf_shadow_enabled_));
+    add_form_row(sfl, obsgs_tr("OBSTitles.PresetLabel"), cmb_shadow_preset_);
+    add_form_row(sfl, obsgs_tr("OBSTitles.ColorLabel"), with_kf(btn_shadow_color_, btn_kf_shadow_color_));
+    add_form_row(sfl, obsgs_tr("OBSTitles.OpacityLabel"), with_kf(spn_shadow_opacity_, btn_kf_shadow_opacity_));
+    add_form_row(sfl, obsgs_tr("OBSTitles.DistanceLabel"), with_kf(spn_shadow_distance_, btn_kf_shadow_distance_));
+    add_form_row(sfl, obsgs_tr("OBSTitles.AngleLabel"), with_kf(spn_shadow_angle_, btn_kf_shadow_angle_));
+    add_form_row(sfl, obsgs_tr("OBSTitles.BlurLabel"), with_kf(spn_shadow_blur_, btn_kf_shadow_blur_));
+    add_form_row(sfl, obsgs_tr("OBSTitles.SpreadLabel"), with_kf(spn_shadow_spread_, btn_kf_shadow_spread_));
     vl->addWidget(shadow_box_);
     make_collapsible(shadow_box_);
 
@@ -6858,7 +7030,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     setWidget(inner);
 
     /* ── Connect signals → property_changed ── */
-    auto emit_change = [this]() { if (!loading_values_) emit property_changed(); };
+    auto emit_change = [this]() { if (!loading_values_) emit property_changed(!numeric_label_dragging_); };
     auto can_edit = [this]() { return layer_ && !loading_values_; };
     auto local_time = [this]() {
         return layer_ ? std::clamp(playhead_ - layer_->in_time, 0.0,

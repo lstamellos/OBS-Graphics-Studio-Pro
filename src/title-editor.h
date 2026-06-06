@@ -90,7 +90,7 @@ public slots:
     /* Called by sub-widgets */
     void on_layer_selected(const std::string &layer_id);
     void on_playhead_changed(double t);
-    void on_title_modified();
+    void on_title_modified(bool push_undo_snapshot = true);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -491,13 +491,14 @@ public:
     void set_title(std::shared_ptr<Title> t);
 
 signals:
-    void title_changed();
+    void title_changed(bool push_undo_snapshot = true);
 
 private:
     void load_values();
 
     std::shared_ptr<Title> title_;
     bool loading_values_ = false;
+    bool numeric_label_dragging_ = false;
     QComboBox      *cmb_playback_mode_ = nullptr;
     QComboBox      *cmb_loop_type_ = nullptr;
     QSpinBox       *spn_pause_frame_ = nullptr;
@@ -519,7 +520,7 @@ public:
     void set_title(std::shared_ptr<Title> t);
 
 signals:
-    void property_changed();
+    void property_changed(bool push_undo_snapshot = true);
 
 private:
     void build_text_section(QWidget *w, QFormLayout *fl);
@@ -532,6 +533,7 @@ private:
     std::shared_ptr<Title> title_;
     double playhead_ = 0.0;
     bool loading_values_ = false;
+    bool numeric_label_dragging_ = false;
 
     QGroupBox       *text_box_     = nullptr;
     QGroupBox       *type_options_box_ = nullptr;
