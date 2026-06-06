@@ -83,6 +83,7 @@
 #include <vector>
 #include <initializer_list>
 #include <set>
+#include <map>
 #include <limits>
 
 namespace {
@@ -1791,6 +1792,11 @@ void TitleEditor::build_ui()
                         props_->set_layer(layer, playhead_);
                 }
             });
+    connect(canvas_, &CanvasPreview::layer_structure_changed,
+            this, [this]() {
+                layers_->refresh();
+                timeline_->set_title(title_);
+            });
 }
 
 void TitleEditor::align_selected_to_canvas(int x_mode, int y_mode)
@@ -2713,6 +2719,7 @@ CanvasPreview::CanvasPreview(QWidget *parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setStyleSheet("background:#111;");
     setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 void CanvasPreview::set_title(std::shared_ptr<Title> t)
@@ -3060,11 +3067,106 @@ void CanvasPreview::update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers
     update();
 }
 
+bool CanvasPreview::duplicate_selected_layers_for_drag()
+{
+    if (!title_ || selected_layer_ids_.empty()) return false;
+
+    std::set<std::string> selected_ids(selected_layer_ids_.begin(), selected_layer_ids_.end());
+    std::map<std::string, std::string> cloned_ids_by_original;
+    std::map<std::string, std::shared_ptr<Layer>> clones_by_original;
+    std::vector<std::shared_ptr<Layer>> clones;
+
+    for (const auto &layer : title_->layers) {
+        if (!layer || layer->locked || selected_ids.find(layer->id) == selected_ids.end())
+            continue;
+
+        auto clone = std::make_shared<Layer>(*layer);
+        clone->id = TitleDataStore::make_uuid();
+        clone->name = clone->name.empty() ? editor_text_std("OBSTitles.LayerCopy") :
+                                            clone->name + editor_text_std("OBSTitles.CopySuffix");
+        cloned_ids_by_original[layer->id] = clone->id;
+        clones_by_original[layer->id] = clone;
+        clones.push_back(clone);
+    }
+
+    if (clones.empty()) return false;
+
+    for (auto &clone : clones) {
+        auto parent_clone = cloned_ids_by_original.find(clone->parent_id);
+        if (parent_clone != cloned_ids_by_original.end()) {
+            clone->parent_id = parent_clone->second;
+        } else if (!clone->parent_id.empty() && !title_->find_layer(clone->parent_id)) {
+            clone->parent_id.clear();
+        }
+    }
+
+    std::vector<std::shared_ptr<Layer>> next_layers;
+    next_layers.reserve(title_->layers.size() + clones.size());
+    for (const auto &layer : title_->layers) {
+        next_layers.push_back(layer);
+        if (!layer) continue;
+        auto clone = clones_by_original.find(layer->id);
+        if (clone != clones_by_original.end())
+            next_layers.push_back(clone->second);
+    }
+    title_->layers = std::move(next_layers);
+
+    selected_layer_ids_.clear();
+    drag_layer_states_.clear();
+    for (const auto &clone : clones) {
+        if (!clone) continue;
+        selected_layer_ids_.push_back(clone->id);
+        double lt = std::clamp(playhead_ - clone->in_time, 0.0,
+                               std::max(0.0, clone->out_time - clone->in_time));
+        drag_layer_states_.push_back({clone->id,
+                                      clone->pos_x.evaluate(lt),
+                                      clone->pos_y.evaluate(lt),
+                                      std::max(1.0f, clone->rect_width),
+                                      std::max(1.0f, clone->rect_height)});
+    }
+    sel_layer_id_ = selected_layer_ids_.empty() ? std::string() : selected_layer_ids_.back();
+    drag_start_selection_bounds_ = selected_canvas_bounds();
+
+    emit layer_structure_changed();
+    emit layers_selected(selected_layer_ids_);
+    dirty_ = true;
+    update();
+    return true;
+}
+
+bool CanvasPreview::nudge_selected_layers(double dx, double dy)
+{
+    auto layers = selected_layers();
+    if (!title_ || layers.empty()) return false;
+
+    bool changed = false;
+    for (const auto &layer : layers) {
+        if (!layer || layer->locked) continue;
+        double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                               std::max(0.0, layer->out_time - layer->in_time));
+        set_animated_value(layer->pos_x, lt, layer->pos_x.evaluate(lt) + dx);
+        set_animated_value(layer->pos_y, lt, layer->pos_y.evaluate(lt) + dy);
+        changed = true;
+    }
+
+    if (!changed) return false;
+
+    dirty_ = true;
+    update();
+    emit layer_geometry_changed();
+    return true;
+}
+
 void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers)
 {
     if (drag_mode_ == DragMode::Marquee) {
         update_marquee(view_pt, modifiers);
         return;
+    }
+
+    if (drag_mode_ == DragMode::Move && alt_duplicate_pending_ && !alt_duplicate_done_) {
+        alt_duplicate_done_ = true;
+        duplicate_selected_layers_for_drag();
     }
 
     auto layers = selected_layers();
@@ -3485,6 +3587,7 @@ void CanvasPreview::paintEvent(QPaintEvent *)
 }
 void CanvasPreview::mousePressEvent(QMouseEvent *ev)
 {
+    setFocus(Qt::MouseFocusReason);
     if (!title_) return;
 
     if (ev->button() == Qt::MiddleButton) {
@@ -3534,6 +3637,8 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
     }
 
     drag_changed_ = false;
+    alt_duplicate_pending_ = (drag_mode_ == DragMode::Move) && ev->modifiers().testFlag(Qt::AltModifier);
+    alt_duplicate_done_ = false;
     drag_start_view_ = ev->pos();
     drag_current_view_ = ev->pos();
     drag_start_canvas_ = view_to_canvas(ev->pos());
@@ -3602,6 +3707,36 @@ void CanvasPreview::mouseMoveEvent(QMouseEvent *ev)
     else unsetCursor();
 }
 
+void CanvasPreview::keyPressEvent(QKeyEvent *ev)
+{
+    double dx = 0.0;
+    double dy = 0.0;
+    const double amount = ev->modifiers().testFlag(Qt::ShiftModifier) ? 10.0 : 1.0;
+
+    switch (ev->key()) {
+    case Qt::Key_Left:
+        dx = -amount;
+        break;
+    case Qt::Key_Right:
+        dx = amount;
+        break;
+    case Qt::Key_Up:
+        dy = -amount;
+        break;
+    case Qt::Key_Down:
+        dy = amount;
+        break;
+    default:
+        QWidget::keyPressEvent(ev);
+        return;
+    }
+
+    if (nudge_selected_layers(dx, dy))
+        ev->accept();
+    else
+        QWidget::keyPressEvent(ev);
+}
+
 void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
 {
     if (ev->button() == Qt::MiddleButton && panning_) {
@@ -3620,6 +3755,8 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
         drag_mode_ = DragMode::None;
         marquee_active_ = false;
         drag_changed_ = false;
+        alt_duplicate_pending_ = false;
+        alt_duplicate_done_ = false;
         unsetCursor();
         update();
         ev->accept();
@@ -3629,6 +3766,8 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
     bool changed = drag_changed_;
     drag_mode_ = DragMode::None;
     drag_changed_ = false;
+    alt_duplicate_pending_ = false;
+    alt_duplicate_done_ = false;
     drag_layer_states_.clear();
     unsetCursor();
     if (changed)
