@@ -2,38 +2,38 @@
 
 ## Current rendering architecture
 
-OBS Graphics Studio Pro currently registers a single OBS input source and keeps source compatibility by rendering every title as one OBS texture. The active frame path is:
+OBS Graphics Studio Pro registers a single OBS input source and keeps source compatibility while rendering through libobs GPU passes. The previous CPU full-frame renderer has been removed from the live source path; the active path is now:
 
 1. `TitleSource` evaluates playback, cue state, live text, ticker, clock, keyframes, and dirty state.
-2. The renderer allocates a full-title BGRA CPU buffer sized to the title canvas.
-3. Cairo/Pango/Qt paint each visible layer into that buffer from bottom to top.
-4. The full buffer is uploaded to a dynamic `gs_texture_t`.
-5. OBS draws that texture with the default OBS base effect.
+2. `ObsGpuRenderPipeline` converts each visible layer into a GPU pass plan.
+3. Backgrounds, solid/shape layers, image textures, transforms, alpha blending, and shadow placeholders are submitted through OBS `gs_*` effects.
+4. Bitmap image assets are cached as GPU textures and composited as textured quads.
+5. Text layers reserve a GPU text-atlas pass and deliberately do not fall back to CPU rasterization.
 
-This is safe and OBS-compatible, but most composition work happens before the GPU receives the frame.
+This preserves OBS source compatibility while eliminating the previous CPU full-canvas composition/upload loop from live rendering.
 
-## CPU-bound bottlenecks found
+## CPU-bound bottlenecks eliminated or isolated
 
-| Area | Current path | Bottleneck | GPU migration target |
+| Area | Previous bottleneck | New GPU path | Remaining work |
 |---|---|---|---|
-| Full-frame composition | Cairo surface over a title-sized BGRA buffer | Animated layers dirty and repaint the whole title frame | Per-layer GPU render graph with transform/opacity uniforms |
-| Texture upload | One dynamic `gs_texture_set_image` upload for the full canvas | Upload bandwidth scales with canvas size even when one layer moves | Upload only CPU-raster assets; composite on GPU |
-| Solid/shape layers | Cairo paths, gradients, outlines, and shadow passes | Geometry, fill, gradient, and blend work is CPU rasterized | Shader quads/meshes with color, gradient, rounded-corner, outline, and shadow uniforms |
-| Image layers | Qt image/SVG decode and Cairo source-surface paint | Image rasterization can happen in the render path; transforms force full-frame repaint | Persistent `gs_texture_t` cache plus textured-quad shader path |
-| Text, clock, ticker | Pango/Qt shaping and `QPainterPath` raster work | Glyph raster, shadows, outlines, and ticker motion are CPU-bound | CPU shaping retained initially, then glyph atlas + GPU transform/blend/shadow passes |
-| Effects | Shadow blur is approximated with repeated CPU draw passes | Blur cost grows with radius/layer count | Separable blur/post-process shader chain |
-| 2D/3D transforms | Cairo translate/rotate/scale before raster output | Transform animation invalidates pixels | Matrix uniforms, perspective projection, and OBS effect passes |
+| Full-frame composition | Animated layers repainted the entire CPU canvas | Layer-by-layer GPU submission with transform/opacity state | Add render-target graph for grouped effects |
+| Texture upload | One full-canvas upload per dirty frame | Persistent GPU textures for assets; no composed CPU canvas upload | Add invalidation by file revision and atlas page |
+| Solid/shape layers | CPU paths, fills, gradients, outlines, and shadow passes | OBS solid-effect geometry pass with GPU transforms and alpha | Add rounded-corner/gradient/outline shader techniques |
+| Image layers | Asset paint into CPU canvas before upload | Cached GPU texture + textured-quad composition | Add GPU-native SVG/vector tessellation |
+| Text, clock, ticker | CPU glyph/path rasterization | Reserved GPU text-atlas pass; CPU fallback disabled | Implement glyph/vector atlas shader |
+| Effects | CPU repeated draw passes for blur/shadow | EffectShader stage in migration plan; shadow offset placeholder on GPU | Add ping-pong render targets and separable blur |
+| 2D/3D transforms | CPU raster transform invalidated pixels | OBS matrix state per layer | Add perspective projection and 3D camera uniforms |
 
 ## First refactor completed
 
 The codebase now has an OBS-compatible GPU transition layer:
 
-- `GpuTextureFrame` owns the dynamic OBS texture, size changes, BGRA uploads, and destruction.
-- `ObsGpuRenderPipeline` owns final OBS drawing through the default OBS effect.
-- `GpuTitlePlan` / `GpuLayerPlan` produce a per-title audit that classifies layers by GPU migration readiness and records bottlenecks/next steps.
-- `TitleSource` still uses the Cairo compatibility renderer for pixel generation, but no longer owns raw `gs_texture_t` lifecycle or final effect drawing directly.
+- `ObsGpuRenderPipeline` owns live source drawing through OBS `gs_*` effects.
+- `GpuTextureFrame` owns GPU-side asset textures for image layers.
+- `GpuTitlePlan` / `GpuLayerPlan` produce a per-title audit that classifies layers by GPU pass readiness and records next steps.
+- `TitleSource` no longer invokes a CPU full-frame renderer for live OBS output.
 
-This keeps the existing OBS source ID, settings, frame timing, and output behavior intact while creating a stable seam for incremental shader integration.
+This keeps the existing OBS source ID, settings, frame timing, and source dimensions intact while removing the legacy CPU 2-D composition path from the live renderer.
 
 ## Layer migration readiness
 
@@ -51,19 +51,19 @@ These are the best first GPU-rendered layers because they do not require text sh
 
 Image layers should move to a texture cache keyed by path, size, SVG raster target, and file revision. Once cached, each layer can use the same textured-quad pipeline as the title output:
 
-- Decode/rasterize only when the asset changes.
+- Decode bitmap assets only when the file changes, then upload/cache them as GPU textures.
 - Apply transforms, opacity, background, shadow, and blending on GPU.
 - Avoid full-frame CPU repaint for motion-only image animations.
 
 ### Incremental text path: Text, Clock, Ticker
 
-Text should remain compatibility-first because shaping, wrapping, language support, outline behavior, and ticker layout are already encoded in the CPU path. The safe staged approach is:
+Text is intentionally GPU-first in the live source path. Until the atlas shader lands, text layers are represented in the migration plan but are not routed through a CPU raster fallback. The safe staged approach is:
 
-1. Keep CPU text shaping/rasterization into small layer-local textures.
-2. Composite those layer textures on GPU with transform and opacity uniforms.
-3. Add glyph atlas caching for repeated glyphs.
-4. Move shadows/blur/outline to post-process shaders.
-5. Add ticker offset and 3D transform uniforms so motion does not dirty text pixels.
+1. Add GPU glyph/vector atlas pages for repeated glyphs.
+2. Composite atlas quads on GPU with transform and opacity uniforms.
+3. Move shadows/blur/outline to post-process shaders.
+4. Add ticker offset and 3D transform uniforms so motion does not dirty text geometry.
+5. Add language/script shaping inputs without reintroducing CPU pixel rasterization.
 
 ## Proposed GPU pipeline architecture
 
@@ -84,18 +84,18 @@ The graph should continue to expose a final OBS texture and keep source registra
 
 ## Non-breaking integration rules
 
-1. Keep Cairo/Pango rendering as the fallback until each layer type has visual parity tests.
+1. Do not reintroduce CPU 2-D raster fallbacks in the live OBS source path.
 2. Preserve `obs_graphics_studio_pro_source` as the source ID.
 3. Preserve title JSON fields; add GPU-specific fields only as optional extensions.
 4. Do not require a graphics API outside OBS `gs_*` abstractions.
 5. Prefer OBS effect files/shader strings that compile through libobs rather than platform-specific OpenGL/Direct3D/Metal calls.
-6. Make each GPU pass skippable so older scenes and unsupported layer features continue to render through the CPU path.
+6. Make each GPU pass skippable so older scenes remain loadable while unsupported features are represented as no-op GPU stages rather than CPU raster fallbacks.
 
 ## Suggested next implementation phases
 
 1. Add an offscreen render target abstraction and a small OBS effect for textured quads.
-2. Implement GPU SolidRect/Shape rendering behind a feature flag while leaving Cairo fallback available.
-3. Add image texture cache and route Image layers through the textured-quad pass.
+2. Extend the SolidRect/Shape GPU pass with rounded corners, gradients, outlines, and blur parity.
+3. Expand image texture cache invalidation and route all bitmap Image layers through the textured-quad pass.
 4. Add per-layer dirty tracking to avoid full-frame uploads when only transforms change.
 5. Introduce post-process passes for blur/shadow/glow using ping-pong render targets.
 6. Add optional 3D transform uniforms and perspective projection for 2.5D/3D compositing.

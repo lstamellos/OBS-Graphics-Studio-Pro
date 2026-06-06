@@ -1,12 +1,12 @@
 /*
  * title-renderer-gpu.h
  *
- * OBS-compatible GPU rendering transition layer for Graphics Studio titles.
+ * OBS-native GPU renderer for Graphics Studio titles.
  *
- * This file intentionally keeps the first integration non-breaking: the
- * existing Cairo/Pango renderer can still produce a BGRA frame, while texture
- * lifetime, upload, final OBS draw, and migration analysis now live behind a
- * GPU pipeline abstraction that can grow into shader/effect passes.
+ * The public API intentionally stays inside libobs' gs_* abstraction so the
+ * plugin remains compatible with OBS' Direct3D/OpenGL/Metal backends.  CPU
+ * 2-D raster backends such as Cairo/Pango are not part of this renderer; layer
+ * drawing, transforms, blending, and effects are expressed as GPU passes.
  */
 
 #pragma once
@@ -15,7 +15,9 @@
 #include <graphics/graphics.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct Layer;
@@ -26,21 +28,23 @@ enum class LayerType;
 namespace obsgs {
 
 enum class GpuPipelineStage {
-    CpuRasterUpload,
     SolidGeometryShader,
     TextureShader,
     TextAtlasShader,
-    PostProcessShader,
+    EffectShader,
+    CompositePass,
+    Future3DPass,
 };
 
 struct GpuLayerPlan {
     std::string layer_id;
     std::string layer_name;
     std::string layer_type;
-    bool can_render_geometry_on_gpu = false;
-    bool requires_cpu_raster = true;
+    bool gpu_composited = true;
+    bool needs_texture_asset = false;
+    bool needs_text_atlas = false;
     bool uses_animated_transform = false;
-    bool uses_gpu_blending = true;
+    bool uses_effect_pass = false;
     std::vector<GpuPipelineStage> stages;
     std::vector<std::string> migration_notes;
 };
@@ -48,10 +52,11 @@ struct GpuLayerPlan {
 struct GpuTitlePlan {
     uint32_t width = 0;
     uint32_t height = 0;
-    bool requires_cpu_raster_pass = false;
-    bool has_gpu_migratable_layers = false;
+    bool has_gpu_geometry_layers = false;
+    bool has_gpu_texture_layers = false;
+    bool has_gpu_text_layers = false;
     std::vector<GpuLayerPlan> layers;
-    std::vector<std::string> bottlenecks;
+    std::vector<std::string> eliminated_cpu_paths;
     std::vector<std::string> incremental_steps;
 };
 
@@ -63,10 +68,9 @@ public:
     GpuTextureFrame(const GpuTextureFrame &) = delete;
     GpuTextureFrame &operator=(const GpuTextureFrame &) = delete;
 
-    bool ensure_size(uint32_t width, uint32_t height);
-    bool upload_bgra(const uint8_t *pixels, uint32_t linesize);
+    bool ensure_dynamic_bgra(uint32_t width, uint32_t height);
+    bool upload_bgra_asset(const uint8_t *pixels, uint32_t linesize);
     void reset();
-    void render_default() const;
 
     gs_texture_t *texture() const { return texture_; }
     uint32_t width() const { return width_; }
@@ -81,7 +85,12 @@ private:
 class ObsGpuRenderPipeline {
 public:
     GpuTitlePlan build_migration_plan(const Title &title) const;
-    bool render_texture(const GpuTextureFrame &frame) const;
+    bool render_title(const Title &title, double time_seconds);
+    void reset();
+
+private:
+    GpuTextureFrame *texture_for_image_layer(const Layer &layer);
+    std::unordered_map<std::string, std::unique_ptr<GpuTextureFrame>> image_textures_;
 };
 
 std::string layer_type_name(LayerType type);
