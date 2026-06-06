@@ -610,6 +610,21 @@ private:
     QDoubleSpinBox  *spn_rect_corner_   = nullptr;
     QPushButton     *btn_fill_color_ = nullptr;
     QWidget         *row_fill_color_ = nullptr;
+    QComboBox       *cmb_fill_type_ = nullptr;
+    QWidget         *row_fill_type_ = nullptr;
+    QGroupBox       *gradient_box_ = nullptr;
+    QComboBox       *cmb_gradient_type_ = nullptr;
+    QPushButton     *btn_gradient_start_color_ = nullptr;
+    QPushButton     *btn_gradient_end_color_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_start_pos_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_end_pos_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_opacity_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_angle_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_center_x_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_center_y_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_scale_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_focal_x_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_focal_y_ = nullptr;
 
     /* Text/image background controls */
     QCheckBox       *chk_background_enabled_ = nullptr;
