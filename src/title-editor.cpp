@@ -722,7 +722,7 @@ static double eval_box_width(const Layer &layer, double t)
         : static_cast<double>(layer.rect_width);
     if (layer.text_box_width_to_text && is_text_box_auto_size_layer(layer))
         width = std::min(natural_text_width(layer), std::max(1.0, (double)layer.max_text_box_width));
-    return width < 1.0 ? 1.0 : width;
+    return std::max(0.0, width);
 }
 
 static double eval_box_height(const Layer &layer, double t)
@@ -734,7 +734,7 @@ static double eval_box_height(const Layer &layer, double t)
         const double width = eval_box_width(layer, t);
         height = std::min(natural_text_height(layer, width), std::max(1.0, (double)layer.max_text_box_height));
     }
-    return height < 1.0 ? 1.0 : height;
+    return std::max(0.0, height);
 }
 
 static int shadow_pass_count(double blur)
@@ -3290,8 +3290,8 @@ bool CanvasPreview::duplicate_selected_layers_for_drag()
         drag_layer_states_.push_back({clone->id,
                                       clone->pos_x.evaluate(lt),
                                       clone->pos_y.evaluate(lt),
-                                      std::max(1.0f, clone->rect_width),
-                                      std::max(1.0f, clone->rect_height)});
+                                      (float)eval_box_width(*clone, lt),
+                                      (float)eval_box_height(*clone, lt)});
     }
     sel_layer_id_ = selected_layer_ids_.empty() ? std::string() : selected_layer_ids_.back();
     drag_start_selection_bounds_ = selected_canvas_bounds();
@@ -3366,10 +3366,10 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
             bool resize_right = drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeE;
             bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
             bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
-            if (resize_left) next.setLeft(std::min(canvas.x(), start.right() - 1.0));
-            if (resize_right) next.setRight(std::max(canvas.x(), start.left() + 1.0));
-            if (resize_top) next.setTop(std::min(canvas.y(), start.bottom() - 1.0));
-            if (resize_bottom) next.setBottom(std::max(canvas.y(), start.top() + 1.0));
+            if (resize_left) next.setLeft(std::min(canvas.x(), start.right()));
+            if (resize_right) next.setRight(std::max(canvas.x(), start.left()));
+            if (resize_top) next.setTop(std::min(canvas.y(), start.bottom()));
+            if (resize_bottom) next.setBottom(std::max(canvas.y(), start.top()));
             double sx = next.width() / start.width();
             double sy = next.height() / start.height();
             if (modifiers & Qt::ShiftModifier) {
@@ -3385,8 +3385,8 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
                 double ry = (state.y - start.top()) / start.height();
                 set_animated_value(layer->pos_x, lt, next.left() + rx * next.width());
                 set_animated_value(layer->pos_y, lt, next.top() + ry * next.height());
-                layer->rect_width = std::max(1.0f, (float)(state.w * sx));
-                layer->rect_height = std::max(1.0f, (float)(state.h * sy));
+                layer->rect_width = std::max(0.0f, (float)(state.w * sx));
+                layer->rect_height = std::max(0.0f, (float)(state.h * sy));
                 set_animated_value(layer->box_width, lt, layer->rect_width);
                 set_animated_value(layer->box_height, lt, layer->rect_height);
             }
@@ -3432,13 +3432,13 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
         bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
         bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
 
-        if (resize_left) left = std::min(local.x(), right - 1.0);
-        else if (resize_right) right = std::max(local.x(), left + 1.0);
-        if (resize_top) top = std::min(local.y(), bottom - 1.0);
-        else if (resize_bottom) bottom = std::max(local.y(), top + 1.0);
+        if (resize_left) left = std::min(local.x(), right);
+        else if (resize_right) right = std::max(local.x(), left);
+        if (resize_top) top = std::min(local.y(), bottom);
+        else if (resize_bottom) bottom = std::max(local.y(), top);
 
-        double new_w = std::max(1.0, right - left);
-        double new_h = std::max(1.0, bottom - top);
+        double new_w = std::max(0.0, right - left);
+        double new_h = std::max(0.0, bottom - top);
         if (layer->type == LayerType::Image && layer->lock_aspect_ratio && drag_start_h_ > 0.0f) {
             double aspect = drag_start_w_ / drag_start_h_;
             if (std::abs(new_w - drag_start_w_) > std::abs(new_h - drag_start_h_) * aspect)
@@ -3489,6 +3489,10 @@ void CanvasPreview::render_to_pixmap()
         p.scale(layer->scale_x.evaluate(lt), layer->scale_y.evaluate(lt));
 
         QRectF box = layer_local_rect(*layer);
+        if (box.width() <= 0.0 || box.height() <= 0.0) {
+            p.restore();
+            continue;
+        }
 
         if (layer->type == LayerType::SolidRect || layer->type == LayerType::Shape) {
             QColor fc = color_from_argb(eval_fill_color(*layer, lt));
@@ -3826,16 +3830,16 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
         drag_layer_states_.push_back({selected->id,
                                       selected->pos_x.evaluate(lt),
                                       selected->pos_y.evaluate(lt),
-                                      std::max(1.0f, selected->rect_width),
-                                      std::max(1.0f, selected->rect_height)});
+                                      (float)eval_box_width(*selected, lt),
+                                      (float)eval_box_height(*selected, lt)});
     }
 
     double lt = std::clamp(playhead_ - layer->in_time, 0.0,
                            std::max(0.0, layer->out_time - layer->in_time));
     drag_start_x_ = layer->pos_x.evaluate(lt);
     drag_start_y_ = layer->pos_y.evaluate(lt);
-    drag_start_w_ = std::max(1.0f, layer->rect_width);
-    drag_start_h_ = std::max(1.0f, layer->rect_height);
+    drag_start_w_ = (float)eval_box_width(*layer, lt);
+    drag_start_h_ = (float)eval_box_height(*layer, lt);
     drag_start_origin_x_ = layer->origin_x;
     drag_start_origin_y_ = layer->origin_y;
     auto cursor_for_mode = [](DragMode mode) {
@@ -5766,8 +5770,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     rect_box_->setStyleSheet(section_style);
     auto *rfl = new QFormLayout(rect_box_);
     style_form(rfl);
-    spn_layer_w_ = mk_dspin(1.0, 9999.0, 10.0);
-    spn_layer_h_ = mk_dspin(1.0, 9999.0, 10.0);
+    spn_layer_w_ = mk_dspin(0.0, 9999.0, 10.0);
+    spn_layer_h_ = mk_dspin(0.0, 9999.0, 10.0);
     chk_text_box_width_to_text_ = new QCheckBox(obsgs_tr("OBSTitles.TextBoxWidthToText"), inner);
     chk_text_box_height_to_text_ = new QCheckBox(obsgs_tr("OBSTitles.TextBoxHeightToText"), inner);
     style_checkbox(chk_text_box_width_to_text_);
@@ -5930,6 +5934,87 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         if (spn_max_text_box_height_)
             spn_max_text_box_height_->setEnabled(chk_text_box_height_to_text_ && chk_text_box_height_to_text_->isChecked());
     };
+    auto install_delete_all_keyframes_menu =
+        [this, can_edit, emit_change](QPushButton *button, auto props_for_layer) {
+            if (!button) return;
+            button->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(button, &QPushButton::customContextMenuRequested,
+                    this, [this, button, props_for_layer, can_edit, emit_change](const QPoint &pos) {
+                        if (!layer_) return;
+                        std::vector<AnimatedProperty *> props = props_for_layer();
+                        bool has_keyframes = false;
+                        for (auto *prop : props) {
+                            if (prop && prop->is_animated()) {
+                                has_keyframes = true;
+                                break;
+                            }
+                        }
+
+                        QMenu menu(button);
+                        menu.setStyleSheet("QMenu{color:#ddd;background:#252525;border:1px solid #3a3a3a;}"
+                                           "QMenu::item{padding:5px 22px;}"
+                                           "QMenu::item:selected{background:#3b4f64;}"
+                                           "QMenu::item:disabled{color:#666;}");
+                        QAction *delete_all = menu.addAction(obsgs_tr("OBSTitles.DeleteAllKeyframes"));
+                        delete_all->setEnabled(can_edit() && has_keyframes);
+                        if (menu.exec(button->mapToGlobal(pos)) != delete_all || !can_edit()) return;
+
+                        bool changed = false;
+                        for (auto *prop : props) {
+                            if (!prop || prop->keyframes.empty()) continue;
+                            prop->keyframes.clear();
+                            changed = true;
+                        }
+                        if (!changed) return;
+                        load_values();
+                        emit_change();
+                    });
+        };
+    auto install_prop_delete_all = [&](QPushButton *button, AnimatedProperty Layer::*prop) {
+        install_delete_all_keyframes_menu(button, [this, prop]() {
+            return layer_ ? std::vector<AnimatedProperty *>{&(layer_.get()->*prop)}
+                          : std::vector<AnimatedProperty *>{};
+        });
+    };
+    auto install_group_delete_all = [&](QPushButton *button, std::initializer_list<AnimatedProperty Layer::*> props) {
+        std::vector<AnimatedProperty Layer::*> prop_members(props);
+        install_delete_all_keyframes_menu(button, [this, prop_members]() {
+            std::vector<AnimatedProperty *> result;
+            if (!layer_) return result;
+            result.reserve(prop_members.size());
+            for (auto prop : prop_members)
+                result.push_back(&(layer_.get()->*prop));
+            return result;
+        });
+    };
+
+    install_prop_delete_all(btn_kf_pos_x_, &Layer::pos_x);
+    install_prop_delete_all(btn_kf_pos_y_, &Layer::pos_y);
+    install_prop_delete_all(btn_kf_rotation_, &Layer::rotation);
+    install_prop_delete_all(btn_kf_opacity_, &Layer::opacity);
+    install_prop_delete_all(btn_kf_origin_x_, &Layer::origin_x_prop);
+    install_prop_delete_all(btn_kf_origin_y_, &Layer::origin_y_prop);
+    install_prop_delete_all(btn_kf_width_, &Layer::box_width);
+    install_prop_delete_all(btn_kf_height_, &Layer::box_height);
+    install_group_delete_all(btn_kf_text_color_, {&Layer::text_color_a, &Layer::text_color_r,
+                                                  &Layer::text_color_g, &Layer::text_color_b});
+    install_group_delete_all(btn_kf_fill_color_, {&Layer::fill_color_a, &Layer::fill_color_r,
+                                                  &Layer::fill_color_g, &Layer::fill_color_b});
+    install_prop_delete_all(btn_kf_background_enabled_, &Layer::background_enabled_prop);
+    install_group_delete_all(btn_kf_background_color_, {&Layer::background_color_a, &Layer::background_color_r,
+                                                        &Layer::background_color_g, &Layer::background_color_b});
+    install_prop_delete_all(btn_kf_background_opacity_, &Layer::background_opacity_prop);
+    install_prop_delete_all(btn_kf_background_padding_x_, &Layer::background_padding_x_prop);
+    install_prop_delete_all(btn_kf_background_padding_y_, &Layer::background_padding_y_prop);
+    install_prop_delete_all(btn_kf_background_corner_, &Layer::background_corner_radius_prop);
+    install_prop_delete_all(btn_kf_shadow_enabled_, &Layer::shadow_enabled_prop);
+    install_group_delete_all(btn_kf_shadow_color_, {&Layer::shadow_color_a, &Layer::shadow_color_r,
+                                                    &Layer::shadow_color_g, &Layer::shadow_color_b});
+    install_prop_delete_all(btn_kf_shadow_opacity_, &Layer::shadow_opacity_prop);
+    install_prop_delete_all(btn_kf_shadow_distance_, &Layer::shadow_distance_prop);
+    install_prop_delete_all(btn_kf_shadow_angle_, &Layer::shadow_angle_prop);
+    install_prop_delete_all(btn_kf_shadow_blur_, &Layer::shadow_blur_prop);
+    install_prop_delete_all(btn_kf_shadow_spread_, &Layer::shadow_spread_prop);
 
     connect(spn_px_,       QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, local_time, emit_change](double v){
@@ -6230,7 +6315,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                 double old_h = eval_box_height(*layer_, t);
                 layer_->rect_width = (float)v;
                 set_animated_value(layer_->box_width, t, v);
-                if (layer_->type == LayerType::Image && layer_->lock_aspect_ratio && old_h > 0.0) {
+                if (layer_->type == LayerType::Image && layer_->lock_aspect_ratio && old_w > 0.0) {
                     layer_->rect_height = (float)(v * old_h / old_w);
                     set_animated_value(layer_->box_height, t, layer_->rect_height);
                     QSignalBlocker block(spn_layer_h_);
@@ -6609,8 +6694,8 @@ void PropertiesPanel::load_values()
         if (cmb_outline_join_) cmb_outline_join_->setCurrentIndex(1);
         if (cmb_outline_position_) cmb_outline_position_->setCurrentIndex(1);
         if (chk_outline_antialias_) chk_outline_antialias_->setChecked(true);
-        spn_layer_w_->setValue(1.0);
-        spn_layer_h_->setValue(1.0);
+        spn_layer_w_->setValue(0.0);
+        spn_layer_h_->setValue(0.0);
         spn_rect_corner_->setValue(0.0);
         spn_size_->setValue(72);
         if (cmb_font_style_) populate_font_style_combo(cmb_font_style_, cmb_font_->currentText(), QStringLiteral("Regular"));

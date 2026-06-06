@@ -425,7 +425,7 @@ static double eval_box_width(const Layer &layer, double t)
         : static_cast<double>(layer.rect_width);
     if (layer.text_box_width_to_text && is_text_box_auto_size_layer(layer))
         width = std::min(natural_text_width(layer), std::max(1.0, (double)layer.max_text_box_width));
-    return width < 1.0 ? 1.0 : width;
+    return std::max(0.0, width);
 }
 
 static double eval_box_height(const Layer &layer, double t)
@@ -437,7 +437,7 @@ static double eval_box_height(const Layer &layer, double t)
         const double width = eval_box_width(layer, t);
         height = std::min(natural_text_height(layer, width), std::max(1.0, (double)layer.max_text_box_height));
     }
-    return height < 1.0 ? 1.0 : height;
+    return std::max(0.0, height);
 }
 
 static int shadow_pass_count(double blur)
@@ -975,8 +975,9 @@ static void render_layer_text(cairo_t *cr, const Layer &layer, double t,
     double sy = layer.scale_y.evaluate(t);
     double rot = layer.rotation.evaluate(t) * kPi / 180.0;
     double alpha = layer.opacity.evaluate(t);
-    double box_w = std::max(1.0, eval_box_width(layer, t));
-    double box_h = std::max(1.0, eval_box_height(layer, t));
+    double box_w = eval_box_width(layer, t);
+    double box_h = eval_box_height(layer, t);
+    if (box_w <= 0.0 || box_h <= 0.0) return;
 
     QPointF off = shadow_offset(layer, t);
     double blur = eval_shadow_blur(layer, t);
@@ -1099,6 +1100,7 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
 
     double w = eval_box_width(layer, t);
     double h = eval_box_height(layer, t);
+    if (w <= 0.0 || h <= 0.0) return;
     double r = std::min<double>(layer.corner_radius, std::min(w, h) / 2.0);
     double x = -eval_origin_x(layer, t) * w;
     double y = -eval_origin_y(layer, t) * h;
