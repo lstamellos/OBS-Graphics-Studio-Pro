@@ -82,9 +82,9 @@ TitleSource (OBS source callbacks)
 
 The graph should continue to expose a final OBS texture and keep source registration unchanged. That preserves scene/source compatibility while allowing individual layer types to leave the CPU renderer one at a time.
 
-## Editor preview acceleration
+## Editor preview compatibility
 
-`CanvasPreview` now derives from `QOpenGLWidget`, so the editor preview surface is backed by Qt's OpenGL paint engine while preserving the existing editing overlays, snapping, handles, and timeline interactions. The editor still shares the same visual semantics as the OBS GPU renderer: complex text/shape styles are converted to layer-local texture assets, and the roadmap is to route the editor preview through the same persistent OBS render-target graph once an embeddable preview texture is available.
+`CanvasPreview` remains a Qt Widgets preview to avoid adding optional Qt OpenGL runtime DLL dependencies that can prevent OBS from loading third-party plugins on Windows. The editor still shares the same visual semantics as the OBS GPU renderer: complex text/shape styles are converted to layer-local texture assets, and the roadmap is to route the editor preview through the same persistent OBS render-target graph once an embeddable OBS preview texture is available without additional Qt runtime dependencies.
 
 ## Non-breaking integration rules
 

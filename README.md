@@ -42,7 +42,7 @@ A structured rendering audit and migration roadmap is maintained in [`docs/rende
 | Library | Purpose |
 |---|---|
 | **OBS Studio** (libobs + obs-frontend-api) | Plugin API, graphics, frontend dock |
-| **Qt 5.15+ or Qt 6** | UI widgets, Qt OpenGL editor preview, image/SVG asset ingestion |
+| **Qt 5.15+ or Qt 6** | UI widgets and image/SVG asset ingestion |
 | **nlohmann/json** | JSON serialisation (fetched automatically by CMake) |
 
 ---

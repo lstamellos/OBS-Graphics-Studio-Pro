@@ -172,11 +172,6 @@ else()
 endif()
 
 set(QT_LIBS Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Svg)
-if(QT_VERSION_MAJOR EQUAL 6)
-  list(APPEND QT_LIBS Qt6::OpenGLWidgets)
-elseif(TARGET Qt5::OpenGL)
-  list(APPEND QT_LIBS Qt5::OpenGL)
-endif()
 
 # ── nlohmann/json ────────────────────────────────────────────────────
 # Either install via package manager:  apt install nlohmann-json3-dev
