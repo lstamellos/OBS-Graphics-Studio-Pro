@@ -219,7 +219,7 @@ protected:
     void resizeEvent(QResizeEvent *ev) override;
 
 private:
-    enum class DragMode { None, Marquee, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin };
+    enum class DragMode { None, Marquee, Move, ResizeNW, ResizeN, ResizeNE, ResizeE, ResizeSE, ResizeS, ResizeSW, ResizeW, Origin, Rotate };
 
     void render_to_pixmap();
     std::shared_ptr<Layer> selected_layer() const;
@@ -290,6 +290,9 @@ private:
     QPointF drag_current_view_;
     std::vector<std::string> marquee_base_selection_;
     QPointF drag_start_canvas_;
+    QPointF drag_rotation_pivot_canvas_;
+    double drag_start_rotation_angle_ = 0.0;
+    double drag_current_rotation_delta_ = 0.0;
     double drag_start_x_ = 0.0;
     double drag_start_y_ = 0.0;
     float drag_start_w_ = 1.0f;
@@ -303,6 +306,7 @@ private:
         double y = 0.0;
         float w = 1.0f;
         float h = 1.0f;
+        double rotation = 0.0;
     };
     std::vector<LayerDragState> drag_layer_states_;
 };
