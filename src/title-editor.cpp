@@ -722,7 +722,7 @@ static double eval_box_width(const Layer &layer, double t)
         : static_cast<double>(layer.rect_width);
     if (layer.text_box_width_to_text && is_text_box_auto_size_layer(layer))
         width = std::min(natural_text_width(layer), std::max(1.0, (double)layer.max_text_box_width));
-    return width < 1.0 ? 1.0 : width;
+    return std::max(0.0, width);
 }
 
 static double eval_box_height(const Layer &layer, double t)
@@ -734,7 +734,7 @@ static double eval_box_height(const Layer &layer, double t)
         const double width = eval_box_width(layer, t);
         height = std::min(natural_text_height(layer, width), std::max(1.0, (double)layer.max_text_box_height));
     }
-    return height < 1.0 ? 1.0 : height;
+    return std::max(0.0, height);
 }
 
 static int shadow_pass_count(double blur)
@@ -3290,8 +3290,8 @@ bool CanvasPreview::duplicate_selected_layers_for_drag()
         drag_layer_states_.push_back({clone->id,
                                       clone->pos_x.evaluate(lt),
                                       clone->pos_y.evaluate(lt),
-                                      std::max(1.0f, clone->rect_width),
-                                      std::max(1.0f, clone->rect_height)});
+                                      (float)eval_box_width(*clone, lt),
+                                      (float)eval_box_height(*clone, lt)});
     }
     sel_layer_id_ = selected_layer_ids_.empty() ? std::string() : selected_layer_ids_.back();
     drag_start_selection_bounds_ = selected_canvas_bounds();
@@ -3366,10 +3366,10 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
             bool resize_right = drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeE;
             bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
             bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
-            if (resize_left) next.setLeft(std::min(canvas.x(), start.right() - 1.0));
-            if (resize_right) next.setRight(std::max(canvas.x(), start.left() + 1.0));
-            if (resize_top) next.setTop(std::min(canvas.y(), start.bottom() - 1.0));
-            if (resize_bottom) next.setBottom(std::max(canvas.y(), start.top() + 1.0));
+            if (resize_left) next.setLeft(std::min(canvas.x(), start.right()));
+            if (resize_right) next.setRight(std::max(canvas.x(), start.left()));
+            if (resize_top) next.setTop(std::min(canvas.y(), start.bottom()));
+            if (resize_bottom) next.setBottom(std::max(canvas.y(), start.top()));
             double sx = next.width() / start.width();
             double sy = next.height() / start.height();
             if (modifiers & Qt::ShiftModifier) {
@@ -3385,8 +3385,8 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
                 double ry = (state.y - start.top()) / start.height();
                 set_animated_value(layer->pos_x, lt, next.left() + rx * next.width());
                 set_animated_value(layer->pos_y, lt, next.top() + ry * next.height());
-                layer->rect_width = std::max(1.0f, (float)(state.w * sx));
-                layer->rect_height = std::max(1.0f, (float)(state.h * sy));
+                layer->rect_width = std::max(0.0f, (float)(state.w * sx));
+                layer->rect_height = std::max(0.0f, (float)(state.h * sy));
                 set_animated_value(layer->box_width, lt, layer->rect_width);
                 set_animated_value(layer->box_height, lt, layer->rect_height);
             }
@@ -3432,13 +3432,13 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
         bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
         bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
 
-        if (resize_left) left = std::min(local.x(), right - 1.0);
-        else if (resize_right) right = std::max(local.x(), left + 1.0);
-        if (resize_top) top = std::min(local.y(), bottom - 1.0);
-        else if (resize_bottom) bottom = std::max(local.y(), top + 1.0);
+        if (resize_left) left = std::min(local.x(), right);
+        else if (resize_right) right = std::max(local.x(), left);
+        if (resize_top) top = std::min(local.y(), bottom);
+        else if (resize_bottom) bottom = std::max(local.y(), top);
 
-        double new_w = std::max(1.0, right - left);
-        double new_h = std::max(1.0, bottom - top);
+        double new_w = std::max(0.0, right - left);
+        double new_h = std::max(0.0, bottom - top);
         if (layer->type == LayerType::Image && layer->lock_aspect_ratio && drag_start_h_ > 0.0f) {
             double aspect = drag_start_w_ / drag_start_h_;
             if (std::abs(new_w - drag_start_w_) > std::abs(new_h - drag_start_h_) * aspect)
@@ -3489,6 +3489,10 @@ void CanvasPreview::render_to_pixmap()
         p.scale(layer->scale_x.evaluate(lt), layer->scale_y.evaluate(lt));
 
         QRectF box = layer_local_rect(*layer);
+        if (box.width() <= 0.0 || box.height() <= 0.0) {
+            p.restore();
+            continue;
+        }
 
         if (layer->type == LayerType::SolidRect || layer->type == LayerType::Shape) {
             QColor fc = color_from_argb(eval_fill_color(*layer, lt));
@@ -3826,16 +3830,16 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
         drag_layer_states_.push_back({selected->id,
                                       selected->pos_x.evaluate(lt),
                                       selected->pos_y.evaluate(lt),
-                                      std::max(1.0f, selected->rect_width),
-                                      std::max(1.0f, selected->rect_height)});
+                                      (float)eval_box_width(*selected, lt),
+                                      (float)eval_box_height(*selected, lt)});
     }
 
     double lt = std::clamp(playhead_ - layer->in_time, 0.0,
                            std::max(0.0, layer->out_time - layer->in_time));
     drag_start_x_ = layer->pos_x.evaluate(lt);
     drag_start_y_ = layer->pos_y.evaluate(lt);
-    drag_start_w_ = std::max(1.0f, layer->rect_width);
-    drag_start_h_ = std::max(1.0f, layer->rect_height);
+    drag_start_w_ = (float)eval_box_width(*layer, lt);
+    drag_start_h_ = (float)eval_box_height(*layer, lt);
     drag_start_origin_x_ = layer->origin_x;
     drag_start_origin_y_ = layer->origin_y;
     auto cursor_for_mode = [](DragMode mode) {
