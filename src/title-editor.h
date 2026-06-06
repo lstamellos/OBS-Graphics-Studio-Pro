@@ -618,6 +618,8 @@ private:
     QPushButton     *btn_gradient_end_color_ = nullptr;
     QDoubleSpinBox  *spn_gradient_start_pos_ = nullptr;
     QDoubleSpinBox  *spn_gradient_end_pos_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_start_opacity_ = nullptr;
+    QDoubleSpinBox  *spn_gradient_end_opacity_ = nullptr;
     QDoubleSpinBox  *spn_gradient_opacity_ = nullptr;
     QDoubleSpinBox  *spn_gradient_angle_ = nullptr;
     QDoubleSpinBox  *spn_gradient_center_x_ = nullptr;

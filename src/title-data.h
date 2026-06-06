@@ -175,6 +175,8 @@ struct Layer {
     uint32_t    gradient_end_color   = 0xFF1B1B1B;
     float       gradient_start_pos = 0.0f;
     float       gradient_end_pos   = 1.0f;
+    float       gradient_start_opacity = 1.0f;
+    float       gradient_end_opacity   = 1.0f;
     float       gradient_opacity   = 1.0f;
     float       gradient_angle     = 0.0f;
     float       gradient_center_x  = 0.5f;

@@ -977,10 +977,10 @@ static uint32_t eval_fill_color(const Layer &layer, double t)
            (uint32_t)eval_channel(layer.fill_color_b, layer.fill_color & 0xFF, t);
 }
 
-static QColor gradient_color_with_opacity(uint32_t argb, double opacity)
+static QColor gradient_color_with_opacity(uint32_t argb, double gradient_opacity, double stop_opacity)
 {
     QColor color = color_from_argb(argb);
-    color.setAlphaF(std::clamp((double)color.alphaF() * opacity, 0.0, 1.0));
+    color.setAlphaF(std::clamp((double)color.alphaF() * gradient_opacity * stop_opacity, 0.0, 1.0));
     return color;
 }
 
@@ -997,8 +997,8 @@ static QBrush gradient_fill_brush(const Layer &layer, const QRectF &box, double 
         QRadialGradient gradient(QPointF(cx, cy), std::max(1.0, radius),
                                  QPointF(box.left() + std::clamp((double)layer.gradient_focal_x, 0.0, 1.0) * box.width(),
                                          box.top() + std::clamp((double)layer.gradient_focal_y, 0.0, 1.0) * box.height()));
-        gradient.setColorAt(start_pos, gradient_color_with_opacity(layer.gradient_start_color, opacity));
-        gradient.setColorAt(end_pos, gradient_color_with_opacity(layer.gradient_end_color, opacity));
+        gradient.setColorAt(start_pos, gradient_color_with_opacity(layer.gradient_start_color, opacity, layer.gradient_start_opacity));
+        gradient.setColorAt(end_pos, gradient_color_with_opacity(layer.gradient_end_color, opacity, layer.gradient_end_opacity));
         return QBrush(gradient);
     }
     const double length = std::hypot(box.width(), box.height()) * 0.5 * scale;
@@ -1006,8 +1006,8 @@ static QBrush gradient_fill_brush(const Layer &layer, const QRectF &box, double 
     const double dx = std::cos(angle) * length;
     const double dy = std::sin(angle) * length;
     QLinearGradient gradient(QPointF(cx - dx, cy - dy), QPointF(cx + dx, cy + dy));
-    gradient.setColorAt(start_pos, gradient_color_with_opacity(layer.gradient_start_color, opacity));
-    gradient.setColorAt(end_pos, gradient_color_with_opacity(layer.gradient_end_color, opacity));
+    gradient.setColorAt(start_pos, gradient_color_with_opacity(layer.gradient_start_color, opacity, layer.gradient_start_opacity));
+    gradient.setColorAt(end_pos, gradient_color_with_opacity(layer.gradient_end_color, opacity, layer.gradient_end_opacity));
     return QBrush(gradient);
 }
 
@@ -4317,13 +4317,13 @@ void CanvasPreview::render_to_pixmap()
         if (layer->type == LayerType::Image) {
             if (eval_background_enabled(*layer, lt)) {
                 QColor bg = evaluated_background_color(*layer, lt);
-                if (bg.alpha() > 0) {
+                if (bg.alpha() > 0 || layer->fill_type == 1) {
                     const double pad_x = eval_background_padding_x(*layer, lt);
                     const double pad_y = eval_background_padding_y(*layer, lt);
                     const double corner = eval_background_corner_radius(*layer, lt);
                     QRectF bg_box = box.adjusted(-pad_x, -pad_y, pad_x, pad_y);
                     p.setPen(Qt::NoPen);
-                    p.setBrush(bg);
+                    p.setBrush(layer->fill_type == 1 ? gradient_fill_brush(*layer, bg_box, eval_background_opacity(*layer, lt)) : QBrush(bg));
                     p.drawRoundedRect(bg_box, corner, corner);
                 }
             }
@@ -4346,13 +4346,13 @@ void CanvasPreview::render_to_pixmap()
             QString text = display_text_for_style(*layer);
             if (eval_background_enabled(*layer, lt)) {
                 QColor bg = evaluated_background_color(*layer, lt);
-                if (bg.alpha() > 0) {
+                if (bg.alpha() > 0 || layer->fill_type == 1) {
                     const double pad_x = eval_background_padding_x(*layer, lt);
                     const double pad_y = eval_background_padding_y(*layer, lt);
                     const double corner = eval_background_corner_radius(*layer, lt);
                     QRectF bg_box = box.adjusted(-pad_x, -pad_y, pad_x, pad_y);
                     p.setPen(Qt::NoPen);
-                    p.setBrush(bg);
+                    p.setBrush(layer->fill_type == 1 ? gradient_fill_brush(*layer, bg_box, eval_background_opacity(*layer, lt)) : QBrush(bg));
                     p.drawRoundedRect(bg_box, corner, corner);
                 }
             }
@@ -4392,7 +4392,7 @@ void CanvasPreview::render_to_pixmap()
             outline.setAlphaF(std::clamp((double)outline.alphaF() * eval_outline_opacity(*layer, lt), 0.0, 1.0));
             auto draw_text_fill = [&]() {
                 p.setPen(Qt::NoPen);
-                p.setBrush(tc);
+                p.setBrush(layer->fill_type == 1 ? gradient_fill_brush(*layer, text_box) : QBrush(tc));
                 p.drawPath(text_path);
             };
             auto draw_text_outline = [&]() {
@@ -7212,6 +7212,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     btn_gradient_end_color_ = new QPushButton(inner);
     spn_gradient_start_pos_ = mk_dspin(0.0, 1.0, 0.01);
     spn_gradient_end_pos_ = mk_dspin(0.0, 1.0, 0.01);
+    spn_gradient_start_opacity_ = mk_dspin(0.0, 1.0, 0.01);
+    spn_gradient_end_opacity_ = mk_dspin(0.0, 1.0, 0.01);
     spn_gradient_opacity_ = mk_dspin(0.0, 1.0, 0.01);
     spn_gradient_angle_ = mk_dspin(-360.0, 360.0, 1.0);
     spn_gradient_center_x_ = mk_dspin(0.0, 1.0, 0.01);
@@ -7220,6 +7222,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     spn_gradient_focal_x_ = mk_dspin(0.0, 1.0, 0.01);
     spn_gradient_focal_y_ = mk_dspin(0.0, 1.0, 0.01);
     for (auto *spin : std::initializer_list<QDoubleSpinBox *>{spn_gradient_start_pos_, spn_gradient_end_pos_,
+                                                               spn_gradient_start_opacity_, spn_gradient_end_opacity_,
                                                                spn_gradient_opacity_, spn_gradient_center_x_,
                                                                spn_gradient_center_y_, spn_gradient_scale_,
                                                                spn_gradient_focal_x_, spn_gradient_focal_y_})
@@ -7228,8 +7231,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     add_form_row(gfl, obsgs_tr("OBSTitles.GradientTypeLabel"), cmb_gradient_type_);
     add_form_row(gfl, obsgs_tr("OBSTitles.StartColorLabel"), btn_gradient_start_color_);
     add_form_row(gfl, obsgs_tr("OBSTitles.StartStopLabel"), spn_gradient_start_pos_);
+    add_form_row(gfl, obsgs_tr("OBSTitles.StartOpacityLabel"), spn_gradient_start_opacity_);
     add_form_row(gfl, obsgs_tr("OBSTitles.EndColorLabel"), btn_gradient_end_color_);
     add_form_row(gfl, obsgs_tr("OBSTitles.EndStopLabel"), spn_gradient_end_pos_);
+    add_form_row(gfl, obsgs_tr("OBSTitles.EndOpacityLabel"), spn_gradient_end_opacity_);
     add_form_row(gfl, obsgs_tr("OBSTitles.OpacityLabel"), spn_gradient_opacity_);
     add_form_row(gfl, obsgs_tr("OBSTitles.AngleLabel"), spn_gradient_angle_);
     add_form_row(gfl, obsgs_tr("OBSTitles.CenterXLabel"), spn_gradient_center_x_);
@@ -7813,7 +7818,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, emit_change](int idx) {
                 if (!can_edit()) return;
                 layer_->fill_type = cmb_fill_type_->itemData(idx).toInt();
-                if (gradient_box_) gradient_box_->setVisible(layer_->fill_type == 1);
+                load_values();
                 emit_change();
             });
     connect(cmb_gradient_type_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -7838,6 +7843,10 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
             this, [this, can_edit, emit_change](double v) { if (can_edit()) { layer_->gradient_start_pos = (float)v; emit_change(); } });
     connect(spn_gradient_end_pos_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, emit_change](double v) { if (can_edit()) { layer_->gradient_end_pos = (float)v; emit_change(); } });
+    connect(spn_gradient_start_opacity_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) { if (can_edit()) { layer_->gradient_start_opacity = (float)v; emit_change(); } });
+    connect(spn_gradient_end_opacity_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, emit_change](double v) { if (can_edit()) { layer_->gradient_end_opacity = (float)v; emit_change(); } });
     connect(spn_gradient_opacity_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, emit_change](double v) { if (can_edit()) { layer_->gradient_opacity = (float)v; emit_change(); } });
     connect(spn_gradient_angle_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -8214,6 +8223,8 @@ void PropertiesPanel::load_values()
         txt_content_->clear();
         edit_image_path_->clear();
         style_color_button(btn_text_color_, 0xFFFFFFFF);
+        if (btn_text_color_) btn_text_color_->setEnabled(true);
+        if (btn_kf_text_color_) btn_kf_text_color_->setEnabled(true);
         style_color_button(btn_fill_color_, 0xFF222222);
         if (cmb_fill_type_) cmb_fill_type_->setCurrentIndex(0);
         if (cmb_gradient_type_) cmb_gradient_type_->setCurrentIndex(0);
@@ -8221,6 +8232,8 @@ void PropertiesPanel::load_values()
         if (btn_gradient_end_color_) style_color_button(btn_gradient_end_color_, 0xFF1B1B1B);
         if (spn_gradient_start_pos_) spn_gradient_start_pos_->setValue(0.0);
         if (spn_gradient_end_pos_) spn_gradient_end_pos_->setValue(1.0);
+        if (spn_gradient_start_opacity_) spn_gradient_start_opacity_->setValue(1.0);
+        if (spn_gradient_end_opacity_) spn_gradient_end_opacity_->setValue(1.0);
         if (spn_gradient_opacity_) spn_gradient_opacity_->setValue(1.0);
         if (spn_gradient_angle_) spn_gradient_angle_->setValue(0.0);
         if (spn_gradient_center_x_) spn_gradient_center_x_->setValue(0.5);
@@ -8346,18 +8359,22 @@ void PropertiesPanel::load_values()
     rect_box_->setVisible(is_text_like || is_rect || is_image);
     rect_box_->setTitle(is_text_like ? (is_clock ? obsgs_tr("OBSTitles.ClockBox") : (is_ticker ? obsgs_tr("OBSTitles.TickerBox") : obsgs_tr("OBSTitles.TextBox"))) : (is_image ? obsgs_tr("OBSTitles.ImageSize") : obsgs_tr("OBSTitles.ShapeGeometryFill")));
     spn_rect_corner_->setVisible(is_rect);
-    if (cmb_fill_type_) cmb_fill_type_->setVisible(is_rect);
+    const bool supports_fill_type = is_rect || is_text_like || is_image;
+    if (cmb_fill_type_) cmb_fill_type_->setVisible(supports_fill_type);
     const bool solid_fill_active = is_rect && layer_->fill_type == 0;
     btn_fill_color_->setVisible(solid_fill_active);
-    if (gradient_box_) gradient_box_->setVisible(is_rect && layer_->fill_type == 1);
+    if (gradient_box_) gradient_box_->setVisible(supports_fill_type && layer_->fill_type == 1);
     const bool supports_text_box_auto_size = is_text || is_clock;
     if (chk_text_box_width_to_text_) chk_text_box_width_to_text_->setVisible(supports_text_box_auto_size);
     if (chk_text_box_height_to_text_) chk_text_box_height_to_text_->setVisible(supports_text_box_auto_size);
     if (spn_max_text_box_width_) spn_max_text_box_width_->setVisible(supports_text_box_auto_size);
     if (spn_max_text_box_height_) spn_max_text_box_height_->setVisible(supports_text_box_auto_size);
     btn_kf_text_color_->setVisible(is_text_like);
+    const bool gradient_text_active = is_text_like && layer_->fill_type == 1;
+    if (btn_text_color_) btn_text_color_->setEnabled(!gradient_text_active);
+    if (btn_kf_text_color_) btn_kf_text_color_->setEnabled(!gradient_text_active);
     btn_kf_fill_color_->setVisible(solid_fill_active);
-    if (row_fill_type_) row_fill_type_->setVisible(is_rect);
+    if (row_fill_type_) row_fill_type_->setVisible(supports_fill_type);
     if (row_fill_color_) row_fill_color_->setVisible(solid_fill_active);
     const bool supports_background = is_text_like || is_image;
     if (chk_background_enabled_) chk_background_enabled_->setVisible(supports_background);
@@ -8383,7 +8400,7 @@ void PropertiesPanel::load_values()
         if (auto *label = form->labelForField(spn_rect_corner_))
             label->setVisible(is_rect);
         if (auto *label = form->labelForField(row_fill_type_))
-            label->setVisible(is_rect);
+            label->setVisible(supports_fill_type);
         if (auto *label = form->labelForField(row_fill_color_))
             label->setVisible(solid_fill_active);
         for (QWidget *field : std::initializer_list<QWidget *>{chk_text_box_width_to_text_, spn_max_text_box_width_,
@@ -8447,6 +8464,8 @@ void PropertiesPanel::load_values()
     if (btn_gradient_end_color_) style_color_button(btn_gradient_end_color_, layer_->gradient_end_color);
     if (spn_gradient_start_pos_) spn_gradient_start_pos_->setValue(layer_->gradient_start_pos);
     if (spn_gradient_end_pos_) spn_gradient_end_pos_->setValue(layer_->gradient_end_pos);
+    if (spn_gradient_start_opacity_) spn_gradient_start_opacity_->setValue(layer_->gradient_start_opacity);
+    if (spn_gradient_end_opacity_) spn_gradient_end_opacity_->setValue(layer_->gradient_end_opacity);
     if (spn_gradient_opacity_) spn_gradient_opacity_->setValue(layer_->gradient_opacity);
     if (spn_gradient_angle_) spn_gradient_angle_->setValue(layer_->gradient_angle);
     if (spn_gradient_center_x_) spn_gradient_center_x_->setValue(layer_->gradient_center_x);

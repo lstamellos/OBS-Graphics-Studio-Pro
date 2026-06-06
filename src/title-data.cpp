@@ -856,6 +856,8 @@ static json layer_to_json(const Layer &l, bool include_embedded_assets = true,
     j["gradient_end_color"] = l.gradient_end_color;
     j["gradient_start_pos"] = l.gradient_start_pos;
     j["gradient_end_pos"] = l.gradient_end_pos;
+    j["gradient_start_opacity"] = l.gradient_start_opacity;
+    j["gradient_end_opacity"] = l.gradient_end_opacity;
     j["gradient_opacity"] = l.gradient_opacity;
     j["gradient_angle"] = l.gradient_angle;
     j["gradient_center_x"] = l.gradient_center_x;
@@ -1002,6 +1004,8 @@ static std::shared_ptr<Layer> layer_from_json(const json &j, bool require_embedd
     l->gradient_end_color = json_color(j, "gradient_end_color", (uint32_t)0xFF1B1B1B);
     l->gradient_start_pos = (float)std::clamp(finite_or(json_double(j, "gradient_start_pos", 0.0), 0.0), 0.0, 1.0);
     l->gradient_end_pos = (float)std::clamp(finite_or(json_double(j, "gradient_end_pos", 1.0), 1.0), 0.0, 1.0);
+    l->gradient_start_opacity = (float)std::clamp(finite_or(json_double(j, "gradient_start_opacity", 1.0), 1.0), 0.0, 1.0);
+    l->gradient_end_opacity = (float)std::clamp(finite_or(json_double(j, "gradient_end_opacity", 1.0), 1.0), 0.0, 1.0);
     l->gradient_opacity = (float)std::clamp(finite_or(json_double(j, "gradient_opacity", 1.0), 1.0), 0.0, 1.0);
     l->gradient_angle = (float)finite_or(json_double(j, "gradient_angle", 0.0), 0.0);
     l->gradient_center_x = (float)std::clamp(finite_or(json_double(j, "gradient_center_x", 0.5), 0.5), 0.0, 1.0);
