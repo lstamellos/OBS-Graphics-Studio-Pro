@@ -42,10 +42,39 @@
 #include <initializer_list>
 #include <utility>
 #include <sstream>
+#include <cstring>
 
 namespace obsgs {
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
+
+thread_local int g_graphics_lock_depth = 0;
+
+class ScopedObsGraphicsLock {
+public:
+    ScopedObsGraphicsLock()
+    {
+        if (!obs_get_video())
+            return;
+        active_ = true;
+        if (g_graphics_lock_depth++ == 0)
+            obs_enter_graphics();
+    }
+
+    ~ScopedObsGraphicsLock()
+    {
+        if (!active_)
+            return;
+        if (--g_graphics_lock_depth == 0)
+            obs_leave_graphics();
+    }
+
+    ScopedObsGraphicsLock(const ScopedObsGraphicsLock &) = delete;
+    ScopedObsGraphicsLock &operator=(const ScopedObsGraphicsLock &) = delete;
+
+private:
+    bool active_ = false;
+};
 
 constexpr const char *kShadowEffectSource = R"(
 uniform float4x4 ViewProj;
@@ -1126,12 +1155,13 @@ bool GpuTextureFrame::ensure_dynamic_bgra(uint32_t width, uint32_t height)
 {
     if (texture_ && width_ == width && height_ == height)
         return true;
+    if (!obs_get_video())
+        return false;
 
-    obs_enter_graphics();
+    ScopedObsGraphicsLock graphics_lock;
     if (texture_)
         gs_texture_destroy(texture_);
     texture_ = gs_texture_create(width, height, GS_BGRA, 1, nullptr, GS_DYNAMIC);
-    obs_leave_graphics();
 
     if (!texture_) {
         width_ = 0;
@@ -1146,12 +1176,11 @@ bool GpuTextureFrame::ensure_dynamic_bgra(uint32_t width, uint32_t height)
 
 bool GpuTextureFrame::upload_bgra_asset(const uint8_t *pixels, uint32_t linesize)
 {
-    if (!texture_ || !pixels)
+    if (!texture_ || !pixels || !obs_get_video())
         return false;
 
-    obs_enter_graphics();
+    ScopedObsGraphicsLock graphics_lock;
     gs_texture_set_image(texture_, pixels, linesize, false);
-    obs_leave_graphics();
     return true;
 }
 
@@ -1163,9 +1192,10 @@ void GpuTextureFrame::reset()
         return;
     }
 
-    obs_enter_graphics();
-    gs_texture_destroy(texture_);
-    obs_leave_graphics();
+    if (obs_get_video()) {
+        ScopedObsGraphicsLock graphics_lock;
+        gs_texture_destroy(texture_);
+    }
     texture_ = nullptr;
     width_ = 0;
     height_ = 0;
@@ -1175,9 +1205,10 @@ ObsGpuRenderPipeline::~ObsGpuRenderPipeline()
 {
     reset();
     if (shadow_effect_) {
-        obs_enter_graphics();
-        gs_effect_destroy(shadow_effect_);
-        obs_leave_graphics();
+        if (obs_get_video()) {
+            ScopedObsGraphicsLock graphics_lock;
+            gs_effect_destroy(shadow_effect_);
+        }
         shadow_effect_ = nullptr;
     }
 }
@@ -1187,10 +1218,12 @@ gs_effect_t *ObsGpuRenderPipeline::ensure_shadow_effect()
     if (shadow_effect_)
         return shadow_effect_;
 
+    if (!obs_get_video())
+        return nullptr;
+
     char *errors = nullptr;
-    obs_enter_graphics();
+    ScopedObsGraphicsLock graphics_lock;
     shadow_effect_ = gs_effect_create(kShadowEffectSource, "obsgs-gpu-shadow.effect", &errors);
-    obs_leave_graphics();
     if (errors) {
         blog(LOG_WARNING, "OBS Graphics Studio Pro shadow effect compile log: %s", errors);
         bfree(errors);
@@ -1348,7 +1381,7 @@ void ObsGpuRenderPipeline::reset()
 }
 
 
-QImage render_title_to_qimage(const Title &title, double time_seconds)
+static QImage render_title_to_qimage_cpu(const Title &title, double time_seconds)
 {
     QImage frame(std::max(1, title.width), std::max(1, title.height), QImage::Format_ARGB32_Premultiplied);
     frame.fill(Qt::transparent);
@@ -1412,5 +1445,76 @@ std::string layer_type_name(LayerType type)
     default: return "Unknown";
     }
 }
+
+
+
+QImage ObsGpuRenderPipeline::render_title_to_qimage(const Title &title, double time_seconds)
+{
+    const uint32_t width = static_cast<uint32_t>(std::max(1, title.width));
+    const uint32_t height = static_cast<uint32_t>(std::max(1, title.height));
+
+    if (!obs_get_video())
+        return render_title_to_qimage_cpu(title, time_seconds);
+
+    QImage frame(static_cast<int>(width), static_cast<int>(height), QImage::Format_ARGB32_Premultiplied);
+    frame.fill(Qt::transparent);
+
+    ScopedObsGraphicsLock graphics_lock;
+
+    gs_texture_t *previous_target = gs_get_render_target();
+    gs_zstencil_t *previous_zstencil = gs_get_zstencil_target();
+    struct gs_rect previous_viewport = {};
+    gs_get_viewport(&previous_viewport);
+
+    gs_texture_t *target = gs_texture_create(width, height, GS_BGRA, 1, nullptr, GS_RENDER_TARGET);
+    gs_stagesurf_t *stage = target ? gs_stagesurface_create(width, height, GS_BGRA) : nullptr;
+    bool mapped = false;
+
+    if (target && stage) {
+        gs_set_render_target(target, nullptr);
+        gs_set_viewport(0, 0, static_cast<int>(width), static_cast<int>(height));
+        vec4 clear_color = {0.0f, 0.0f, 0.0f, 0.0f};
+        gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+
+        gs_projection_push();
+        gs_matrix_push();
+        gs_matrix_identity();
+        gs_ortho(0.0f, static_cast<float>(width), 0.0f, static_cast<float>(height), -100.0f, 100.0f);
+        render_title(title, time_seconds);
+        gs_matrix_pop();
+        gs_projection_pop();
+
+        gs_stage_texture(stage, target);
+        uint8_t *data = nullptr;
+        uint32_t linesize = 0;
+        mapped = gs_stagesurface_map(stage, &data, &linesize);
+        if (mapped && data) {
+            for (uint32_t y = 0; y < height; ++y)
+                std::memcpy(frame.scanLine(static_cast<int>(y)), data + static_cast<size_t>(y) * linesize, static_cast<size_t>(width) * 4);
+            gs_stagesurface_unmap(stage);
+        }
+    }
+
+    gs_set_render_target(previous_target, previous_zstencil);
+    gs_set_viewport(previous_viewport.x, previous_viewport.y, previous_viewport.cx, previous_viewport.cy);
+
+    if (stage)
+        gs_stagesurface_destroy(stage);
+    if (target)
+        gs_texture_destroy(target);
+
+
+    if (!mapped)
+        return render_title_to_qimage_cpu(title, time_seconds);
+
+    return frame;
+}
+
+QImage render_title_to_qimage(const Title &title, double time_seconds)
+{
+    ObsGpuRenderPipeline pipeline;
+    return pipeline.render_title_to_qimage(title, time_seconds);
+}
+
 
 } // namespace obsgs
