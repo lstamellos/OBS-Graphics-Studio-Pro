@@ -1316,6 +1316,33 @@ void TitleEditor::build_ui()
     delete_action->setShortcut(QKeySequence::Delete);
     connect(delete_action, &QAction::triggered, this, &TitleEditor::delete_selected_layer);
 
+    auto *view_menu = menu_bar->addMenu(QStringLiteral("View"));
+    QAction *snap_action = view_menu->addAction(QStringLiteral("Snap"));
+    snap_action->setCheckable(true);
+    snap_action->setChecked(true);
+    snap_action->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Semicolon));
+    snap_action->setToolTip(QStringLiteral("Globally enable or disable snapping without changing Snap To targets."));
+    connect(snap_action, &QAction::toggled, this, [this](bool enabled) {
+        if (canvas_) canvas_->set_snap_enabled(enabled);
+    });
+
+    auto *snap_to_menu = view_menu->addMenu(QStringLiteral("Snap To"));
+    auto add_snap_to_action = [this, snap_to_menu](const QString &text, bool checked, auto setter) {
+        QAction *action = snap_to_menu->addAction(text);
+        action->setCheckable(true);
+        action->setChecked(checked);
+        connect(action, &QAction::toggled, this, [this, setter](bool enabled) {
+            if (canvas_) (canvas_->*setter)(enabled);
+        });
+        return action;
+    };
+    add_snap_to_action(QStringLiteral("Guides"), true, &CanvasPreview::set_snap_to_guides);
+    add_snap_to_action(QStringLiteral("Grid"), false, &CanvasPreview::set_snap_to_grid);
+    add_snap_to_action(QStringLiteral("Object Edges"), true, &CanvasPreview::set_snap_to_object_edges);
+    add_snap_to_action(QStringLiteral("Object Centers"), true, &CanvasPreview::set_snap_to_object_centers);
+    add_snap_to_action(QStringLiteral("Canvas Bounds"), true, &CanvasPreview::set_snap_to_canvas_bounds);
+    add_snap_to_action(QStringLiteral("Spacing / Alignment"), true, &CanvasPreview::set_snap_to_spacing);
+
     auto *help_menu = menu_bar->addMenu(obsgs_tr("OBSTitles.HelpMenu"));
     QAction *about_action = help_menu->addAction(obs_icon("about.svg"), obsgs_tr("OBSTitles.About"));
     connect(about_action, &QAction::triggered, this, &TitleEditor::show_about);
@@ -2932,6 +2959,56 @@ void CanvasPreview::refresh_preview()
     update();
 }
 
+
+void CanvasPreview::set_snap_enabled(bool enabled)
+{
+    snap_settings_.enabled = enabled;
+    if (!enabled) clear_snap_feedback();
+    update();
+}
+
+void CanvasPreview::set_snap_to_guides(bool enabled)
+{
+    snap_settings_.guides = enabled;
+    if (!enabled) clear_snap_feedback();
+    update();
+}
+
+void CanvasPreview::set_snap_to_grid(bool enabled)
+{
+    snap_settings_.grid = enabled;
+    if (!enabled) clear_snap_feedback();
+    update();
+}
+
+void CanvasPreview::set_snap_to_object_edges(bool enabled)
+{
+    snap_settings_.object_edges = enabled;
+    if (!enabled) clear_snap_feedback();
+    update();
+}
+
+void CanvasPreview::set_snap_to_object_centers(bool enabled)
+{
+    snap_settings_.object_centers = enabled;
+    if (!enabled) clear_snap_feedback();
+    update();
+}
+
+void CanvasPreview::set_snap_to_canvas_bounds(bool enabled)
+{
+    snap_settings_.canvas_bounds = enabled;
+    if (!enabled) clear_snap_feedback();
+    update();
+}
+
+void CanvasPreview::set_snap_to_spacing(bool enabled)
+{
+    snap_settings_.spacing = enabled;
+    if (!enabled) clear_snap_feedback();
+    update();
+}
+
 void CanvasPreview::set_zoom_percent(int percent)
 {
     int clamped = std::clamp(percent, 5, 1600);
@@ -3181,6 +3258,7 @@ void CanvasPreview::begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers)
     drag_current_view_ = view_pt;
     marquee_base_selection_ = selected_layer_ids_;
     drag_changed_ = false;
+    clear_snap_feedback();
 }
 
 void CanvasPreview::update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers)
@@ -3326,6 +3404,164 @@ bool CanvasPreview::nudge_selected_layers(double dx, double dy)
     return true;
 }
 
+
+void CanvasPreview::clear_snap_feedback()
+{
+    if (snap_feedback_.empty()) return;
+    snap_feedback_.clear();
+    update();
+}
+
+void CanvasPreview::add_snap_feedback(bool x_axis, double value, const QString &label)
+{
+    snap_feedback_.push_back({x_axis, value, label});
+}
+
+void CanvasPreview::collect_snap_targets(bool x_axis, std::vector<double> &targets, std::vector<QString> &labels) const
+{
+    if (!title_) return;
+    auto add = [&](double value, const QString &label) {
+        if (!std::isfinite(value)) return;
+        targets.push_back(value);
+        labels.push_back(label);
+    };
+
+    if (snap_settings_.canvas_bounds) {
+        const double size = x_axis ? title_->width : title_->height;
+        add(0.0, QStringLiteral("Canvas"));
+        add(size * 0.5, QStringLiteral("Canvas center"));
+        add(size, QStringLiteral("Canvas"));
+    }
+
+    if (snap_settings_.guides) {
+        const double size = x_axis ? title_->width : title_->height;
+        add(size * OBS_ACTION_SAFE_PERCENT, QStringLiteral("Action safe"));
+        add(size * (1.0 - OBS_ACTION_SAFE_PERCENT), QStringLiteral("Action safe"));
+        add(size * OBS_GRAPHICS_SAFE_PERCENT, QStringLiteral("Title safe"));
+        add(size * (1.0 - OBS_GRAPHICS_SAFE_PERCENT), QStringLiteral("Title safe"));
+    }
+
+    if (snap_settings_.grid) {
+        const double size = x_axis ? title_->width : title_->height;
+        constexpr double grid = 10.0;
+        for (double v = 0.0; v <= size + 0.01; v += grid)
+            add(v, QStringLiteral("Grid"));
+    }
+
+    if (!snap_settings_.object_edges && !snap_settings_.object_centers) return;
+
+    for (const auto &layer : title_->layers) {
+        if (!layer || !layer->visible) continue;
+        if (playhead_ < layer->in_time || playhead_ > layer->out_time) continue;
+        if (std::find(selected_layer_ids_.begin(), selected_layer_ids_.end(), layer->id) != selected_layer_ids_.end())
+            continue;
+        QRectF bounds = layer_canvas_bounds(*layer);
+        if (!bounds.isValid() || bounds.isEmpty()) continue;
+        if (snap_settings_.object_edges) {
+            add(x_axis ? bounds.left() : bounds.top(), QStringLiteral("Object edge"));
+            add(x_axis ? bounds.right() : bounds.bottom(), QStringLiteral("Object edge"));
+        }
+        if (snap_settings_.object_centers)
+            add(x_axis ? bounds.center().x() : bounds.center().y(), QStringLiteral("Object center"));
+    }
+}
+
+void CanvasPreview::collect_spacing_targets(bool x_axis, std::vector<double> &targets, std::vector<QString> &labels) const
+{
+    if (!title_ || !snap_settings_.spacing) return;
+
+    struct Span { double start; double end; };
+    std::vector<Span> spans;
+    for (const auto &layer : title_->layers) {
+        if (!layer || !layer->visible) continue;
+        if (playhead_ < layer->in_time || playhead_ > layer->out_time) continue;
+        if (std::find(selected_layer_ids_.begin(), selected_layer_ids_.end(), layer->id) != selected_layer_ids_.end())
+            continue;
+        QRectF bounds = layer_canvas_bounds(*layer);
+        if (!bounds.isValid() || bounds.isEmpty()) continue;
+        spans.push_back({x_axis ? bounds.left() : bounds.top(), x_axis ? bounds.right() : bounds.bottom()});
+    }
+    if (spans.empty()) return;
+    std::sort(spans.begin(), spans.end(), [](const Span &a, const Span &b) { return a.start < b.start; });
+
+    std::vector<double> gaps;
+    for (size_t i = 1; i < spans.size(); ++i) {
+        double gap = spans[i].start - spans[i - 1].end;
+        if (gap >= 0.0) gaps.push_back(gap);
+    }
+    if (gaps.empty()) gaps.push_back(0.0);
+
+    auto add = [&](double value) {
+        if (!std::isfinite(value)) return;
+        targets.push_back(value);
+        labels.push_back(QStringLiteral("Spacing"));
+    };
+    for (const Span &span : spans) {
+        for (double gap : gaps) {
+            add(span.start - gap);
+            add(span.end + gap);
+        }
+    }
+}
+
+QPointF CanvasPreview::snap_delta_for_bounds(const QRectF &start_bounds, const QPointF &delta, bool snap_x, bool snap_y)
+{
+    if (!title_ || !snap_settings_.enabled || !start_bounds.isValid()) {
+        clear_snap_feedback();
+        return delta;
+    }
+
+    snap_feedback_.clear();
+    QPointF snapped_delta = delta;
+    const double tolerance = 6.0 / std::max(0.1, view_scale());
+
+    auto snap_axis = [&](bool x_axis) {
+        std::vector<double> targets;
+        std::vector<QString> labels;
+        collect_snap_targets(x_axis, targets, labels);
+        collect_spacing_targets(x_axis, targets, labels);
+        if (targets.empty()) return;
+
+        const double offset = x_axis ? snapped_delta.x() : snapped_delta.y();
+        const double start_min = x_axis ? start_bounds.left() : start_bounds.top();
+        const double start_center = x_axis ? start_bounds.center().x() : start_bounds.center().y();
+        const double start_max = x_axis ? start_bounds.right() : start_bounds.bottom();
+        const double points[] = {start_min + offset, start_center + offset, start_max + offset};
+        double best_adjust = 0.0;
+        double best_distance = tolerance + 1.0;
+        double best_target = 0.0;
+        QString best_label;
+        for (size_t i = 0; i < targets.size(); ++i) {
+            for (double point : points) {
+                double adjust = targets[i] - point;
+                double distance = std::abs(adjust);
+                if (distance < best_distance) {
+                    best_distance = distance;
+                    best_adjust = adjust;
+                    best_target = targets[i];
+                    best_label = labels[i];
+                }
+            }
+        }
+        if (best_distance <= tolerance) {
+            if (x_axis) snapped_delta.setX(snapped_delta.x() + best_adjust);
+            else snapped_delta.setY(snapped_delta.y() + best_adjust);
+            add_snap_feedback(x_axis, best_target, best_label);
+        }
+    };
+
+    if (snap_x) snap_axis(true);
+    if (snap_y) snap_axis(false);
+    return snapped_delta;
+}
+
+QPointF CanvasPreview::snap_canvas_point(const QPointF &canvas_pt, bool snap_x, bool snap_y)
+{
+    QRectF point_bounds(canvas_pt, QSizeF(0.0, 0.0));
+    QPointF delta = snap_delta_for_bounds(point_bounds, QPointF(0.0, 0.0), snap_x, snap_y);
+    return canvas_pt + delta;
+}
+
 void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers)
 {
     if (drag_mode_ == DragMode::Marquee) {
@@ -3350,6 +3586,7 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
                 if (std::abs(delta.x()) >= std::abs(delta.y())) delta.setY(0.0);
                 else delta.setX(0.0);
             }
+            delta = snap_delta_for_bounds(drag_start_selection_bounds_, delta, true, true);
             for (const auto &state : drag_layer_states_) {
                 auto layer = title_->find_layer(state.id);
                 if (!layer || layer->locked) continue;
@@ -3366,6 +3603,7 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
             bool resize_right = drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeE;
             bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
             bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
+            canvas = snap_canvas_point(canvas, resize_left || resize_right, resize_top || resize_bottom);
             if (resize_left) next.setLeft(std::min(canvas.x(), start.right()));
             if (resize_right) next.setRight(std::max(canvas.x(), start.left()));
             if (resize_top) next.setTop(std::min(canvas.y(), start.bottom()));
@@ -3409,9 +3647,11 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
             else
                 delta.setX(0.0);
         }
+        delta = snap_delta_for_bounds(drag_start_selection_bounds_, delta, true, true);
         set_animated_value(layer->pos_x, lt, drag_start_x_ + delta.x());
         set_animated_value(layer->pos_y, lt, drag_start_y_ + delta.y());
     } else if (drag_mode_ == DragMode::Origin) {
+        clear_snap_feedback();
         double w = std::max(1.0f, drag_start_w_);
         double h = std::max(1.0f, drag_start_h_);
         layer->origin_x = (float)std::clamp(drag_start_origin_x_ + delta.x() / w, 0.0, 1.0);
@@ -3421,16 +3661,16 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
         set_animated_value(layer->pos_x, lt, drag_start_x_ + delta.x());
         set_animated_value(layer->pos_y, lt, drag_start_y_ + delta.y());
     } else {
+        bool resize_left = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeW;
+        bool resize_right = drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeE;
+        bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
+        bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
+        canvas = snap_canvas_point(canvas, resize_left || resize_right, resize_top || resize_bottom);
         QPointF local = canvas_to_layer(*layer, canvas);
         double left = -drag_start_origin_x_ * drag_start_w_;
         double right = (1.0 - drag_start_origin_x_) * drag_start_w_;
         double top = -drag_start_origin_y_ * drag_start_h_;
         double bottom = (1.0 - drag_start_origin_y_) * drag_start_h_;
-
-        bool resize_left = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeW;
-        bool resize_right = drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeE;
-        bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
-        bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
 
         if (resize_left) left = std::min(local.x(), right);
         else if (resize_right) right = std::max(local.x(), left);
@@ -3690,6 +3930,29 @@ void CanvasPreview::paintEvent(QPaintEvent *)
         draw_guide(OBS_GRAPHICS_SAFE_PERCENT, QColor(255, 220, 0, 190));
     }
 
+    if (!snap_feedback_.empty()) {
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, false);
+        QPen guide_pen(QColor(0, 220, 255, 235), 1.0, Qt::DashLine);
+        guide_pen.setDashPattern({5.0, 3.0});
+        p.setPen(guide_pen);
+        p.setBrush(QColor(0, 20, 30, 180));
+        for (const auto &feedback : snap_feedback_) {
+            if (feedback.x_axis) {
+                double x = canvas_to_view(QPointF(feedback.value, 0.0)).x();
+                p.drawLine(QPointF(x, oy), QPointF(x, oy + dh));
+                if (!feedback.label.isEmpty())
+                    p.drawText(QRectF(x + 5.0, oy + 5.0, 120.0, 18.0), feedback.label);
+            } else {
+                double y = canvas_to_view(QPointF(0.0, feedback.value)).y();
+                p.drawLine(QPointF(ox, y), QPointF(ox + dw, y));
+                if (!feedback.label.isEmpty())
+                    p.drawText(QRectF(ox + 5.0, y + 5.0, 120.0, 18.0), feedback.label);
+            }
+        }
+        p.restore();
+    }
+
     auto layers = selected_layers();
     double handle = 8.0 / std::max(0.1, scale);
 
@@ -3930,6 +4193,7 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
         drag_changed_ = false;
         alt_duplicate_pending_ = false;
         alt_duplicate_done_ = false;
+        clear_snap_feedback();
         unsetCursor();
         update();
         ev->accept();
@@ -3942,6 +4206,7 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
     alt_duplicate_pending_ = false;
     alt_duplicate_done_ = false;
     drag_layer_states_.clear();
+    clear_snap_feedback();
     unsetCursor();
     if (changed)
         emit layer_geometry_changed();

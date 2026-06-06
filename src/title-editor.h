@@ -186,6 +186,13 @@ public:
     void set_selected_layer(const std::string &lid);
     void set_selected_layers(const std::vector<std::string> &ids);
     void set_safe_guides_visible(bool visible);
+    void set_snap_enabled(bool enabled);
+    void set_snap_to_guides(bool enabled);
+    void set_snap_to_grid(bool enabled);
+    void set_snap_to_object_edges(bool enabled);
+    void set_snap_to_object_centers(bool enabled);
+    void set_snap_to_canvas_bounds(bool enabled);
+    void set_snap_to_spacing(bool enabled);
     void refresh_preview();
     void set_zoom_percent(int percent);
     int zoom_percent() const;
@@ -230,6 +237,12 @@ private:
     void update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
     bool duplicate_selected_layers_for_drag();
     bool nudge_selected_layers(double dx, double dy);
+    QPointF snap_delta_for_bounds(const QRectF &start_bounds, const QPointF &delta, bool snap_x, bool snap_y);
+    QPointF snap_canvas_point(const QPointF &canvas_pt, bool snap_x, bool snap_y);
+    void collect_snap_targets(bool x_axis, std::vector<double> &targets, std::vector<QString> &labels) const;
+    void collect_spacing_targets(bool x_axis, std::vector<double> &targets, std::vector<QString> &labels) const;
+    void clear_snap_feedback();
+    void add_snap_feedback(bool x_axis, double value, const QString &label);
     void apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
 
     std::shared_ptr<Title> title_;
@@ -247,6 +260,23 @@ private:
     bool dirty_ = true;
     bool safe_guides_visible_ = false;
     int checkerboard_pattern_ = 1;
+
+    struct SnapSettings {
+        bool enabled = true;
+        bool guides = true;
+        bool grid = false;
+        bool object_edges = true;
+        bool object_centers = true;
+        bool canvas_bounds = true;
+        bool spacing = true;
+    };
+    struct SnapFeedback {
+        bool x_axis = true;
+        double value = 0.0;
+        QString label;
+    };
+    SnapSettings snap_settings_;
+    std::vector<SnapFeedback> snap_feedback_;
 
     DragMode drag_mode_ = DragMode::None;
     bool drag_changed_ = false;
