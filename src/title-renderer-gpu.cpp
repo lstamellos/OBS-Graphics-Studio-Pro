@@ -153,14 +153,30 @@ static uint32_t eval_background_color(const Layer &layer, double t)
                               layer.background_color, t);
 }
 
+static bool is_text_box_auto_size_layer(const Layer &layer);
+static double natural_text_width(const Layer &layer);
+static double natural_text_height(const Layer &layer, double width);
+
 static double eval_box_width(const Layer &layer, double t)
 {
-    return layer.box_width.is_animated() ? layer.box_width.evaluate(t) : static_cast<double>(layer.rect_width);
+    double width = layer.box_width.is_animated()
+        ? layer.box_width.evaluate(t)
+        : static_cast<double>(layer.rect_width);
+    if (layer.text_box_width_to_text && is_text_box_auto_size_layer(layer))
+        width = std::min(natural_text_width(layer), std::max(1.0, static_cast<double>(layer.max_text_box_width)));
+    return std::max(0.0, width);
 }
 
 static double eval_box_height(const Layer &layer, double t)
 {
-    return layer.box_height.is_animated() ? layer.box_height.evaluate(t) : static_cast<double>(layer.rect_height);
+    double height = layer.box_height.is_animated()
+        ? layer.box_height.evaluate(t)
+        : static_cast<double>(layer.rect_height);
+    if (layer.text_box_height_to_text && is_text_box_auto_size_layer(layer)) {
+        const double width = eval_box_width(layer, t);
+        height = std::min(natural_text_height(layer, width), std::max(1.0, static_cast<double>(layer.max_text_box_height)));
+    }
+    return std::max(0.0, height);
 }
 
 static double eval_origin_x(const Layer &layer, double t)
@@ -488,6 +504,66 @@ static QString overflow_layout_text(const QString &text, const Layer &layer)
     return text;
 }
 
+static bool is_text_box_auto_size_layer(const Layer &layer)
+{
+    return layer.type == LayerType::Text || layer.type == LayerType::Clock;
+}
+
+static double natural_text_width(const Layer &layer)
+{
+    if (!is_text_box_auto_size_layer(layer)) return 1.0;
+    QFontMetricsF metrics(font_for_layer(layer));
+    QString text = display_text_for_style(layer);
+    if (layer.text_overflow_mode == 2)
+        text = overflow_layout_text(text, layer);
+
+    double width = 1.0;
+    for (const QString &line : text.split('\n'))
+        width = std::max(width, static_cast<double>(metrics.horizontalAdvance(line)));
+    return std::ceil(width);
+}
+
+static double natural_text_height(const Layer &layer, double width)
+{
+    if (!is_text_box_auto_size_layer(layer)) return 1.0;
+    QFont font = font_for_layer(layer);
+    QFontMetricsF metrics(font);
+    QString text = display_text_for_style(layer);
+    if (layer.text_overflow_mode == 2)
+        text = overflow_layout_text(text, layer);
+
+    QTextOption option;
+    option.setWrapMode(layer.text_overflow_mode == 0
+                           ? QTextOption::WrapAtWordBoundaryOrAnywhere
+                           : QTextOption::NoWrap);
+
+    double total_height = 0.0;
+    const double leading = std::clamp((double)layer.text_leading, -200.0, 500.0);
+    bool first_line = true;
+    for (const QString &paragraph : text.split('\n')) {
+        if (paragraph.isEmpty()) {
+            if (!first_line) total_height += leading;
+            total_height += metrics.lineSpacing();
+            first_line = false;
+            continue;
+        }
+        QTextLayout layout(paragraph, font);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            line.setLineWidth(layer.text_overflow_mode == 0 ? std::max(1.0, width) : 1000000.0);
+            if (!first_line) total_height += leading;
+            total_height += line.height();
+            first_line = false;
+            if (layer.text_overflow_mode != 0) break;
+        }
+        layout.endLayout();
+    }
+    return std::ceil(std::max(1.0, total_height));
+}
+
 static double horizontal_fit_scale(const QFont &font, const QRectF &rect,
                                    const QString &text, const Layer &layer)
 {
@@ -799,6 +875,22 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
     return asset;
 }
 
+static QImage image_with_opacity(const QImage &image, double opacity)
+{
+    const double alpha = std::clamp(opacity, 0.0, 1.0);
+    QImage result = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    if (alpha >= 0.9999)
+        return result;
+    result.detach();
+    QPainter painter(&result);
+    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    QColor mask(Qt::black);
+    mask.setAlphaF(alpha);
+    painter.fillRect(result.rect(), mask);
+    painter.end();
+    return result;
+}
+
 static void vec4_from_argb(uint32_t argb, double opacity, vec4 &out)
 {
     out.x = static_cast<float>(((argb >> 16) & 0xFF) / 255.0);
@@ -1009,12 +1101,14 @@ GpuTitlePlan ObsGpuRenderPipeline::build_migration_plan(const Title &title) cons
     return plan;
 }
 
-GpuTextureFrame *ObsGpuRenderPipeline::texture_for_image_layer(const Layer &layer)
+GpuTextureFrame *ObsGpuRenderPipeline::texture_for_image_layer(const Layer &layer, double opacity)
 {
     if (layer.image_path.empty())
         return nullptr;
 
-    auto existing = image_textures_.find(layer.image_path);
+    const int opacity_key = std::clamp(static_cast<int>(std::round(opacity * 255.0)), 0, 255);
+    const std::string key = layer.image_path + "#opacity=" + std::to_string(opacity_key);
+    auto existing = image_textures_.find(key);
     if (existing != image_textures_.end())
         return existing->second.get();
 
@@ -1022,7 +1116,7 @@ GpuTextureFrame *ObsGpuRenderPipeline::texture_for_image_layer(const Layer &laye
     if (image.isNull())
         return nullptr;
 
-    image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    image = image_with_opacity(image, opacity_key / 255.0);
     auto texture = std::make_unique<GpuTextureFrame>();
     if (!texture->ensure_dynamic_bgra(static_cast<uint32_t>(image.width()), static_cast<uint32_t>(image.height())) ||
         !texture->upload_bgra_asset(image.constBits(), static_cast<uint32_t>(image.bytesPerLine()))) {
@@ -1031,11 +1125,11 @@ GpuTextureFrame *ObsGpuRenderPipeline::texture_for_image_layer(const Layer &laye
     }
 
     GpuTextureFrame *raw = texture.get();
-    image_textures_.emplace(layer.image_path, std::move(texture));
+    image_textures_.emplace(key, std::move(texture));
     return raw;
 }
 
-GpuTextureFrame *ObsGpuRenderPipeline::texture_for_raster_layer(const Layer &layer, const LayerAsset &asset)
+GpuTextureFrame *ObsGpuRenderPipeline::texture_for_raster_layer(const Layer &layer, const LayerAsset &asset, double opacity)
 {
     if (asset.image.isNull() || asset.width <= 0.0 || asset.height <= 0.0)
         return nullptr;
@@ -1045,12 +1139,13 @@ GpuTextureFrame *ObsGpuRenderPipeline::texture_for_raster_layer(const Layer &lay
     if (!slot)
         slot = std::make_unique<GpuTextureFrame>();
 
-    if (!slot->ensure_dynamic_bgra(static_cast<uint32_t>(asset.image.width()), static_cast<uint32_t>(asset.image.height()))) {
+    QImage upload_image = image_with_opacity(asset.image, opacity);
+    if (!slot->ensure_dynamic_bgra(static_cast<uint32_t>(upload_image.width()), static_cast<uint32_t>(upload_image.height()))) {
         slot->reset();
         return nullptr;
     }
 
-    if (!slot->upload_bgra_asset(asset.image.constBits(), static_cast<uint32_t>(asset.image.bytesPerLine())))
+    if (!slot->upload_bgra_asset(upload_image.constBits(), static_cast<uint32_t>(upload_image.bytesPerLine())))
         return nullptr;
 
     return slot.get();
@@ -1086,19 +1181,19 @@ bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
         case LayerType::Clock:
         case LayerType::Ticker: {
             LayerAsset asset = rasterize_layer_asset(*layer, lt);
-            GpuTextureFrame *texture = texture_for_raster_layer(*layer, asset);
+            GpuTextureFrame *texture = texture_for_raster_layer(*layer, asset, alpha);
             if (texture)
                 draw_texture_quad(texture->texture(), px, py, asset.width, asset.height,
-                                  asset.origin_x, asset.origin_y, sx, sy, rot, alpha);
+                                  asset.origin_x, asset.origin_y, sx, sy, rot, 1.0);
             break;
         }
         case LayerType::Image: {
-            GpuTextureFrame *texture = texture_for_image_layer(*layer);
+            GpuTextureFrame *texture = texture_for_image_layer(*layer, alpha);
             if (!texture)
                 break;
             const double w = eval_box_width(*layer, lt) > 0.0 ? eval_box_width(*layer, lt) : texture->width();
             const double h = eval_box_height(*layer, lt) > 0.0 ? eval_box_height(*layer, lt) : texture->height();
-            draw_texture_quad(texture->texture(), px, py, w, h, origin_x, origin_y, sx, sy, rot, alpha);
+            draw_texture_quad(texture->texture(), px, py, w, h, origin_x, origin_y, sx, sy, rot, 1.0);
             break;
         }
         default:
