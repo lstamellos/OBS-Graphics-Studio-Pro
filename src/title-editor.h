@@ -57,6 +57,9 @@ class PropertiesPanel;
 class TitlePropertiesPanel;
 class QEvent;
 class QKeyEvent;
+class QPaintEvent;
+class QMouseEvent;
+class QWheelEvent;
 class QContextMenuEvent;
 class QResizeEvent;
 class QCloseEvent;
@@ -181,7 +184,7 @@ private:
  *  Keep this as QWidget: QOpenGLWidget is an optional Qt module in OBS
  *  plugin dependency bundles and can break Windows builds/plugin loading.
  * ══════════════════════════════════════════════════════════════════ */
-class CanvasPreview : public QOpenGLWidget {
+class CanvasPreview : public QWidget {
     Q_OBJECT
 
 public:
