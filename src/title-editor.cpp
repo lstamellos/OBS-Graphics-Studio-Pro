@@ -5766,8 +5766,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     rect_box_->setStyleSheet(section_style);
     auto *rfl = new QFormLayout(rect_box_);
     style_form(rfl);
-    spn_layer_w_ = mk_dspin(1.0, 9999.0, 10.0);
-    spn_layer_h_ = mk_dspin(1.0, 9999.0, 10.0);
+    spn_layer_w_ = mk_dspin(0.0, 9999.0, 10.0);
+    spn_layer_h_ = mk_dspin(0.0, 9999.0, 10.0);
     chk_text_box_width_to_text_ = new QCheckBox(obsgs_tr("OBSTitles.TextBoxWidthToText"), inner);
     chk_text_box_height_to_text_ = new QCheckBox(obsgs_tr("OBSTitles.TextBoxHeightToText"), inner);
     style_checkbox(chk_text_box_width_to_text_);
@@ -5930,6 +5930,87 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         if (spn_max_text_box_height_)
             spn_max_text_box_height_->setEnabled(chk_text_box_height_to_text_ && chk_text_box_height_to_text_->isChecked());
     };
+    auto install_delete_all_keyframes_menu =
+        [this, can_edit, emit_change](QPushButton *button, auto props_for_layer) {
+            if (!button) return;
+            button->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(button, &QPushButton::customContextMenuRequested,
+                    this, [this, button, props_for_layer, can_edit, emit_change](const QPoint &pos) {
+                        if (!layer_) return;
+                        std::vector<AnimatedProperty *> props = props_for_layer();
+                        bool has_keyframes = false;
+                        for (auto *prop : props) {
+                            if (prop && prop->is_animated()) {
+                                has_keyframes = true;
+                                break;
+                            }
+                        }
+
+                        QMenu menu(button);
+                        menu.setStyleSheet("QMenu{color:#ddd;background:#252525;border:1px solid #3a3a3a;}"
+                                           "QMenu::item{padding:5px 22px;}"
+                                           "QMenu::item:selected{background:#3b4f64;}"
+                                           "QMenu::item:disabled{color:#666;}");
+                        QAction *delete_all = menu.addAction(obsgs_tr("OBSTitles.DeleteAllKeyframes"));
+                        delete_all->setEnabled(can_edit() && has_keyframes);
+                        if (menu.exec(button->mapToGlobal(pos)) != delete_all || !can_edit()) return;
+
+                        bool changed = false;
+                        for (auto *prop : props) {
+                            if (!prop || prop->keyframes.empty()) continue;
+                            prop->keyframes.clear();
+                            changed = true;
+                        }
+                        if (!changed) return;
+                        load_values();
+                        emit_change();
+                    });
+        };
+    auto install_prop_delete_all = [&](QPushButton *button, AnimatedProperty Layer::*prop) {
+        install_delete_all_keyframes_menu(button, [this, prop]() {
+            return layer_ ? std::vector<AnimatedProperty *>{&(layer_.get()->*prop)}
+                          : std::vector<AnimatedProperty *>{};
+        });
+    };
+    auto install_group_delete_all = [&](QPushButton *button, std::initializer_list<AnimatedProperty Layer::*> props) {
+        std::vector<AnimatedProperty Layer::*> prop_members(props);
+        install_delete_all_keyframes_menu(button, [this, prop_members]() {
+            std::vector<AnimatedProperty *> result;
+            if (!layer_) return result;
+            result.reserve(prop_members.size());
+            for (auto prop : prop_members)
+                result.push_back(&(layer_.get()->*prop));
+            return result;
+        });
+    };
+
+    install_prop_delete_all(btn_kf_pos_x_, &Layer::pos_x);
+    install_prop_delete_all(btn_kf_pos_y_, &Layer::pos_y);
+    install_prop_delete_all(btn_kf_rotation_, &Layer::rotation);
+    install_prop_delete_all(btn_kf_opacity_, &Layer::opacity);
+    install_prop_delete_all(btn_kf_origin_x_, &Layer::origin_x_prop);
+    install_prop_delete_all(btn_kf_origin_y_, &Layer::origin_y_prop);
+    install_prop_delete_all(btn_kf_width_, &Layer::box_width);
+    install_prop_delete_all(btn_kf_height_, &Layer::box_height);
+    install_group_delete_all(btn_kf_text_color_, {&Layer::text_color_a, &Layer::text_color_r,
+                                                  &Layer::text_color_g, &Layer::text_color_b});
+    install_group_delete_all(btn_kf_fill_color_, {&Layer::fill_color_a, &Layer::fill_color_r,
+                                                  &Layer::fill_color_g, &Layer::fill_color_b});
+    install_prop_delete_all(btn_kf_background_enabled_, &Layer::background_enabled_prop);
+    install_group_delete_all(btn_kf_background_color_, {&Layer::background_color_a, &Layer::background_color_r,
+                                                        &Layer::background_color_g, &Layer::background_color_b});
+    install_prop_delete_all(btn_kf_background_opacity_, &Layer::background_opacity_prop);
+    install_prop_delete_all(btn_kf_background_padding_x_, &Layer::background_padding_x_prop);
+    install_prop_delete_all(btn_kf_background_padding_y_, &Layer::background_padding_y_prop);
+    install_prop_delete_all(btn_kf_background_corner_, &Layer::background_corner_radius_prop);
+    install_prop_delete_all(btn_kf_shadow_enabled_, &Layer::shadow_enabled_prop);
+    install_group_delete_all(btn_kf_shadow_color_, {&Layer::shadow_color_a, &Layer::shadow_color_r,
+                                                    &Layer::shadow_color_g, &Layer::shadow_color_b});
+    install_prop_delete_all(btn_kf_shadow_opacity_, &Layer::shadow_opacity_prop);
+    install_prop_delete_all(btn_kf_shadow_distance_, &Layer::shadow_distance_prop);
+    install_prop_delete_all(btn_kf_shadow_angle_, &Layer::shadow_angle_prop);
+    install_prop_delete_all(btn_kf_shadow_blur_, &Layer::shadow_blur_prop);
+    install_prop_delete_all(btn_kf_shadow_spread_, &Layer::shadow_spread_prop);
 
     connect(spn_px_,       QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, local_time, emit_change](double v){
@@ -6230,7 +6311,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                 double old_h = eval_box_height(*layer_, t);
                 layer_->rect_width = (float)v;
                 set_animated_value(layer_->box_width, t, v);
-                if (layer_->type == LayerType::Image && layer_->lock_aspect_ratio && old_h > 0.0) {
+                if (layer_->type == LayerType::Image && layer_->lock_aspect_ratio && old_w > 0.0) {
                     layer_->rect_height = (float)(v * old_h / old_w);
                     set_animated_value(layer_->box_height, t, layer_->rect_height);
                     QSignalBlocker block(spn_layer_h_);
@@ -6609,8 +6690,8 @@ void PropertiesPanel::load_values()
         if (cmb_outline_join_) cmb_outline_join_->setCurrentIndex(1);
         if (cmb_outline_position_) cmb_outline_position_->setCurrentIndex(1);
         if (chk_outline_antialias_) chk_outline_antialias_->setChecked(true);
-        spn_layer_w_->setValue(1.0);
-        spn_layer_h_->setValue(1.0);
+        spn_layer_w_->setValue(0.0);
+        spn_layer_h_->setValue(0.0);
         spn_rect_corner_->setValue(0.0);
         spn_size_->setValue(72);
         if (cmb_font_style_) populate_font_style_combo(cmb_font_style_, cmb_font_->currentText(), QStringLiteral("Regular"));
