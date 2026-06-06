@@ -16,7 +16,7 @@ OBS-Graphics-Studio-Pro/
 └── src/
     ├── plugin-main.h / .cpp   ← OBS module entry point
     ├── title-data.h  / .cpp   ← Data model (Title, Layer, Keyframe) + JSON persistence
-    ├── title-source.h / .cpp  ← OBS source: Cairo renderer → gs_texture
+    ├── title-source.h / .cpp  ← OBS source: GPU renderer via libobs gs_*
     ├── title-dock.h  / .cpp   ← OBS Dock: title list panel
     └── title-editor.h / .cpp  ← After Effects–style editor (Canvas + LayerStack + Timeline + Properties)
 ```
@@ -25,10 +25,15 @@ OBS-Graphics-Studio-Pro/
 
 | Component | OBS Integration | Purpose |
 |---|---|---|
-| `TitleSource` | `obs_source_type INPUT` | Renders a title to the OBS video mix per-frame via Cairo → `gs_texture` |
+| `TitleSource` | `obs_source_type INPUT` | Renders a title to the OBS video mix through an OBS-native GPU pipeline using libobs `gs_*` passes |
+| `GpuTextureFrame` / `ObsGpuRenderPipeline` | libobs `gs_*` graphics | Owns GPU asset textures, text/shape style atlases, draw passes, effects, transforms, and per-layer GPU migration plans |
 | `TitleDock` | `obs_frontend_add_dock()` | Floating/dockable title list with blank-title creation, Graphics Studio-style templates, and scene-add button |
 | `TitleEditor` | `QDialog` (non-modal) | Full AE-style editor with canvas, layer stack, timeline, properties |
 | `TitleDataStore` | Singleton | Owns all `Title` objects; serialises to `obs-graphics-studio-pro/titles.json` |
+
+### GPU Rendering Transition
+
+A structured rendering audit and migration roadmap is maintained in [`docs/rendering-gpu-transition.md`](docs/rendering-gpu-transition.md). The live OBS source path now routes drawing through an OBS-compatible GPU pipeline abstraction; legacy CPU 2-D raster composition is not used for source rendering.
 
 ---
 
@@ -37,9 +42,7 @@ OBS-Graphics-Studio-Pro/
 | Library | Purpose |
 |---|---|
 | **OBS Studio** (libobs + obs-frontend-api) | Plugin API, graphics, frontend dock |
-| **Qt 5.15+ or Qt 6** | All UI widgets |
-| **Cairo** | CPU-side 2D compositing for source rendering |
-| **Pango + PangoCairo** | Font layout and text rendering |
+| **Qt 5.15+ or Qt 6** | UI widgets, Qt OpenGL editor preview, image/SVG asset ingestion |
 | **nlohmann/json** | JSON serialisation (fetched automatically by CMake) |
 
 ---
@@ -53,8 +56,7 @@ OBS-Graphics-Studio-Pro/
 sudo apt install \
   cmake ninja-build \
   libobs-dev obs-frontend-api-dev \
-  qtbase5-dev libqt5widgets5 \
-  libcairo2-dev libpango1.0-dev
+  qtbase5-dev libqt5widgets5
 
 # 2. Configure
 cmake -B build -G Ninja \
@@ -73,7 +75,7 @@ cp -R build/obs-graphics-studio-pro ~/.config/obs-studio/plugins/
 ### macOS
 
 ```bash
-brew install cmake cairo pango pkg-config
+brew install cmake pkg-config
 
 cmake -B build \
   -DCMAKE_BUILD_TYPE=Release \
@@ -88,7 +90,7 @@ The standalone build stages a directly copyable plugin folder at
 
 ### Windows (Visual Studio / vcpkg)
 
-Install Cairo, Pango, and Qt with vcpkg, then point the build at either an OBS
+Install Qt with vcpkg, then point the build at either an OBS
 plugin dependencies package or an OBS Studio install tree with `OBS_SDK_DIR` (or
 `-DOBS_SDK_DIR=...`). The helper script also accepts `-ObsSdkDir` and honours
 `VCPKG_ROOT`, `OBS_SDK_DIR`, `OBS_STUDIO_DIR`, and `OBS_PLUGINS_PATH`. By
@@ -96,7 +98,7 @@ default, the helper installs to OBS' recommended per-machine plugin root,
 `C:\ProgramData\obs-studio\plugins`.
 
 ```bat
-vcpkg install cairo pango[fontconfig] qt6-base
+vcpkg install qt6-base
 
 set OBS_SDK_DIR=C:\path\to\plugin-deps-or-obs-studio
 cmake -B build -G "Visual Studio 17 2022" -A x64 ^
@@ -117,9 +119,6 @@ After install, OBS should see this structure:
 ```text
 C:\ProgramData\obs-studio\plugins\obs-graphics-studio-pro\
 ├── bin\64bit\obs-graphics-studio-pro.dll
-├── bin\64bit\cairo.dll
-├── bin\64bit\pango-1.0.dll
-├── bin\64bit\pangocairo-1.0.dll
 ├── bin\64bit\Qt6Core.dll / Qt5Core.dll
 ├── bin\64bit\Qt6Gui.dll / Qt5Gui.dll
 ├── bin\64bit\Qt6Widgets.dll / Qt5Widgets.dll
@@ -212,7 +211,7 @@ Titles are saved in the OBS profile config directory:
 ### Adding a new layer type
 
 1. Add a value to `enum class LayerType` in `title-data.h`
-2. Add rendering logic in `title-source.cpp → render_title_frame()` (Cairo)
+2. Add a GPU migration plan/pass in `title-renderer-gpu.*` and keep the live OBS source path free of CPU 2-D raster backends
 3. Add Qt paint logic in `title-editor.cpp → CanvasPreview::render_to_pixmap()`
 4. Add UI controls in `PropertiesPanel`
 5. Add JSON serialisation in `layer_to_json()` / `layer_from_json()`
@@ -246,7 +245,7 @@ emit property_changed();
 - [ ] Bezier curve editor overlay (velocity graph)
 - [ ] Template system: save/load title presets
 - [ ] Playlist mode: auto-advance through titles
-- [ ] GPU-accelerated rendering path (replace Cairo with GS effects)
+- [x] OBS-native GPU rendering path foundation (GS effects, layer texture assets, GPU compositing/transforms)
 - [ ] Live preview in dock (thumbnail strip)
 - [ ] Undo/redo stack (Qt QUndoStack)
 - [ ] Multi-select layers
