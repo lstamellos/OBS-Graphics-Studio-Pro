@@ -27,6 +27,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QResizeEvent>
+#include <QCloseEvent>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSplitter>
@@ -1321,14 +1322,28 @@ void TitleEditor::build_ui()
     root->addWidget(toolbar_);
 
     /* ── Title name label bar ── */
-    title_lbl_ = new QLabel("—", this);
+    auto *title_bar = new QWidget(this);
+    title_bar->setStyleSheet("background:#1e1e1e;");
+    auto *title_bar_layout = new QHBoxLayout(title_bar);
+    title_bar_layout->setContentsMargins(0, 3, 0, 3);
+    title_bar_layout->setSpacing(6);
+    title_bar_layout->addStretch(1);
+    dirty_indicator_ = new QLabel(title_bar);
+    dirty_indicator_->setFixedSize(10, 10);
+    dirty_indicator_->setStyleSheet("background:#e33;border-radius:5px;");
+    dirty_indicator_->setToolTip(obsgs_tr("OBSTitles.UnsavedChangesIndicator"));
+    dirty_indicator_->hide();
+    title_bar_layout->addWidget(dirty_indicator_, 0, Qt::AlignVCenter);
+    title_lbl_ = new QLabel("—", title_bar);
     title_lbl_->setAlignment(Qt::AlignCenter);
     QFont tf = title_lbl_->font();
     tf.setPointSize(tf.pointSize() + 1);
     tf.setBold(true);
     title_lbl_->setFont(tf);
-    title_lbl_->setStyleSheet("background:#1e1e1e; color:#fff; padding:3px;");
-    root->addWidget(title_lbl_);
+    title_lbl_->setStyleSheet("color:#fff;");
+    title_bar_layout->addWidget(title_lbl_, 0, Qt::AlignVCenter);
+    title_bar_layout->addStretch(1);
+    root->addWidget(title_bar);
 
     /* ── Upper split: Global Settings | Canvas | Properties ── */
     auto *upper_split = new QSplitter(Qt::Horizontal, this);
@@ -2039,9 +2054,9 @@ void TitleEditor::new_title_contents()
     on_title_modified();
 }
 
-void TitleEditor::save_title()
+bool TitleEditor::save_title()
 {
-    if (!title_) return;
+    if (!title_) return false;
     auto stored = TitleDataStore::instance().get_title(editing_title_id_.empty() ? title_->id : editing_title_id_);
     if (!stored) {
         stored = TitleDataStore::instance().create_title(title_->name);
@@ -2054,7 +2069,9 @@ void TitleEditor::save_title()
     TitleDataStore::instance().notify_change();
     TitleDataStore::instance().save();
     emit title_saved(stored->id);
+    set_dirty(false);
     setWindowTitle(obsgs_tr("OBSTitles.EditorSavedTitle"));
+    return true;
 }
 
 void TitleEditor::save_title_as_new()
@@ -2078,6 +2095,7 @@ void TitleEditor::save_title_as_new()
     TitleDataStore::instance().notify_change();
     TitleDataStore::instance().save();
     emit title_saved(created->id);
+    set_dirty(false);
     setWindowTitle(obsgs_tr("OBSTitles.EditorSavedTitle"));
 }
 
@@ -2161,6 +2179,7 @@ void TitleEditor::open_title(const std::string &tid)
     update_undo_redo_actions();
 
     on_playhead_changed(0.0);
+    set_dirty(false);
 }
 
 std::shared_ptr<Title> TitleEditor::clone_title(const Title &title) const
@@ -2305,7 +2324,7 @@ void TitleEditor::restore_undo_snapshot(int index)
     on_playhead_changed(std::clamp(playhead_, 0.0, title_->duration));
     restoring_undo_ = false;
     update_undo_redo_actions();
-    setWindowTitle(obsgs_tr("OBSTitles.EditorModifiedTitle"));
+    set_dirty(true);
 }
 
 void TitleEditor::update_undo_redo_actions()
@@ -2318,6 +2337,37 @@ void TitleEditor::update_title_bar()
 {
     if (title_)
         title_lbl_->setText(QString::fromStdString(title_->name));
+    if (dirty_indicator_)
+        dirty_indicator_->setVisible(dirty_);
+}
+
+void TitleEditor::set_dirty(bool dirty)
+{
+    dirty_ = dirty;
+    if (dirty_indicator_)
+        dirty_indicator_->setVisible(dirty_);
+    setWindowTitle(obsgs_tr(dirty_ ? "OBSTitles.EditorModifiedTitle" : "OBSTitles.EditorWindowTitle"));
+}
+
+bool TitleEditor::confirm_save_before_close()
+{
+    if (!dirty_)
+        return true;
+
+    QMessageBox dialog(this);
+    dialog.setIcon(QMessageBox::Warning);
+    dialog.setWindowTitle(obsgs_tr("OBSTitles.UnsavedChangesTitle"));
+    dialog.setText(obsgs_tr("OBSTitles.UnsavedChangesPrompt"));
+    dialog.setStandardButtons(QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+    dialog.setDefaultButton(QMessageBox::Yes);
+    dialog.setEscapeButton(QMessageBox::Cancel);
+
+    const auto result = static_cast<QMessageBox::StandardButton>(dialog.exec());
+    if (result == QMessageBox::Yes)
+        return save_title();
+    if (result == QMessageBox::No)
+        return true;
+    return false;
 }
 
 /* ── Transport ───────────────────────────────────────────────────── */
@@ -2556,6 +2606,21 @@ void TitleEditor::keyPressEvent(QKeyEvent *ev)
     QDialog::keyPressEvent(ev);
 }
 
+
+void TitleEditor::closeEvent(QCloseEvent *ev)
+{
+    if (confirm_save_before_close())
+        ev->accept();
+    else
+        ev->ignore();
+}
+
+void TitleEditor::reject()
+{
+    if (confirm_save_before_close())
+        QDialog::reject();
+}
+
 /* ── Signal handlers ─────────────────────────────────────────────── */
 void TitleEditor::on_layer_selected(const std::string &lid)
 {
@@ -2590,7 +2655,7 @@ void TitleEditor::on_playhead_changed(double t)
 
 void TitleEditor::on_title_modified()
 {
-    if (title_) setWindowTitle(obsgs_tr("OBSTitles.EditorModifiedTitle"));
+    if (title_) set_dirty(true);
     canvas_->refresh_preview();
     if (title_props_) title_props_->set_title(title_);
     if (timeline_) timeline_->set_title(title_);
