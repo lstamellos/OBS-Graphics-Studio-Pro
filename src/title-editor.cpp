@@ -1950,6 +1950,50 @@ void TitleEditor::align_selected_to_canvas(int x_mode, int y_mode)
 }
 
 
+void TitleEditor::flip_selected_layers(bool horizontal)
+{
+    if (!title_ || sel_layer_id_.empty()) return;
+    auto ids = layers_ ? layers_->selected_ids() : std::vector<std::string>{sel_layer_id_};
+    if (ids.empty()) return;
+
+    std::shared_ptr<Layer> last_layer;
+    for (const auto &id : ids) {
+        auto layer = title_->find_layer(id);
+        if (!layer || layer->locked) continue;
+        const double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                                     std::max(0.0, layer->out_time - layer->in_time));
+        AnimatedProperty &prop = horizontal ? layer->scale_x : layer->scale_y;
+        const double current = prop.evaluate(lt);
+        set_animated_value(prop, lt, -current);
+        last_layer = layer;
+    }
+
+    if (!last_layer) return;
+    on_title_modified();
+    if (props_) props_->set_layer(last_layer, playhead_);
+}
+
+void TitleEditor::rotate_selected_layers(double degrees)
+{
+    if (!title_ || sel_layer_id_.empty()) return;
+    auto ids = layers_ ? layers_->selected_ids() : std::vector<std::string>{sel_layer_id_};
+    if (ids.empty()) return;
+
+    std::shared_ptr<Layer> last_layer;
+    for (const auto &id : ids) {
+        auto layer = title_->find_layer(id);
+        if (!layer || layer->locked) continue;
+        const double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                                     std::max(0.0, layer->out_time - layer->in_time));
+        set_animated_value(layer->rotation, lt, layer->rotation.evaluate(lt) + degrees);
+        last_layer = layer;
+    }
+
+    if (!last_layer) return;
+    on_title_modified();
+    if (props_) props_->set_layer(last_layer, playhead_);
+}
+
 void TitleEditor::align_selected_layers_horizontal()
 {
     align_selected_layers(1, -1);
@@ -1989,10 +2033,14 @@ void TitleEditor::align_selected_layers(int x_mode, int y_mode)
         double height = eval_box_height(*layer, lt);
         double sx = layer->scale_x.evaluate(lt);
         double sy = layer->scale_y.evaluate(lt);
-        double left = layer->pos_x.evaluate(lt) - layer->origin_x * width * sx;
-        double right = layer->pos_x.evaluate(lt) + (1.0 - layer->origin_x) * width * sx;
-        double top = layer->pos_y.evaluate(lt) - layer->origin_y * height * sy;
-        double bottom = layer->pos_y.evaluate(lt) + (1.0 - layer->origin_y) * height * sy;
+        double x0 = layer->pos_x.evaluate(lt) - layer->origin_x * width * sx;
+        double x1 = layer->pos_x.evaluate(lt) + (1.0 - layer->origin_x) * width * sx;
+        double y0 = layer->pos_y.evaluate(lt) - layer->origin_y * height * sy;
+        double y1 = layer->pos_y.evaluate(lt) + (1.0 - layer->origin_y) * height * sy;
+        double left = std::min(x0, x1);
+        double right = std::max(x0, x1);
+        double top = std::min(y0, y1);
+        double bottom = std::max(y0, y1);
         min_left = std::min(min_left, left);
         max_right = std::max(max_right, right);
         min_top = std::min(min_top, top);
@@ -2030,17 +2078,25 @@ void TitleEditor::align_selected_layers(int x_mode, int y_mode)
     std::shared_ptr<Layer> last_layer;
     for (const auto &entry : entries) {
         if (x_mode >= 0) {
+            const double x0 = -entry.layer->origin_x * entry.width * entry.scale_x;
+            const double x1 = (1.0 - entry.layer->origin_x) * entry.width * entry.scale_x;
+            const double left_offset = std::min(x0, x1);
+            const double right_offset = std::max(x0, x1);
             double next_x = entry.layer->pos_x.evaluate(entry.lt);
-            if (x_mode == 0) next_x = target_left + entry.layer->origin_x * entry.width * entry.scale_x;
-            if (x_mode == 1) next_x = target_hcenter - (0.5 - entry.layer->origin_x) * entry.width * entry.scale_x;
-            if (x_mode == 2) next_x = target_right - (1.0 - entry.layer->origin_x) * entry.width * entry.scale_x;
+            if (x_mode == 0) next_x = target_left - left_offset;
+            if (x_mode == 1) next_x = target_hcenter - (left_offset + right_offset) / 2.0;
+            if (x_mode == 2) next_x = target_right - right_offset;
             set_animated_value(entry.layer->pos_x, entry.lt, next_x);
         }
         if (y_mode >= 0) {
+            const double y0 = -entry.layer->origin_y * entry.height * entry.scale_y;
+            const double y1 = (1.0 - entry.layer->origin_y) * entry.height * entry.scale_y;
+            const double top_offset = std::min(y0, y1);
+            const double bottom_offset = std::max(y0, y1);
             double next_y = entry.layer->pos_y.evaluate(entry.lt);
-            if (y_mode == 0) next_y = target_top + entry.layer->origin_y * entry.height * entry.scale_y;
-            if (y_mode == 1) next_y = target_vcenter - (0.5 - entry.layer->origin_y) * entry.height * entry.scale_y;
-            if (y_mode == 2) next_y = target_bottom - (1.0 - entry.layer->origin_y) * entry.height * entry.scale_y;
+            if (y_mode == 0) next_y = target_top - top_offset;
+            if (y_mode == 1) next_y = target_vcenter - (top_offset + bottom_offset) / 2.0;
+            if (y_mode == 2) next_y = target_bottom - bottom_offset;
             set_animated_value(entry.layer->pos_y, entry.lt, next_y);
         }
         last_layer = entry.layer;
@@ -2053,6 +2109,7 @@ void TitleEditor::build_toolbar()
 {
     toolbar_ = new QToolBar(this);
     toolbar_->setMovable(false);
+    toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly);
     toolbar_->setIconSize(QSize(16, 16));
     toolbar_->setStyleSheet(
         "QToolBar { background:#1a1a1a; border-bottom:1px solid #333; spacing:2px; }"
@@ -2081,10 +2138,11 @@ void TitleEditor::build_toolbar()
     toolbar_->addSeparator();
     auto *align_target = new QToolButton(toolbar_);
     align_target->setIcon(obs_icon("alignment-target.svg"));
-    align_target->setText(obsgs_tr("OBSTitles.AlignmentTargetShort"));
+    align_target->setToolButtonStyle(Qt::ToolButtonIconOnly);
     align_target->setToolTip(obsgs_tr("OBSTitles.AlignmentTarget"));
+    align_target->setAccessibleName(obsgs_tr("OBSTitles.AlignmentTarget"));
     align_target->setPopupMode(QToolButton::InstantPopup);
-    align_target->setStyleSheet("QToolButton{color:#ddd;background:#3a3a3a;border:1px solid #666;border-radius:2px;padding:3px 8px;} QToolButton::menu-indicator{image:none;}");
+    align_target->setStyleSheet("QToolButton{color:#ddd;background:#3a3a3a;border:1px solid #666;border-radius:2px;padding:3px 6px;} QToolButton::menu-indicator{image:none;}");
     auto *align_menu = new QMenu(align_target);
     QAction *target_selection = align_menu->addAction(obsgs_tr("OBSTitles.AlignToSelection"));
     QAction *target_title_safe = align_menu->addAction(obsgs_tr("OBSTitles.AlignToTitleSafeGuides"));
@@ -2132,6 +2190,42 @@ void TitleEditor::build_toolbar()
     add_align_action("align-vertical-center.svg", obsgs_tr("OBSTitles.AlignVerticalCenter"), -1, 1);
     add_align_action("align-bottom.svg", obsgs_tr("OBSTitles.AlignBottom"), -1, 2);
     add_align_action("align-center-artboard.svg", obsgs_tr("OBSTitles.AlignCenterToArtboard"), 1, 1);
+
+    toolbar_->addSeparator();
+    auto add_flip_action = [this](const char *icon_name, const QString &text, bool horizontal) {
+        QAction *action = toolbar_->addAction(obs_icon(icon_name), text);
+        action->setToolTip(text);
+        connect(action, &QAction::triggered, this, [this, horizontal]() {
+            flip_selected_layers(horizontal);
+        });
+        return action;
+    };
+    add_flip_action("flip-horizontal.svg", obsgs_tr("OBSTitles.FlipHorizontal"), true);
+    add_flip_action("flip-vertical.svg", obsgs_tr("OBSTitles.FlipVertical"), false);
+
+    toolbar_->addSeparator();
+    auto *rotation_degrees = new QDoubleSpinBox(toolbar_);
+    rotation_degrees->setRange(-9999.0, 9999.0);
+    rotation_degrees->setDecimals(1);
+    rotation_degrees->setSingleStep(1.0);
+    rotation_degrees->setValue(90.0);
+    rotation_degrees->setSuffix(QStringLiteral("°"));
+    rotation_degrees->setToolTip(obsgs_tr("OBSTitles.RotateDegreesTooltip"));
+    rotation_degrees->setAccessibleName(obsgs_tr("OBSTitles.RotateDegrees"));
+    rotation_degrees->setFixedWidth(78);
+    rotation_degrees->setStyleSheet("QDoubleSpinBox{color:#ddd;background:#202020;border:1px solid #3f3f3f;border-radius:3px;padding:2px 4px;}"
+                                    "QDoubleSpinBox::up-button,QDoubleSpinBox::down-button{width:0;border:none;}");
+    toolbar_->addWidget(rotation_degrees);
+    auto add_rotate_action = [this, rotation_degrees](const char *icon_name, const QString &text, double direction) {
+        QAction *action = toolbar_->addAction(obs_icon(icon_name), text);
+        action->setToolTip(text);
+        connect(action, &QAction::triggered, this, [this, rotation_degrees, direction]() {
+            rotate_selected_layers(rotation_degrees->value() * direction);
+        });
+        return action;
+    };
+    add_rotate_action("rotate-left.svg", obsgs_tr("OBSTitles.RotateLeft"), -1.0);
+    add_rotate_action("rotate-right.svg", obsgs_tr("OBSTitles.RotateRight"), 1.0);
 
     act_safe_guides_ = new QAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"), this);
     act_safe_guides_->setCheckable(true);
@@ -3248,8 +3342,12 @@ QPointF CanvasPreview::canvas_to_layer(const Layer &layer, const QPointF &canvas
     double dy = canvas_pt.y() - py;
     double c = std::cos(rot);
     double ss = std::sin(rot);
-    double sx = std::max(0.0001, layer.scale_x.evaluate(lt));
-    double sy = std::max(0.0001, layer.scale_y.evaluate(lt));
+    auto non_zero_scale = [](double value) {
+        if (std::abs(value) >= 0.0001) return value;
+        return value < 0.0 ? -0.0001 : 0.0001;
+    };
+    double sx = non_zero_scale(layer.scale_x.evaluate(lt));
+    double sy = non_zero_scale(layer.scale_y.evaluate(lt));
     return QPointF((dx * c - dy * ss) / sx,
                    (dx * ss + dy * c) / sy);
 }
@@ -6316,7 +6414,14 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     spn_px_      = mk_dspin(-9999, 9999, 1.0);
     spn_py_      = mk_dspin(-9999, 9999, 1.0);
-    spn_rot_     = mk_dspin(-360,  360,  0.5);
+    spn_scale_x_ = mk_dspin(-10000.0, 10000.0, 1.0);
+    spn_scale_y_ = mk_dspin(-10000.0, 10000.0, 1.0);
+    spn_scale_x_->setSuffix("%");
+    spn_scale_y_->setSuffix("%");
+    chk_scale_lock_ = new QCheckBox(obsgs_tr("OBSTitles.ScaleLock"), inner);
+    chk_scale_lock_->setChecked(true);
+    style_checkbox(chk_scale_lock_);
+    spn_rot_     = mk_dspin(-9999,  9999,  0.5);
     spn_opacity_ = mk_dspin(0.0,   1.0,  0.01);
     spn_origin_x_ = mk_dspin(0.0, 1.0, 0.05);
     spn_origin_y_ = mk_dspin(0.0, 1.0, 0.05);
@@ -6333,12 +6438,17 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     btn_kf_pos_x_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleXKeyframe"));
     btn_kf_pos_y_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleYKeyframe"));
+    btn_kf_scale_x_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleScaleXKeyframe"));
+    btn_kf_scale_y_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleScaleYKeyframe"));
     btn_kf_rotation_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleRotationKeyframe"));
     btn_kf_opacity_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOpacityKeyframe"));
     btn_kf_origin_x_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOriginXKeyframe"));
     btn_kf_origin_y_ = mk_kf_button(obsgs_tr("OBSTitles.ToggleOriginYKeyframe"));
     tfl->addRow(obsgs_tr("OBSTitles.XLabel"),       with_kf(spn_px_, btn_kf_pos_x_));
     tfl->addRow(obsgs_tr("OBSTitles.YLabel"),       with_kf(spn_py_, btn_kf_pos_y_));
+    tfl->addRow(obsgs_tr("OBSTitles.ScaleXLabel"),  with_kf(spn_scale_x_, btn_kf_scale_x_));
+    tfl->addRow(obsgs_tr("OBSTitles.ScaleYLabel"),  with_kf(spn_scale_y_, btn_kf_scale_y_));
+    tfl->addRow(QString(), chk_scale_lock_);
     tfl->addRow(obsgs_tr("OBSTitles.RotationLabel"),with_kf(spn_rot_, btn_kf_rotation_));
     tfl->addRow(obsgs_tr("OBSTitles.OpacityLabel"), with_kf(spn_opacity_, btn_kf_opacity_));
     tfl->addRow(obsgs_tr("OBSTitles.AnchorLabel"), with_kf(cmb_anchor_, mk_kf_button(obsgs_tr("OBSTitles.ToggleAnchorKeyframe"))));
@@ -6816,6 +6926,8 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
 
     install_prop_delete_all(btn_kf_pos_x_, &Layer::pos_x);
     install_prop_delete_all(btn_kf_pos_y_, &Layer::pos_y);
+    install_prop_delete_all(btn_kf_scale_x_, &Layer::scale_x);
+    install_prop_delete_all(btn_kf_scale_y_, &Layer::scale_y);
     install_prop_delete_all(btn_kf_rotation_, &Layer::rotation);
     install_prop_delete_all(btn_kf_opacity_, &Layer::opacity);
     install_prop_delete_all(btn_kf_origin_x_, &Layer::origin_x_prop);
@@ -6849,6 +6961,45 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     connect(spn_py_,       QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, local_time, emit_change](double v){
                 if (can_edit()) { set_animated_value(layer_->pos_y, local_time(), v); emit_change(); }
+            });
+    connect(spn_scale_x_,  QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, local_time, emit_change](double v){
+                if (!can_edit()) return;
+                const double scale = v / 100.0;
+                const double t = local_time();
+                set_animated_value(layer_->scale_x, t, scale);
+                if (layer_->scale_lock) {
+                    QSignalBlocker blocker(spn_scale_y_);
+                    spn_scale_y_->setValue(v);
+                    set_animated_value(layer_->scale_y, t, scale);
+                }
+                emit_change();
+            });
+    connect(spn_scale_y_,  QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, [this, can_edit, local_time, emit_change](double v){
+                if (!can_edit()) return;
+                const double scale = v / 100.0;
+                const double t = local_time();
+                set_animated_value(layer_->scale_y, t, scale);
+                if (layer_->scale_lock) {
+                    QSignalBlocker blocker(spn_scale_x_);
+                    spn_scale_x_->setValue(v);
+                    set_animated_value(layer_->scale_x, t, scale);
+                }
+                emit_change();
+            });
+    connect(chk_scale_lock_, &QCheckBox::toggled,
+            this, [this, can_edit, local_time, emit_change](bool locked) {
+                if (!can_edit()) return;
+                layer_->scale_lock = locked;
+                if (locked) {
+                    const double t = local_time();
+                    const double scale = spn_scale_x_->value() / 100.0;
+                    QSignalBlocker blocker(spn_scale_y_);
+                    spn_scale_y_->setValue(spn_scale_x_->value());
+                    set_animated_value(layer_->scale_y, t, scale);
+                }
+                emit_change();
             });
     connect(spn_rot_,      QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, [this, can_edit, local_time, emit_change](double v){
@@ -7290,6 +7441,42 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         load_values();
         emit_change();
     });
+    connect(btn_kf_scale_x_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        const double t = local_time();
+        if (layer_->scale_lock) {
+            const bool remove = keyframe_at_time(layer_->scale_x, t) || keyframe_at_time(layer_->scale_y, t);
+            if (remove) {
+                remove_keyframe_at(layer_->scale_x, t);
+                remove_keyframe_at(layer_->scale_y, t);
+            } else {
+                add_or_replace_keyframe(layer_->scale_x, t, spn_scale_x_->value() / 100.0);
+                add_or_replace_keyframe(layer_->scale_y, t, spn_scale_y_->value() / 100.0);
+            }
+        } else {
+            toggle_keyframe(layer_->scale_x, t, spn_scale_x_->value() / 100.0);
+        }
+        load_values();
+        emit_change();
+    });
+    connect(btn_kf_scale_y_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
+        if (!can_edit()) return;
+        const double t = local_time();
+        if (layer_->scale_lock) {
+            const bool remove = keyframe_at_time(layer_->scale_x, t) || keyframe_at_time(layer_->scale_y, t);
+            if (remove) {
+                remove_keyframe_at(layer_->scale_x, t);
+                remove_keyframe_at(layer_->scale_y, t);
+            } else {
+                add_or_replace_keyframe(layer_->scale_x, t, spn_scale_x_->value() / 100.0);
+                add_or_replace_keyframe(layer_->scale_y, t, spn_scale_y_->value() / 100.0);
+            }
+        } else {
+            toggle_keyframe(layer_->scale_y, t, spn_scale_y_->value() / 100.0);
+        }
+        load_values();
+        emit_change();
+    });
     connect(btn_kf_rotation_, &QPushButton::clicked, this, [this, can_edit, local_time, emit_change]() {
         if (!can_edit()) return;
         toggle_keyframe(layer_->rotation, local_time(), spn_rot_->value());
@@ -7532,6 +7719,9 @@ void PropertiesPanel::load_values()
         if (spn_char_tracking_) spn_char_tracking_->setValue(0.0);
         if (cmb_kerning_mode_) cmb_kerning_mode_->setCurrentIndex(0);
         if (spn_kerning_value_) spn_kerning_value_->setValue(0.0);
+        if (spn_scale_x_) spn_scale_x_->setValue(100.0);
+        if (spn_scale_y_) spn_scale_y_->setValue(100.0);
+        if (chk_scale_lock_) chk_scale_lock_->setChecked(true);
         if (spn_char_scale_x_) spn_char_scale_x_->setValue(100.0);
         if (spn_char_scale_y_) spn_char_scale_y_->setValue(100.0);
         if (spn_baseline_shift_) spn_baseline_shift_->setValue(0.0);
@@ -7558,8 +7748,9 @@ void PropertiesPanel::load_values()
         if (spn_shadow_angle_) spn_shadow_angle_->setValue(135.0);
         if (spn_shadow_blur_) spn_shadow_blur_->setValue(4.0);
         if (spn_shadow_spread_) spn_shadow_spread_->setValue(0.0);
-        for (auto *b : {btn_kf_pos_x_, btn_kf_pos_y_, btn_kf_rotation_, btn_kf_opacity_,
-                        btn_kf_origin_x_, btn_kf_origin_y_, btn_kf_width_, btn_kf_height_,
+        for (auto *b : {btn_kf_pos_x_, btn_kf_pos_y_, btn_kf_scale_x_, btn_kf_scale_y_,
+                        btn_kf_rotation_, btn_kf_opacity_, btn_kf_origin_x_, btn_kf_origin_y_,
+                        btn_kf_width_, btn_kf_height_,
                         btn_kf_text_color_, btn_kf_fill_color_, btn_kf_background_enabled_,
                         btn_kf_background_color_, btn_kf_background_opacity_, btn_kf_background_padding_x_,
                         btn_kf_background_padding_y_, btn_kf_background_corner_, btn_kf_shadow_enabled_,
@@ -7680,6 +7871,13 @@ void PropertiesPanel::load_values()
     spn_py_->setValue(layer_->pos_y.is_animated()
                       ? layer_->pos_y.evaluate(lt)
                       : layer_->pos_y.static_value);
+    spn_scale_x_->setValue((layer_->scale_x.is_animated()
+                            ? layer_->scale_x.evaluate(lt)
+                            : layer_->scale_x.static_value) * 100.0);
+    spn_scale_y_->setValue((layer_->scale_y.is_animated()
+                            ? layer_->scale_y.evaluate(lt)
+                            : layer_->scale_y.static_value) * 100.0);
+    if (chk_scale_lock_) chk_scale_lock_->setChecked(layer_->scale_lock);
     spn_rot_->setValue(layer_->rotation.is_animated()
                        ? layer_->rotation.evaluate(lt)
                        : layer_->rotation.static_value);
@@ -7738,6 +7936,8 @@ void PropertiesPanel::load_values()
     };
     set_prop_kf_icon(btn_kf_pos_x_, layer_->pos_x);
     set_prop_kf_icon(btn_kf_pos_y_, layer_->pos_y);
+    set_prop_kf_icon(btn_kf_scale_x_, layer_->scale_x);
+    set_prop_kf_icon(btn_kf_scale_y_, layer_->scale_y);
     set_prop_kf_icon(btn_kf_rotation_, layer_->rotation);
     set_prop_kf_icon(btn_kf_opacity_, layer_->opacity);
     set_prop_kf_icon(btn_kf_origin_x_, layer_->origin_x_prop);

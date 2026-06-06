@@ -107,6 +107,7 @@ struct Layer {
     AnimatedProperty pos_y   { "pos_y",    0.0 };
     AnimatedProperty scale_x { "scale_x",  1.0 };
     AnimatedProperty scale_y { "scale_y",  1.0 };
+    bool             scale_lock = true;
     AnimatedProperty rotation{ "rotation", 0.0 };
     AnimatedProperty opacity { "opacity",  1.0 };
 

@@ -120,6 +120,8 @@ private:
     void align_selected_layers_horizontal();
     void align_selected_layers_vertical();
     void align_selected_layers(int x_mode, int y_mode);
+    void flip_selected_layers(bool horizontal);
+    void rotate_selected_layers(double degrees);
     std::shared_ptr<Title> clone_title(const Title &title) const;
     std::shared_ptr<Layer> clone_layer_for_insert(const Layer &layer, bool suffix_name) const;
     void insert_layer_above(const std::string &anchor_id, std::shared_ptr<Layer> layer);
@@ -621,10 +623,13 @@ private:
     /* Transform controls (static) */
     QDoubleSpinBox  *spn_px_       = nullptr;
     QDoubleSpinBox  *spn_py_       = nullptr;
+    QDoubleSpinBox  *spn_scale_x_  = nullptr;
+    QDoubleSpinBox  *spn_scale_y_  = nullptr;
     QDoubleSpinBox  *spn_rot_      = nullptr;
     QDoubleSpinBox  *spn_opacity_  = nullptr;
     QDoubleSpinBox  *spn_origin_x_ = nullptr;
     QDoubleSpinBox  *spn_origin_y_ = nullptr;
+    QCheckBox       *chk_scale_lock_ = nullptr;
     QCheckBox       *chk_lock_aspect_ = nullptr;
     QComboBox       *cmb_anchor_ = nullptr;
     QGroupBox       *shadow_box_ = nullptr;
@@ -645,6 +650,8 @@ private:
     QPushButton     *btn_kf_shadow_spread_ = nullptr;
     QPushButton     *btn_kf_pos_x_ = nullptr;
     QPushButton     *btn_kf_pos_y_ = nullptr;
+    QPushButton     *btn_kf_scale_x_ = nullptr;
+    QPushButton     *btn_kf_scale_y_ = nullptr;
     QPushButton     *btn_kf_rotation_ = nullptr;
     QPushButton     *btn_kf_opacity_ = nullptr;
     QPushButton     *btn_kf_origin_x_ = nullptr;
