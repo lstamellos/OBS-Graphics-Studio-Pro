@@ -96,11 +96,13 @@ namespace {
 
 class NumericDragLabel : public QLabel {
 public:
-    NumericDragLabel(const QString &text, QWidget *field, QWidget *parent = nullptr)
-        : QLabel(text, parent), spin_box_(find_spin_box(field))
+    NumericDragLabel(const QString &text, QWidget *field, QWidget *parent = nullptr,
+                     std::function<void()> drag_started = {},
+                     std::function<void()> drag_finished = {})
+        : QLabel(text, parent), spin_box_(find_spin_box(field)),
+          drag_started_(std::move(drag_started)), drag_finished_(std::move(drag_finished))
     {
         if (!spin_box_) return;
-        setCursor(Qt::SizeHorCursor);
         setToolTip(obsgs_tr("OBSTitles.DragNumericLabelTooltip"));
     }
 
@@ -123,6 +125,8 @@ protected:
         drag_start_value_ = spin_value();
         grabMouse(Qt::SizeHorCursor);
         QApplication::setOverrideCursor(Qt::SizeHorCursor);
+        if (drag_started_)
+            drag_started_();
         event->accept();
     }
 
@@ -201,9 +205,13 @@ private:
         dragging_ = false;
         releaseMouse();
         QApplication::restoreOverrideCursor();
+        if (drag_finished_)
+            drag_finished_();
     }
 
     QAbstractSpinBox *spin_box_ = nullptr;
+    std::function<void()> drag_started_;
+    std::function<void()> drag_finished_;
     bool dragging_ = false;
     double drag_start_x_ = 0.0;
     double drag_start_value_ = 0.0;
@@ -1998,10 +2006,10 @@ void TitleEditor::build_ui()
     connect(props_, &PropertiesPanel::property_changed,
             this, &TitleEditor::on_title_modified);
     connect(title_props_, &TitlePropertiesPanel::title_changed,
-            this, [this]() {
+            this, [this](bool push_undo_snapshot) {
                 if (!title_) return;
                 playhead_ = std::clamp(playhead_, 0.0, title_->duration);
-                on_title_modified();
+                on_title_modified(push_undo_snapshot);
                 timeline_->set_title(title_);
                 on_playhead_changed(playhead_);
             });
@@ -3226,13 +3234,14 @@ void TitleEditor::on_playhead_changed(double t)
         time_lbl_->setText(obsgs_tr("OBSTitles.TimeFpsFormat").arg(format_timecode(t)).arg(obs_frame_rate(), 0, 'f', 2));
 }
 
-void TitleEditor::on_title_modified()
+void TitleEditor::on_title_modified(bool push_undo)
 {
     if (title_) set_dirty(true);
     canvas_->refresh_preview();
     if (title_props_) title_props_->set_title(title_);
     if (timeline_) timeline_->set_title(title_);
-    push_undo_snapshot();
+    if (push_undo)
+        push_undo_snapshot();
     save_live_edit();
 }
 
@@ -6257,8 +6266,18 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
     fl->setContentsMargins(8, 10, 8, 6);
     fl->setSpacing(3);
 
-    auto add_form_row = [](QFormLayout *form, const QString &label_text, QWidget *field) {
-        auto *label = new NumericDragLabel(label_text, field, form->parentWidget());
+    auto add_form_row = [this](QFormLayout *form, const QString &label_text, QWidget *field) {
+        auto *label = new NumericDragLabel(label_text, field, form->parentWidget(),
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = true;
+                                               emit title_changed(true);
+                                           },
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = false;
+                                               emit title_changed(true);
+                                           });
         label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         form->addRow(label, field);
     };
@@ -6310,14 +6329,14 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 if (title_->playback_mode == 2 && title_->pause_time <= 0.0)
                     title_->pause_time = title_->duration;
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(cmb_loop_type_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
                 if (!title_ || loading_values_) return;
                 title_->loop_type = cmb_loop_type_->currentData().toInt();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(spn_pause_frame_, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -6325,7 +6344,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 if (!title_ || loading_values_) return;
                 title_->pause_time = std::clamp(frame * obs_frame_duration(), 0.0, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
 
@@ -6342,7 +6361,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 title_->loop_end = std::clamp(title_->loop_end, title_->loop_start, title_->duration);
                 title_->pause_time = std::clamp(title_->pause_time, 0.0, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(spn_loop_start_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -6351,7 +6370,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 title_->loop_start = std::clamp(v, 0.0, title_->duration);
                 title_->loop_end = std::clamp(title_->loop_end, title_->loop_start, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 
     connect(spn_loop_end_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -6359,7 +6378,7 @@ TitlePropertiesPanel::TitlePropertiesPanel(QWidget *parent)
                 if (!title_ || loading_values_) return;
                 title_->loop_end = std::clamp(v, title_->loop_start, title_->duration);
                 load_values();
-                emit title_changed();
+                emit title_changed(!numeric_label_dragging_);
             });
 }
 
@@ -6443,13 +6462,23 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     };
 
-    auto add_form_row = [](QFormLayout *form, const QString &label_text, QWidget *field) {
+    auto add_form_row = [this](QFormLayout *form, const QString &label_text, QWidget *field) {
         if (!form || label_text.isEmpty()) {
             if (form) form->addRow(label_text, field);
             return;
         }
 
-        auto *label = new NumericDragLabel(label_text, field, form->parentWidget());
+        auto *label = new NumericDragLabel(label_text, field, form->parentWidget(),
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = true;
+                                               emit property_changed(true);
+                                           },
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = false;
+                                               emit property_changed(true);
+                                           });
         label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         form->addRow(label, field);
     };
@@ -6600,7 +6629,17 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
         return grid;
     };
     auto grid_label = [&](const QString &text, QWidget *parent_widget, QWidget *field = nullptr) {
-        auto *label = new NumericDragLabel(text, field, parent_widget);
+        auto *label = new NumericDragLabel(text, field, parent_widget,
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = true;
+                                               emit property_changed(true);
+                                           },
+                                           [this]() {
+                                               if (loading_values_) return;
+                                               numeric_label_dragging_ = false;
+                                               emit property_changed(true);
+                                           });
         label->setStyleSheet("color:#9f9f9f;font-size:10px;");
         label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         return label;
@@ -6991,7 +7030,7 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
     setWidget(inner);
 
     /* ── Connect signals → property_changed ── */
-    auto emit_change = [this]() { if (!loading_values_) emit property_changed(); };
+    auto emit_change = [this]() { if (!loading_values_) emit property_changed(!numeric_label_dragging_); };
     auto can_edit = [this]() { return layer_ && !loading_values_; };
     auto local_time = [this]() {
         return layer_ ? std::clamp(playhead_ - layer_->in_time, 0.0,
