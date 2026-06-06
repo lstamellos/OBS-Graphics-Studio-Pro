@@ -51,6 +51,7 @@
 
 /* Forward declarations for sub-widgets */
 class CanvasPreview;
+namespace obsgs { class ObsGpuRenderPipeline; }
 class LayerStack;
 class TimelineWidget;
 class PropertiesPanel;
@@ -181,14 +182,16 @@ private:
 
 /* ══════════════════════════════════════════════════════════════════
  *  CanvasPreview  – renders the title at the current playhead.
- *  Keep this as QWidget: QOpenGLWidget is an optional Qt module in OBS
- *  plugin dependency bundles and can break Windows builds/plugin loading.
+ *  The frame is produced through the OBS/libobs GPU pipeline and read back
+ *  into Qt, avoiding QOpenGLWidget so OBS plugin bundles do not need extra
+ *  optional Qt OpenGL runtime DLLs.
  * ══════════════════════════════════════════════════════════════════ */
 class CanvasPreview : public QWidget {
     Q_OBJECT
 
 public:
     explicit CanvasPreview(QWidget *parent = nullptr);
+    ~CanvasPreview() override;
 
     void set_title(std::shared_ptr<Title> t);
     void set_playhead(double t);
@@ -266,6 +269,7 @@ private:
     QPointF pan_start_view_;
     QPointF pan_start_offset_;
     QPixmap frame_pixmap_;
+    std::unique_ptr<obsgs::ObsGpuRenderPipeline> gpu_pipeline_;
     bool dirty_ = true;
     bool safe_guides_visible_ = false;
     int checkerboard_pattern_ = 1;

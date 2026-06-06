@@ -212,7 +212,7 @@ Titles are saved in the OBS profile config directory:
 
 1. Add a value to `enum class LayerType` in `title-data.h`
 2. Add a GPU migration plan/pass in `title-renderer-gpu.*` and keep the live OBS source path free of CPU 2-D raster backends
-3. Add Qt paint logic in `title-editor.cpp → CanvasPreview::render_to_pixmap()`
+3. Add OBS/libobs GPU paint logic in `title-editor.cpp → CanvasPreview::render_to_pixmap()` (CPU-only fallbacks are reserved for unavailable OBS graphics contexts)
 4. Add UI controls in `PropertiesPanel`
 5. Add JSON serialisation in `layer_to_json()` / `layer_from_json()`
 
