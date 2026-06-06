@@ -800,6 +800,7 @@ static json layer_to_json(const Layer &l, bool include_embedded_assets = true,
     j["pos_y"]    = aprop_to_json(l.pos_y);
     j["scale_x"]  = aprop_to_json(l.scale_x);
     j["scale_y"]  = aprop_to_json(l.scale_y);
+    j["scale_lock"] = l.scale_lock;
     j["rotation"] = aprop_to_json(l.rotation);
     j["opacity"]  = aprop_to_json(l.opacity);
 
@@ -929,10 +930,11 @@ static std::shared_ptr<Layer> layer_from_json(const json &j, bool require_embedd
     if (j.contains("pos_y"))    l->pos_y    = aprop_from_json(j["pos_y"],    "pos_y");
     if (j.contains("scale_x"))  l->scale_x  = aprop_from_json(j["scale_x"],  "scale_x");
     if (j.contains("scale_y"))  l->scale_y  = aprop_from_json(j["scale_y"],  "scale_y");
+    l->scale_lock = json_bool(j, "scale_lock", true);
     if (j.contains("rotation")) l->rotation = aprop_from_json(j["rotation"], "rotation");
     if (j.contains("opacity"))  l->opacity  = aprop_from_json(j["opacity"],  "opacity");
-    l->scale_x.static_value = std::clamp(l->scale_x.static_value, 0.01, 100.0);
-    l->scale_y.static_value = std::clamp(l->scale_y.static_value, 0.01, 100.0);
+    l->scale_x.static_value = std::clamp(l->scale_x.static_value, -100.0, 100.0);
+    l->scale_y.static_value = std::clamp(l->scale_y.static_value, -100.0, 100.0);
     l->opacity.static_value = std::clamp(l->opacity.static_value, 0.0, 1.0);
 
     l->text_content  = bounded_string(j, "text_content", "Title", kMaxTextLength);
