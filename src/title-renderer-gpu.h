@@ -93,15 +93,19 @@ private:
 
 class ObsGpuRenderPipeline {
 public:
+    ~ObsGpuRenderPipeline();
+
     GpuTitlePlan build_migration_plan(const Title &title) const;
     bool render_title(const Title &title, double time_seconds);
     void reset();
 
 private:
+    gs_effect_t *ensure_shadow_effect();
     GpuTextureFrame *texture_for_image_layer(const Layer &layer, double opacity);
     GpuTextureFrame *texture_for_raster_layer(const Layer &layer, const LayerAsset &asset, double opacity);
     std::unordered_map<std::string, std::unique_ptr<GpuTextureFrame>> image_textures_;
     std::unordered_map<std::string, std::unique_ptr<GpuTextureFrame>> raster_textures_;
+    gs_effect_t *shadow_effect_ = nullptr;
 };
 
 QImage render_title_to_qimage(const Title &title, double time_seconds);

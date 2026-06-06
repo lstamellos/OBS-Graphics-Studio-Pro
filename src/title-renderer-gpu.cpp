@@ -10,6 +10,8 @@
 #include "title-renderer-gpu.h"
 #include "title-data.h"
 
+#include <util/bmem.h>
+
 #include <QBuffer>
 #include <QDateTime>
 #include <QByteArray>
@@ -44,6 +46,47 @@
 namespace obsgs {
 namespace {
 constexpr double kPi = 3.141592653589793238462643383279502884;
+
+constexpr const char *kShadowEffectSource = R"(
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float4 shadow_color;
+
+sampler_state textureSampler {
+    Filter   = Linear;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
+
+struct VertData {
+    float4 pos : POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+    VertData vert_out;
+    vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+    vert_out.uv = v_in.uv;
+    return vert_out;
+}
+
+float4 PSShadow(VertData v_in) : TARGET
+{
+    float source_alpha = image.Sample(textureSampler, v_in.uv).a;
+    float alpha = source_alpha * shadow_color.a;
+    return float4(shadow_color.rgb * alpha, alpha);
+}
+
+technique Draw
+{
+    pass
+    {
+        vertex_shader = VSDefault(v_in);
+        pixel_shader  = PSShadow(v_in);
+    }
+}
+)";
 
 static bool path_is_svg(const std::string &path)
 {
@@ -321,11 +364,6 @@ static QPointF shadow_offset(const Layer &layer, double t)
     const double radians = eval_shadow_angle(layer, t) * kPi / 180.0;
     return QPointF(std::cos(radians) * eval_shadow_distance(layer, t),
                    std::sin(radians) * eval_shadow_distance(layer, t));
-}
-
-static int shadow_pass_count(double blur)
-{
-    return std::clamp(static_cast<int>(std::ceil(blur / 4.0)), 1, 12);
 }
 
 static QColor gradient_color_with_opacity(uint32_t argb, double gradient_opacity, double stop_opacity)
@@ -752,15 +790,12 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
     const double box_w = std::max(1.0, eval_box_width(layer, t));
     const double box_h = std::max(1.0, eval_box_height(layer, t));
     const double outline = eval_outline_width(layer, t);
-    const double blur = eval_shadow_enabled(layer, t) ? eval_shadow_blur(layer, t) : 0.0;
-    const double spread = eval_shadow_enabled(layer, t) ? eval_shadow_spread(layer, t) : 0.0;
-    const QPointF shadow = eval_shadow_enabled(layer, t) ? shadow_offset(layer, t) : QPointF();
     const double bg_pad_x = eval_background_enabled(layer, t) ? std::max(0.0, eval_background_padding_x(layer, t)) : 0.0;
     const double bg_pad_y = eval_background_enabled(layer, t) ? std::max(0.0, eval_background_padding_y(layer, t)) : 0.0;
-    const double pad_left = std::ceil(std::max({outline, bg_pad_x, blur + spread - shadow.x(), 1.0}));
-    const double pad_top = std::ceil(std::max({outline, bg_pad_y, blur + spread - shadow.y(), 1.0}));
-    const double pad_right = std::ceil(std::max({outline, bg_pad_x, blur + spread + shadow.x(), 1.0}));
-    const double pad_bottom = std::ceil(std::max({outline, bg_pad_y, blur + spread + shadow.y(), 1.0}));
+    const double pad_left = std::ceil(std::max({outline, bg_pad_x, 1.0}));
+    const double pad_top = std::ceil(std::max({outline, bg_pad_y, 1.0}));
+    const double pad_right = std::ceil(std::max({outline, bg_pad_x, 1.0}));
+    const double pad_bottom = std::ceil(std::max({outline, bg_pad_y, 1.0}));
     const int image_w = std::max(1, static_cast<int>(std::ceil(box_w + pad_left + pad_right)));
     const int image_h = std::max(1, static_cast<int>(std::ceil(box_h + pad_top + pad_bottom)));
 
@@ -781,23 +816,6 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
                                                                  ? eval_text_color(layer, t) : eval_fill_color(layer, t)));
     };
 
-    auto draw_rounded_shadow = [&](const QRectF &shape, double radius) {
-        if (!eval_shadow_enabled(layer, t))
-            return;
-        QColor color = color_from_argb(eval_shadow_color(layer, t), eval_shadow_opacity(layer, t));
-        const int passes = shadow_pass_count(blur);
-        for (int pass = passes; pass >= 1; --pass) {
-            QColor pass_color = color;
-            pass_color.setAlphaF(color.alphaF() / passes);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(pass_color);
-            const double pass_radius = blur * pass / passes;
-            const QRectF shadow_rect = shape.translated(shadow).adjusted(-spread - pass_radius, -spread - pass_radius,
-                                                                         spread + pass_radius, spread + pass_radius);
-            painter.drawRoundedRect(shadow_rect, radius + pass_radius, radius + pass_radius);
-        }
-    };
-
     if (eval_background_enabled(layer, t)) {
         const QRectF bg_rect = box.adjusted(-bg_pad_x, -bg_pad_y, bg_pad_x, bg_pad_y);
         const double bg_radius = eval_background_corner_radius(layer, t);
@@ -809,7 +827,6 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
 
     if (layer.type == LayerType::SolidRect || layer.type == LayerType::Shape) {
         const double radius = std::clamp(static_cast<double>(layer.corner_radius), 0.0, std::min(box_w, box_h) * 0.5);
-        draw_rounded_shadow(box, radius);
         auto draw_fill = [&]() {
             painter.setPen(Qt::NoPen);
             painter.setBrush(fill_brush(box));
@@ -833,20 +850,6 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
         const QPainterPath path = text_path_for_layer(layer, text_box);
         painter.save();
         painter.setClipRect(text_box);
-        if (eval_shadow_enabled(layer, t)) {
-            QColor color = color_from_argb(eval_shadow_color(layer, t), eval_shadow_opacity(layer, t));
-            const int passes = shadow_pass_count(blur);
-            for (int pass = passes; pass >= 1; --pass) {
-                QColor pass_color = color;
-                pass_color.setAlphaF(color.alphaF() / passes);
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(pass_color);
-                const double pass_radius = blur * pass / passes;
-                for (double dx : {-spread - pass_radius, 0.0, spread + pass_radius})
-                    for (double dy : {-spread - pass_radius, 0.0, spread + pass_radius})
-                        painter.drawPath(path.translated(shadow + QPointF(dx, dy)));
-            }
-        }
         auto draw_outline = [&]() {
             if (outline <= 0.0)
                 return;
@@ -932,17 +935,12 @@ static bool draw_solid_quad(double px, double py, double width, double height,
     return true;
 }
 
-static bool draw_texture_quad(gs_texture_t *texture,
-                              double px, double py, double width, double height,
-                              double origin_x, double origin_y,
-                              double scale_x, double scale_y, double rotation_degrees,
-                              double opacity)
+static bool draw_texture_quad_local(gs_texture_t *texture, gs_effect_t *effect,
+                                    const char *technique, double px, double py,
+                                    double width, double height, double local_left, double local_top,
+                                    double scale_x, double scale_y, double rotation_degrees)
 {
-    if (!texture || width <= 0.0 || height <= 0.0 || opacity <= 0.0)
-        return false;
-
-    gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-    if (!effect)
+    if (!texture || !effect || width <= 0.0 || height <= 0.0)
         return false;
 
     gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
@@ -955,13 +953,114 @@ static bool draw_texture_quad(gs_texture_t *texture,
     gs_matrix_translate3f(static_cast<float>(px), static_cast<float>(py), 0.0f);
     gs_matrix_rotaa4f(0.0f, 0.0f, 1.0f, static_cast<float>(rotation_degrees * kPi / 180.0));
     gs_matrix_scale3f(static_cast<float>(scale_x), static_cast<float>(scale_y), 1.0f);
-    gs_matrix_translate3f(static_cast<float>(-origin_x * width), static_cast<float>(-origin_y * height), 0.0f);
+    gs_matrix_translate3f(static_cast<float>(local_left), static_cast<float>(local_top), 0.0f);
 
-    while (gs_effect_loop(effect, "Draw"))
+    while (gs_effect_loop(effect, technique))
         gs_draw_sprite(texture, 0, static_cast<uint32_t>(std::ceil(width)), static_cast<uint32_t>(std::ceil(height)));
 
     gs_matrix_pop();
     return true;
+}
+
+static bool draw_texture_quad(gs_texture_t *texture,
+                              double px, double py, double width, double height,
+                              double origin_x, double origin_y,
+                              double scale_x, double scale_y, double rotation_degrees,
+                              double opacity)
+{
+    if (opacity <= 0.0)
+        return false;
+
+    gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+    if (!effect)
+        return false;
+
+    return draw_texture_quad_local(texture, effect, "Draw", px, py, width, height,
+                                   -origin_x * width, -origin_y * height,
+                                   scale_x, scale_y, rotation_degrees);
+}
+
+static bool draw_shadow_quad(gs_texture_t *texture, gs_effect_t *effect,
+                             double px, double py, double width, double height,
+                             double local_left, double local_top,
+                             double scale_x, double scale_y, double rotation_degrees,
+                             const QColor &shadow_color, double opacity)
+{
+    if (!texture || !effect || opacity <= 0.0)
+        return false;
+
+    gs_eparam_t *color_param = gs_effect_get_param_by_name(effect, "shadow_color");
+    if (!color_param)
+        return false;
+
+    vec4 color;
+    color.x = static_cast<float>(shadow_color.redF());
+    color.y = static_cast<float>(shadow_color.greenF());
+    color.z = static_cast<float>(shadow_color.blueF());
+    color.w = static_cast<float>(std::clamp(opacity, 0.0, 1.0) * shadow_color.alphaF());
+    gs_effect_set_vec4(color_param, &color);
+
+    return draw_texture_quad_local(texture, effect, "Draw", px, py, width, height,
+                                   local_left, local_top, scale_x, scale_y, rotation_degrees);
+}
+
+static int gpu_shadow_ring_count(double blur)
+{
+    if (blur <= 0.5)
+        return 0;
+    return std::clamp(static_cast<int>(std::ceil(blur / 14.0)), 1, 4);
+}
+
+static int gpu_shadow_sample_count(double blur)
+{
+    return 1 + gpu_shadow_ring_count(blur) * 8;
+}
+
+static bool draw_gpu_shadow(gs_texture_t *texture, gs_effect_t *effect, const Layer &layer,
+                            const LayerAsset &asset, double t,
+                            double px, double py, double scale_x, double scale_y,
+                            double rotation_degrees)
+{
+    if (!eval_shadow_enabled(layer, t) || !texture || !effect || asset.width <= 0.0 || asset.height <= 0.0)
+        return false;
+
+    const QPointF offset = shadow_offset(layer, t);
+    const double spread = std::max(0.0, eval_shadow_spread(layer, t));
+    const double blur = std::max(0.0, eval_shadow_blur(layer, t));
+    const QColor color = color_from_argb(eval_shadow_color(layer, t));
+    const double opacity = eval_shadow_opacity(layer, t);
+    if (color.alphaF() <= 0.0 || opacity <= 0.0)
+        return false;
+
+    const double base_left = -asset.origin_x * asset.width + offset.x() - spread;
+    const double base_top = -asset.origin_y * asset.height + offset.y() - spread;
+    const double draw_w = asset.width + spread * 2.0;
+    const double draw_h = asset.height + spread * 2.0;
+    const int rings = gpu_shadow_ring_count(blur);
+    const int samples = gpu_shadow_sample_count(blur);
+    const double sample_opacity = opacity / std::max(1, samples);
+
+    bool drew = draw_shadow_quad(texture, effect, px, py, draw_w, draw_h,
+                                 base_left, base_top, scale_x, scale_y, rotation_degrees,
+                                 color, sample_opacity);
+
+    static constexpr double kDirs[8][2] = {
+        {1.0, 0.0}, {-1.0, 0.0}, {0.0, 1.0}, {0.0, -1.0},
+        {0.70710678118, 0.70710678118}, {-0.70710678118, 0.70710678118},
+        {0.70710678118, -0.70710678118}, {-0.70710678118, -0.70710678118},
+    };
+
+    for (int ring = 1; ring <= rings; ++ring) {
+        const double radius = blur * static_cast<double>(ring) / static_cast<double>(rings + 1);
+        for (const auto &dir : kDirs) {
+            drew = draw_shadow_quad(texture, effect, px, py, draw_w, draw_h,
+                                    base_left + dir[0] * radius,
+                                    base_top + dir[1] * radius,
+                                    scale_x, scale_y, rotation_degrees,
+                                    color, sample_opacity) || drew;
+        }
+    }
+    return drew;
 }
 
 static void append_effect_stages(const Layer &layer, GpuLayerPlan &plan)
@@ -971,7 +1070,7 @@ static void append_effect_stages(const Layer &layer, GpuLayerPlan &plan)
 
     plan.uses_effect_pass = true;
     plan.stages.push_back(GpuPipelineStage::EffectShader);
-    plan.migration_notes.emplace_back("Shadows, blur, gradients, outlines, and backgrounds are represented as GPU effect/post-process passes.");
+    plan.migration_notes.emplace_back("Drop shadows are drawn by the GPU shadow shader from the layer alpha texture; gradients, outlines, and backgrounds remain layer-local raster/effect inputs.");
 }
 
 static GpuLayerPlan build_layer_plan(const Layer &layer)
@@ -1072,6 +1171,33 @@ void GpuTextureFrame::reset()
     height_ = 0;
 }
 
+ObsGpuRenderPipeline::~ObsGpuRenderPipeline()
+{
+    reset();
+    if (shadow_effect_) {
+        obs_enter_graphics();
+        gs_effect_destroy(shadow_effect_);
+        obs_leave_graphics();
+        shadow_effect_ = nullptr;
+    }
+}
+
+gs_effect_t *ObsGpuRenderPipeline::ensure_shadow_effect()
+{
+    if (shadow_effect_)
+        return shadow_effect_;
+
+    char *errors = nullptr;
+    obs_enter_graphics();
+    shadow_effect_ = gs_effect_create(kShadowEffectSource, "obsgs-gpu-shadow.effect", &errors);
+    obs_leave_graphics();
+    if (errors) {
+        blog(LOG_WARNING, "OBS Graphics Studio Pro shadow effect compile log: %s", errors);
+        bfree(errors);
+    }
+    return shadow_effect_;
+}
+
 GpuTitlePlan ObsGpuRenderPipeline::build_migration_plan(const Title &title) const
 {
     GpuTitlePlan plan;
@@ -1094,7 +1220,7 @@ GpuTitlePlan ObsGpuRenderPipeline::build_migration_plan(const Title &title) cons
         plan.layers.push_back(std::move(layer_plan));
     }
 
-    plan.incremental_steps.emplace_back("Implement rounded-corner/gradient/shadow variants as OBS effect techniques on top of the geometry pass.");
+    plan.incremental_steps.emplace_back("Implement rounded-corner and gradient variants as OBS effect techniques on top of the geometry pass.");
     plan.incremental_steps.emplace_back("Replace bitmap-only image ingestion with GPU-native SVG/vector tessellation for vector assets.");
     plan.incremental_steps.emplace_back("Add a persistent GPU glyph/vector text atlas to replace temporary layer texture asset generation once atlas parity is available.");
     plan.incremental_steps.emplace_back("Add offscreen render targets for separable blur, glow, filters, screen effects, and future 3D composition.");
@@ -1182,9 +1308,12 @@ bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
         case LayerType::Ticker: {
             LayerAsset asset = rasterize_layer_asset(*layer, lt);
             GpuTextureFrame *texture = texture_for_raster_layer(*layer, asset, alpha);
-            if (texture)
+            if (texture) {
+                if (eval_shadow_enabled(*layer, lt))
+                    draw_gpu_shadow(texture->texture(), ensure_shadow_effect(), *layer, asset, lt, px, py, sx, sy, rot);
                 draw_texture_quad(texture->texture(), px, py, asset.width, asset.height,
                                   asset.origin_x, asset.origin_y, sx, sy, rot, 1.0);
+            }
             break;
         }
         case LayerType::Image: {
@@ -1193,6 +1322,14 @@ bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
                 break;
             const double w = eval_box_width(*layer, lt) > 0.0 ? eval_box_width(*layer, lt) : texture->width();
             const double h = eval_box_height(*layer, lt) > 0.0 ? eval_box_height(*layer, lt) : texture->height();
+            if (eval_shadow_enabled(*layer, lt)) {
+                LayerAsset image_asset;
+                image_asset.width = w;
+                image_asset.height = h;
+                image_asset.origin_x = origin_x;
+                image_asset.origin_y = origin_y;
+                draw_gpu_shadow(texture->texture(), ensure_shadow_effect(), *layer, image_asset, lt, px, py, sx, sy, rot);
+            }
             draw_texture_quad(texture->texture(), px, py, w, h, origin_x, origin_y, sx, sy, rot, 1.0);
             break;
         }
