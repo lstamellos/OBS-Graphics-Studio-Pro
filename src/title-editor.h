@@ -57,6 +57,7 @@ class QEvent;
 class QKeyEvent;
 class QContextMenuEvent;
 class QResizeEvent;
+class QCloseEvent;
 class QAction;
 class QToolButton;
 class QScrollBar;
@@ -93,17 +94,21 @@ public slots:
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void keyPressEvent(QKeyEvent *ev) override;
+    void closeEvent(QCloseEvent *ev) override;
 
 private slots:
     void tick();
     void show_about();
+    void reject() override;
 
 private:
     void build_ui();
     void build_toolbar();
     void update_title_bar();
+    void set_dirty(bool dirty);
+    bool confirm_save_before_close();
     void new_title_contents();
-    void save_title();
+    bool save_title();
     void save_title_as_new();
     void export_title_template(bool save_in_library);
     void copy_title_to_store(const std::shared_ptr<Title> &source, const std::shared_ptr<Title> &dest) const;
@@ -131,6 +136,7 @@ private:
     bool                   playing_   = false;
     bool                   playback_reverse_ = false;
     bool                   full_loop_playback_ = false;
+    bool                   dirty_ = false;
     QTimer                *play_timer_ = nullptr;
     QTimer                *clock_timer_ = nullptr;
     QElapsedTimer          playback_clock_;
@@ -143,6 +149,7 @@ private:
     TitlePropertiesPanel *title_props_ = nullptr;
     QLabel          *time_lbl_  = nullptr;
     QLabel          *title_lbl_ = nullptr;
+    QLabel          *dirty_indicator_ = nullptr;
 
     QToolBar        *toolbar_   = nullptr;
     QAction         *act_play_  = nullptr;
