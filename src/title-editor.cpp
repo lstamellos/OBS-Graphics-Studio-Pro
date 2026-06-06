@@ -2001,7 +2001,7 @@ void TitleEditor::build_ui()
     connect(timeline_, &TimelineWidget::layer_selected,
             this, &TitleEditor::on_layer_selected);
     connect(timeline_, &TimelineWidget::keyframe_easing_changed,
-            this, &TitleEditor::on_title_modified);
+            this, [this]() { on_title_modified(); });
 
     connect(props_, &PropertiesPanel::property_changed,
             this, &TitleEditor::on_title_modified);
