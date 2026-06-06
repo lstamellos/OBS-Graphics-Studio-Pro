@@ -46,6 +46,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <set>
 
 /* Forward declarations for sub-widgets */
 class CanvasPreview;
@@ -382,6 +383,12 @@ public:
     void set_zoom_percent(int percent);
     int zoom_percent() const;
     void fit_timeline();
+    bool has_selected_keyframes() const;
+    bool has_keyframe_clipboard() const;
+    bool copy_keyframe_selection();
+    bool cut_keyframe_selection();
+    bool delete_keyframe_selection();
+    bool paste_keyframes_at_playhead();
 
 signals:
     void playhead_changed(double t);
@@ -399,6 +406,7 @@ protected:
     void mousePressEvent(QMouseEvent *ev) override;
     void mouseMoveEvent(QMouseEvent *ev) override;
     void mouseReleaseEvent(QMouseEvent *ev) override;
+    void keyPressEvent(QKeyEvent *ev) override;
     void contextMenuEvent(QContextMenuEvent *ev) override;
     void wheelEvent(QWheelEvent *ev) override;
     void resizeEvent(QResizeEvent *ev) override;
@@ -414,10 +422,38 @@ private:
     int    max_vertical_scroll() const;
     bool   hit_keyframe(const QPoint &pos, std::shared_ptr<Layer> *layer,
                         AnimatedProperty **prop, int *kf_idx, int *row_idx) const;
+    struct KeyframeRef {
+        std::string layer_id;
+        std::string prop_name;
+        int index = -1;
+        bool operator<(const KeyframeRef &other) const;
+    };
+    struct DraggedKeyframe {
+        KeyframeRef ref;
+        double start_time = 0.0;
+    };
+    struct ClipboardKeyframe {
+        std::string layer_id;
+        std::string prop_name;
+        Keyframe keyframe;
+        double offset = 0.0;
+    };
+    void   clear_keyframe_selection();
+    void   prune_keyframe_selection();
+    bool   is_keyframe_selected(const std::string &layer_id, const std::string &prop_name, int kf_idx) const;
+    void   select_keyframe(const std::string &layer_id, const std::string &prop_name, int kf_idx, bool additive, bool toggle);
+    void   select_keyframes_in_rect(const QRect &rect, bool additive);
+    bool   copy_selected_keyframes();
+    bool   delete_selected_keyframes();
+    bool   cut_selected_keyframes();
+    bool   paste_keyframes_at(double timeline_time);
+    QRect  marquee_rect() const;
+    void   begin_keyframe_drag(const std::string &layer_id, const std::string &prop_name, int kf_idx, double start_time);
+    AnimatedProperty *find_timeline_property(Layer &layer, const std::string &prop_name) const;
     bool   keep_playhead_visible();
     void   set_pixels_per_sec(double pixels_per_sec, double anchor_time, int anchor_x);
 
-    enum class DragMode { None, Playhead, Keyframe, TrimIn, TrimOut, Layer, LoopStart, LoopEnd, PauseMarker };
+    enum class DragMode { None, Playhead, Keyframe, Marquee, TrimIn, TrimOut, Layer, LoopStart, LoopEnd, PauseMarker };
 
     std::shared_ptr<Title> title_;
     std::string sel_layer_id_;
@@ -430,6 +466,13 @@ private:
     double drag_start_time_ = 0.0;
     double drag_start_in_ = 0.0;
     double drag_start_out_ = 0.0;
+    std::set<KeyframeRef> selected_keyframes_;
+    std::vector<DraggedKeyframe> dragged_keyframes_;
+    std::vector<ClipboardKeyframe> keyframe_clipboard_;
+    QPoint marquee_start_;
+    QPoint marquee_current_;
+    bool marquee_additive_ = false;
+    bool marquee_moved_ = false;
     double pixels_per_sec_ = 80.0;
     int    scroll_x_       = 0;
     int    scroll_y_       = 0;
