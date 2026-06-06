@@ -285,6 +285,7 @@ private:
     bool drag_changed_ = false;
     bool alt_duplicate_pending_ = false;
     bool alt_duplicate_done_ = false;
+    bool drag_text_object_scaling_ = false;
     bool marquee_active_ = false;
     QPointF drag_start_view_;
     QPointF drag_current_view_;
@@ -306,6 +307,8 @@ private:
         double y = 0.0;
         float w = 1.0f;
         float h = 1.0f;
+        double scale_x = 1.0;
+        double scale_y = 1.0;
         double rotation = 0.0;
     };
     std::vector<LayerDragState> drag_layer_states_;

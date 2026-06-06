@@ -848,6 +848,11 @@ static bool is_text_box_auto_size_layer(const Layer &layer)
     return layer.type == LayerType::Text || layer.type == LayerType::Clock;
 }
 
+static bool is_canvas_text_layer(const Layer &layer)
+{
+    return layer.type == LayerType::Text || layer.type == LayerType::Clock || layer.type == LayerType::Ticker;
+}
+
 static double natural_text_width(const Layer &layer)
 {
     if (!is_text_box_auto_size_layer(layer)) return 1.0;
@@ -4080,10 +4085,16 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
                 double ry = (state.y - start.top()) / start.height();
                 set_animated_value(layer->pos_x, lt, next.left() + rx * next.width());
                 set_animated_value(layer->pos_y, lt, next.top() + ry * next.height());
-                layer->rect_width = std::max(0.0f, (float)(state.w * sx));
-                layer->rect_height = std::max(0.0f, (float)(state.h * sy));
-                set_animated_value(layer->box_width, lt, layer->rect_width);
-                set_animated_value(layer->box_height, lt, layer->rect_height);
+                const bool scale_text_object = drag_text_object_scaling_ && is_canvas_text_layer(*layer);
+                if (scale_text_object) {
+                    set_animated_value(layer->scale_x, lt, state.scale_x * sx);
+                    set_animated_value(layer->scale_y, lt, state.scale_y * sy);
+                } else {
+                    layer->rect_width = std::max(0.0f, (float)(state.w * sx));
+                    layer->rect_height = std::max(0.0f, (float)(state.h * sy));
+                    set_animated_value(layer->box_width, lt, layer->rect_width);
+                    set_animated_value(layer->box_height, lt, layer->rect_height);
+                }
             }
         }
         dirty_ = true;
@@ -4123,7 +4134,23 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
         bool resize_top = drag_mode_ == DragMode::ResizeNW || drag_mode_ == DragMode::ResizeNE || drag_mode_ == DragMode::ResizeN;
         bool resize_bottom = drag_mode_ == DragMode::ResizeSW || drag_mode_ == DragMode::ResizeSE || drag_mode_ == DragMode::ResizeS;
         canvas = snap_canvas_point(canvas, resize_left || resize_right, resize_top || resize_bottom);
-        QPointF local = canvas_to_layer(*layer, canvas);
+        const bool scale_text_object = drag_text_object_scaling_ && is_canvas_text_layer(*layer);
+        const LayerDragState *start_state = drag_layer_states_.empty() ? nullptr : &drag_layer_states_.front();
+        auto non_zero_scale = [](double value) {
+            if (std::abs(value) >= 0.0001) return value;
+            return value < 0.0 ? -0.0001 : 0.0001;
+        };
+        auto start_canvas_to_layer = [&](const QPointF &canvas_pt) {
+            double rot = -start_state->rotation * 3.14159265358979323846 / 180.0;
+            double dx = canvas_pt.x() - start_state->x;
+            double dy = canvas_pt.y() - start_state->y;
+            double c = std::cos(rot);
+            double ss = std::sin(rot);
+            return QPointF((dx * c - dy * ss) / non_zero_scale(start_state->scale_x),
+                           (dx * ss + dy * c) / non_zero_scale(start_state->scale_y));
+        };
+        QPointF local = (scale_text_object && start_state) ? start_canvas_to_layer(canvas)
+                                                           : canvas_to_layer(*layer, canvas);
         double left = -drag_start_origin_x_ * drag_start_w_;
         double right = (1.0 - drag_start_origin_x_) * drag_start_w_;
         double top = -drag_start_origin_y_ * drag_start_h_;
@@ -4136,17 +4163,30 @@ void CanvasPreview::apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers mod
 
         double new_w = std::max(0.0, right - left);
         double new_h = std::max(0.0, bottom - top);
-        if (layer->type == LayerType::Image && layer->lock_aspect_ratio && drag_start_h_ > 0.0f) {
-            double aspect = drag_start_w_ / drag_start_h_;
-            if (std::abs(new_w - drag_start_w_) > std::abs(new_h - drag_start_h_) * aspect)
-                new_h = new_w / aspect;
-            else
-                new_w = new_h * aspect;
+        if (scale_text_object) {
+            double sx = drag_start_w_ > 0.0f ? new_w / drag_start_w_ : 1.0;
+            double sy = drag_start_h_ > 0.0f ? new_h / drag_start_h_ : 1.0;
+            if (modifiers & Qt::ShiftModifier) {
+                double uniform = std::abs(sx) >= std::abs(sy) ? sx : sy;
+                sx = sy = uniform;
+            }
+            double start_scale_x = start_state ? start_state->scale_x : layer->scale_x.evaluate(lt);
+            double start_scale_y = start_state ? start_state->scale_y : layer->scale_y.evaluate(lt);
+            set_animated_value(layer->scale_x, lt, start_scale_x * sx);
+            set_animated_value(layer->scale_y, lt, start_scale_y * sy);
+        } else {
+            if (layer->type == LayerType::Image && layer->lock_aspect_ratio && drag_start_h_ > 0.0f) {
+                double aspect = drag_start_w_ / drag_start_h_;
+                if (std::abs(new_w - drag_start_w_) > std::abs(new_h - drag_start_h_) * aspect)
+                    new_h = new_w / aspect;
+                else
+                    new_w = new_h * aspect;
+            }
+            layer->rect_width = (float)new_w;
+            layer->rect_height = (float)new_h;
+            set_animated_value(layer->box_width, lt, new_w);
+            set_animated_value(layer->box_height, lt, new_h);
         }
-        layer->rect_width = (float)new_w;
-        layer->rect_height = (float)new_h;
-        set_animated_value(layer->box_width, lt, new_w);
-        set_animated_value(layer->box_height, lt, new_h);
     }
 
     dirty_ = true;
@@ -4578,9 +4618,20 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
     drag_start_selection_bounds_ = selected_canvas_bounds();
 
     auto layers = selected_layers();
+    drag_text_object_scaling_ = false;
     auto layer = selected_layer();
     if (!layer && !layers.empty()) layer = layers.front();
     if (!layer) return;
+
+    auto is_resize_drag = [](DragMode mode) {
+        return mode == DragMode::ResizeNW || mode == DragMode::ResizeN || mode == DragMode::ResizeNE ||
+               mode == DragMode::ResizeE || mode == DragMode::ResizeSE || mode == DragMode::ResizeS ||
+               mode == DragMode::ResizeSW || mode == DragMode::ResizeW;
+    };
+    drag_text_object_scaling_ = is_resize_drag(drag_mode_) && ev->modifiers().testFlag(Qt::AltModifier) &&
+        std::any_of(layers.begin(), layers.end(), [](const std::shared_ptr<Layer> &selected) {
+            return selected && is_canvas_text_layer(*selected);
+        });
 
     for (const auto &selected : layers) {
         if (!selected || selected->locked) continue;
@@ -4591,6 +4642,8 @@ void CanvasPreview::mousePressEvent(QMouseEvent *ev)
                                       selected->pos_y.evaluate(lt),
                                       (float)eval_box_width(*selected, lt),
                                       (float)eval_box_height(*selected, lt),
+                                      selected->scale_x.evaluate(lt),
+                                      selected->scale_y.evaluate(lt),
                                       selected->rotation.evaluate(lt)});
     }
 
@@ -4699,6 +4752,7 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
         drag_changed_ = false;
         alt_duplicate_pending_ = false;
         alt_duplicate_done_ = false;
+        drag_text_object_scaling_ = false;
         clear_snap_feedback();
         unsetCursor();
         update();
@@ -4711,6 +4765,7 @@ void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
     drag_changed_ = false;
     alt_duplicate_pending_ = false;
     alt_duplicate_done_ = false;
+    drag_text_object_scaling_ = false;
     drag_layer_states_.clear();
     clear_snap_feedback();
     unsetCursor();
