@@ -98,8 +98,8 @@ public:
     void reset();
 
 private:
-    GpuTextureFrame *texture_for_image_layer(const Layer &layer);
-    GpuTextureFrame *texture_for_raster_layer(const Layer &layer, const LayerAsset &asset);
+    GpuTextureFrame *texture_for_image_layer(const Layer &layer, double opacity);
+    GpuTextureFrame *texture_for_raster_layer(const Layer &layer, const LayerAsset &asset, double opacity);
     std::unordered_map<std::string, std::unique_ptr<GpuTextureFrame>> image_textures_;
     std::unordered_map<std::string, std::unique_ptr<GpuTextureFrame>> raster_textures_;
 };
