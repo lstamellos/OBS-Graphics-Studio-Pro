@@ -383,6 +383,12 @@ public:
     void set_zoom_percent(int percent);
     int zoom_percent() const;
     void fit_timeline();
+    bool has_selected_keyframes() const;
+    bool has_keyframe_clipboard() const;
+    bool copy_keyframe_selection();
+    bool cut_keyframe_selection();
+    bool delete_keyframe_selection();
+    bool paste_keyframes_at_playhead();
 
 signals:
     void playhead_changed(double t);
@@ -400,6 +406,7 @@ protected:
     void mousePressEvent(QMouseEvent *ev) override;
     void mouseMoveEvent(QMouseEvent *ev) override;
     void mouseReleaseEvent(QMouseEvent *ev) override;
+    void keyPressEvent(QKeyEvent *ev) override;
     void contextMenuEvent(QContextMenuEvent *ev) override;
     void wheelEvent(QWheelEvent *ev) override;
     void resizeEvent(QResizeEvent *ev) override;

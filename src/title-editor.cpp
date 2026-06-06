@@ -2821,6 +2821,31 @@ void TitleEditor::keyPressEvent(QKeyEvent *ev)
     }
     QWidget *fw = focusWidget();
     bool editing_value = editor_focus_accepts_text(fw);
+    if (!editing_value && timeline_ && ev->matches(QKeySequence::Copy) &&
+        timeline_->has_selected_keyframes()) {
+        timeline_->copy_keyframe_selection();
+        ev->accept();
+        return;
+    }
+    if (!editing_value && timeline_ && ev->matches(QKeySequence::Cut) &&
+        timeline_->has_selected_keyframes()) {
+        timeline_->cut_keyframe_selection();
+        ev->accept();
+        return;
+    }
+    if (!editing_value && timeline_ && ev->matches(QKeySequence::Paste) &&
+        timeline_->has_keyframe_clipboard()) {
+        timeline_->paste_keyframes_at_playhead();
+        ev->accept();
+        return;
+    }
+    if (!editing_value && timeline_ &&
+        (ev->key() == Qt::Key_Delete || ev->key() == Qt::Key_Backspace) &&
+        timeline_->has_selected_keyframes()) {
+        timeline_->delete_keyframe_selection();
+        ev->accept();
+        return;
+    }
     if (!editing_value && ev->matches(QKeySequence::Copy) && !sel_layer_id_.empty()) {
         copy_selected_layer();
         ev->accept();
@@ -4741,6 +4766,7 @@ TimelineWidget::TimelineWidget(QWidget *parent) : QWidget(parent)
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
     setStyleSheet("background:#1e1e1e;");
+    setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 }
 
@@ -4813,6 +4839,42 @@ void TimelineWidget::fit_timeline()
     double dur = title_ ? std::max(obs_frame_duration(), title_->duration) : 10.0;
     double fitted = (double)std::max(1, width() - 40) / dur;
     set_pixels_per_sec(fitted, 0.0, 0);
+}
+
+bool TimelineWidget::has_selected_keyframes() const
+{
+    return title_ && !selected_keyframes_.empty();
+}
+
+bool TimelineWidget::has_keyframe_clipboard() const
+{
+    return !keyframe_clipboard_.empty();
+}
+
+bool TimelineWidget::copy_keyframe_selection()
+{
+    return copy_selected_keyframes();
+}
+
+bool TimelineWidget::cut_keyframe_selection()
+{
+    if (!cut_selected_keyframes()) return false;
+    emit keyframe_easing_changed();
+    return true;
+}
+
+bool TimelineWidget::delete_keyframe_selection()
+{
+    if (!delete_selected_keyframes()) return false;
+    emit keyframe_easing_changed();
+    return true;
+}
+
+bool TimelineWidget::paste_keyframes_at_playhead()
+{
+    if (!paste_keyframes_at(playhead_)) return false;
+    emit keyframe_easing_changed();
+    return true;
 }
 
 bool TimelineWidget::keep_playhead_visible()
@@ -5548,8 +5610,40 @@ void TimelineWidget::resizeEvent(QResizeEvent *ev)
     clamp_vertical_scroll();
 }
 
+void TimelineWidget::keyPressEvent(QKeyEvent *ev)
+{
+    if (!title_) {
+        QWidget::keyPressEvent(ev);
+        return;
+    }
+
+    if (ev->matches(QKeySequence::Copy) && has_selected_keyframes()) {
+        copy_keyframe_selection();
+        ev->accept();
+        return;
+    }
+    if (ev->matches(QKeySequence::Cut) && has_selected_keyframes()) {
+        cut_keyframe_selection();
+        ev->accept();
+        return;
+    }
+    if (ev->matches(QKeySequence::Paste) && has_keyframe_clipboard()) {
+        paste_keyframes_at_playhead();
+        ev->accept();
+        return;
+    }
+    if ((ev->key() == Qt::Key_Delete || ev->key() == Qt::Key_Backspace) && has_selected_keyframes()) {
+        delete_keyframe_selection();
+        ev->accept();
+        return;
+    }
+
+    QWidget::keyPressEvent(ev);
+}
+
 void TimelineWidget::mousePressEvent(QMouseEvent *ev)
 {
+    setFocus(Qt::MouseFocusReason);
     if (!title_) return;
     drag_mode_ = DragMode::None;
     drag_layer_id_.clear();
