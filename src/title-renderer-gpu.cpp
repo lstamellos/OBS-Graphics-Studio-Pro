@@ -78,6 +78,32 @@ private:
     bool active_ = false;
 };
 
+class ScopedPremultipliedAlphaBlend {
+public:
+    ScopedPremultipliedAlphaBlend()
+    {
+        if (!obs_get_video())
+            return;
+        active_ = true;
+        gs_blend_state_push();
+        gs_enable_blending(true);
+        gs_blend_function_separate(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA,
+                                   GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+    }
+
+    ~ScopedPremultipliedAlphaBlend()
+    {
+        if (active_)
+            gs_blend_state_pop();
+    }
+
+    ScopedPremultipliedAlphaBlend(const ScopedPremultipliedAlphaBlend &) = delete;
+    ScopedPremultipliedAlphaBlend &operator=(const ScopedPremultipliedAlphaBlend &) = delete;
+
+private:
+    bool active_ = false;
+};
+
 constexpr const char *kShadowEffectSource = R"(
 uniform float4x4 ViewProj;
 uniform texture2d image;
@@ -126,11 +152,38 @@ static bool path_is_svg(const std::string &path)
            qpath.endsWith(QStringLiteral(".svgz"), Qt::CaseInsensitive);
 }
 
-static QImage premultiplied_bgra_image(const QImage &image)
+static QImage sanitize_premultiplied_alpha(QImage image)
 {
     if (image.isNull())
         return QImage();
-    return image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+
+    if (image.format() != QImage::Format_ARGB32_Premultiplied)
+        image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    else
+        image.detach();
+
+    for (int y = 0; y < image.height(); ++y) {
+        auto *pixels = reinterpret_cast<QRgb *>(image.scanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            const int alpha = qAlpha(pixels[x]);
+            if (alpha <= 0) {
+                pixels[x] = 0;
+                continue;
+            }
+
+            const int red = std::min(qRed(pixels[x]), alpha);
+            const int green = std::min(qGreen(pixels[x]), alpha);
+            const int blue = std::min(qBlue(pixels[x]), alpha);
+            pixels[x] = qRgba(red, green, blue, alpha);
+        }
+    }
+
+    return image;
+}
+
+static QImage premultiplied_bgra_image(const QImage &image)
+{
+    return sanitize_premultiplied_alpha(image);
 }
 
 static double bounded_supersample_for_size(double width, double height)
@@ -1013,6 +1066,7 @@ static LayerAsset rasterize_layer_asset(const Layer &layer, double t)
     }
 
     painter.end();
+    asset.image = sanitize_premultiplied_alpha(asset.image);
     return asset;
 }
 
@@ -1029,7 +1083,7 @@ static QImage image_with_opacity(const QImage &image, double opacity)
     mask.setAlphaF(alpha);
     painter.fillRect(result.rect(), mask);
     painter.end();
-    return result;
+    return sanitize_premultiplied_alpha(result);
 }
 
 static void vec4_from_argb(uint32_t argb, double opacity, vec4 &out)
@@ -1424,6 +1478,8 @@ GpuTextureFrame *ObsGpuRenderPipeline::texture_for_raster_layer(const Layer &lay
 
 bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
 {
+    ScopedPremultipliedAlphaBlend premultiplied_alpha_blend;
+
     const double clamped_time = std::clamp(time_seconds, 0.0, std::max(0.0, title.duration));
     const bool background_persistence = title.cue_background_persistence &&
         title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();

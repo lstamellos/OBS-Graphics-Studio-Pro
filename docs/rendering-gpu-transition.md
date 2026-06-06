@@ -45,15 +45,16 @@ These are the best first GPU-rendered layers because they do not require text sh
 - Solid-color or gradient fill uniforms.
 - Rounded-corner distance field or mesh subdivision.
 - Optional outline and drop-shadow passes.
-- Standard alpha blending through OBS graphics state.
+- Premultiplied-alpha source-over blending through OBS graphics state so transparent anti-aliased edges do not receive a second alpha multiply.
 
 ### Next priority: Image
 
 Image layers should move to a texture cache keyed by path, size, SVG raster target, and file revision. Once cached, each layer can use the same textured-quad pipeline as the title output:
 
 - Decode bitmap assets only when the file changes, then upload/cache them as GPU textures.
-- Apply transforms, opacity, background, shadow, and blending on GPU.
+- Apply transforms, opacity, background, shadow, and premultiplied-alpha blending on GPU.
 - Avoid full-frame CPU repaint for motion-only image animations.
+- Sanitize uploaded BGRA textures so fully transparent pixels have no RGB bleed and premultiplied channels remain clamped to alpha before linear filtering/scaling.
 
 ### Incremental text path: Text, Clock, Ticker
 
