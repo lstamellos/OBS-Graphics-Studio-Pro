@@ -2,7 +2,7 @@
  * title-editor.cpp
  *
  * After Effects-style title editor.
- * Implemented with plain Qt widgets for maximum OBS compatibility.
+ * CanvasPreview stays on Qt Widgets to avoid adding optional Qt OpenGL runtime DLLs that can prevent OBS from loading the plugin. The live source remains OBS GPU-rendered.
  */
 
 #include "title-editor.h"

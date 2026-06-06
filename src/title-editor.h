@@ -22,6 +22,7 @@
 
 #include "title-data.h"
 #include <QDialog>
+#include <QWidget>
 #include <QSplitter>
 #include <QListWidget>
 #include <QToolBar>
