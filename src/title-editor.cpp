@@ -54,6 +54,7 @@
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QFontDatabase>
@@ -77,6 +78,8 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QContextMenuEvent>
 #include <cmath>
 #include <algorithm>
@@ -2046,6 +2049,153 @@ static QString editor_template_library_root_path()
     return root;
 }
 
+static int editor_dialog_layout_spacing(QWidget *widget)
+{
+    const int spacing = widget->style()->pixelMetric(QStyle::PM_LayoutVerticalSpacing, nullptr, widget);
+    return spacing > 0 ? spacing : 6;
+}
+
+static QStringList editor_template_library_category_paths(const QString &root_path)
+{
+    QStringList categories;
+    QDirIterator it(root_path, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        const QString rel = QDir(root_path).relativeFilePath(it.filePath());
+        if (!rel.isEmpty()) categories << rel;
+    }
+    if (categories.isEmpty()) categories << QStringLiteral("Custom");
+    categories.sort(Qt::CaseInsensitive);
+    return categories;
+}
+
+static QString editor_sanitized_template_category_path(const QString &category)
+{
+    QString cleaned = QDir::cleanPath(category.trimmed());
+    cleaned.replace(QRegularExpression(QStringLiteral("[\\\\:*?\"<>|]")), QStringLiteral("_"));
+    while (cleaned.startsWith(QStringLiteral("../")))
+        cleaned.remove(0, 3);
+    if (cleaned == QStringLiteral(".") || cleaned == QStringLiteral(".."))
+        cleaned.clear();
+    return cleaned;
+}
+
+static bool prompt_editor_template_library_category(QWidget *parent, QString &category)
+{
+    const QString root_path = editor_template_library_root_path();
+    QDialog dialog(parent);
+    dialog.setWindowTitle(obsgs_tr("OBSTitles.TemplateLibraryCategoryTitle"));
+    dialog.setModal(true);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(editor_dialog_layout_spacing(&dialog));
+
+    auto *prompt = new QLabel(obsgs_tr("OBSTitles.TemplateLibraryCategoryPrompt"), &dialog);
+    prompt->setWordWrap(true);
+    layout->addWidget(prompt);
+
+    auto *combo = new QComboBox(&dialog);
+    combo->setEditable(true);
+    combo->addItems(editor_template_library_category_paths(root_path));
+    layout->addWidget(combo);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        const QString safe_category = editor_sanitized_template_category_path(combo->currentText());
+        if (safe_category.isEmpty()) {
+            QMessageBox::warning(&dialog, obsgs_tr("OBSTitles.TemplateLibraryCategoryTitle"),
+                                 obsgs_tr("OBSTitles.TemplateLibraryCategoryRequired"));
+            return;
+        }
+        category = safe_category;
+        dialog.accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    return dialog.exec() == QDialog::Accepted;
+}
+
+static bool prompt_editor_template_metadata(QWidget *parent, const Title &title,
+                                           TitleTemplateExportMetadata &metadata,
+                                           const QString &window_title = obsgs_tr("OBSTitles.ExportTemplateDetails"))
+{
+    if (metadata.title.empty()) metadata.title = title.name;
+    if (metadata.description.empty()) metadata.description = title.description;
+    if (metadata.creator.empty()) metadata.creator = title.creator;
+    if (metadata.creation_date.empty()) {
+        metadata.creation_date = title.creation_date.empty()
+            ? QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString()
+            : title.creation_date;
+    }
+    if (metadata.screenshot_png_base64.empty())
+        metadata.screenshot_png_base64 = title.preview_screenshot_png_base64;
+
+    QDialog dialog(parent);
+    dialog.setWindowTitle(window_title);
+    dialog.setModal(true);
+    dialog.resize(560, 500);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(editor_dialog_layout_spacing(&dialog));
+
+    auto *preview_label = new QLabel(obsgs_tr("OBSTitles.TemplateScreenshotPreviewLabel"), &dialog);
+    QFont label_font = preview_label->font();
+    label_font.setBold(true);
+    preview_label->setFont(label_font);
+    layout->addWidget(preview_label);
+
+    auto *preview = new QLabel(&dialog);
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
+    preview->setMinimumHeight(160);
+    QPixmap pixmap;
+    const QByteArray png = QByteArray::fromBase64(QByteArray::fromStdString(metadata.screenshot_png_base64));
+    if (!png.isEmpty() && pixmap.loadFromData(png, "PNG"))
+        preview->setPixmap(pixmap.scaled(QSize(480, 180), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    else
+        preview->setText(obsgs_tr("OBSTitles.TemplateScreenshotFailed"));
+    layout->addWidget(preview);
+
+    auto *form = new QFormLayout();
+    auto *title_edit = new QLineEdit(QString::fromStdString(metadata.title), &dialog);
+    auto *description_edit = new QTextEdit(&dialog);
+    description_edit->setAcceptRichText(false);
+    description_edit->setPlainText(QString::fromStdString(metadata.description));
+    description_edit->setMinimumHeight(96);
+    auto *creator_edit = new QLineEdit(QString::fromStdString(metadata.creator), &dialog);
+    auto *date_edit = new QLineEdit(QString::fromStdString(metadata.creation_date), &dialog);
+
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportTitleLabel"), title_edit);
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportDescriptionLabel"), description_edit);
+    form->addRow(obsgs_tr("OBSTitles.TemplateExportCreatorLabel"), creator_edit);
+    form->addRow(obsgs_tr("OBSTitles.TemplateCreationDateLabel"), date_edit);
+    layout->addLayout(form);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
+        if (title_edit->text().trimmed().isEmpty()) {
+            QMessageBox::warning(&dialog, obsgs_tr("OBSTitles.ExportTemplateDetails"),
+                                 obsgs_tr("OBSTitles.TemplateExportTitleRequired"));
+            return;
+        }
+        dialog.accept();
+    });
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted)
+        return false;
+
+    metadata.title = title_edit->text().trimmed().toStdString();
+    metadata.description = description_edit->toPlainText().trimmed().toStdString();
+    metadata.creator = creator_edit->text().trimmed().toStdString();
+    metadata.creation_date = date_edit->text().trimmed().toStdString();
+    return true;
+}
+
 void TitleEditor::copy_title_to_store(const std::shared_ptr<Title> &source,
                                       const std::shared_ptr<Title> &dest) const
 {
@@ -2123,20 +2273,28 @@ void TitleEditor::save_live_edit()
 void TitleEditor::save_title_as_new()
 {
     if (!title_) return;
-    bool ok = false;
-    QString name = QInputDialog::getText(this, obsgs_tr("OBSTitles.SaveAsNew"),
-                                         obsgs_tr("OBSTitles.TitleNamePrompt"), QLineEdit::Normal,
-                                         QString::fromStdString(title_->name), &ok).trimmed();
-    if (!ok || name.isEmpty()) return;
 
-    auto created = TitleDataStore::instance().create_title(name.toStdString());
-    title_->name = name.toStdString();
+    Title temp = *title_;
+    temp.preview_screenshot_png_base64 = title_manual_screenshot_png_base64(temp);
+    TitleTemplateExportMetadata metadata;
+    metadata.screenshot_png_base64 = temp.preview_screenshot_png_base64;
+    if (!prompt_editor_template_metadata(this, temp, metadata, obsgs_tr("OBSTitles.SaveAsNew")))
+        return;
+
+    auto created = TitleDataStore::instance().create_title(metadata.title);
+    title_->name = metadata.title;
+    title_->description = metadata.description;
+    title_->creator = metadata.creator;
+    title_->creation_date = metadata.creation_date;
+    title_->preview_screenshot_png_base64 = metadata.screenshot_png_base64;
     copy_title_to_store(title_, created);
-    created->name = name.toStdString();
-    created->preview_screenshot_png_base64 = title_manual_screenshot_png_base64(*created);
+    created->name = metadata.title;
+    created->description = metadata.description;
+    created->creator = metadata.creator;
+    created->creation_date = metadata.creation_date;
+    created->preview_screenshot_png_base64 = metadata.screenshot_png_base64;
     editing_title_id_ = created->id;
     title_->id = created->id;
-    title_->preview_screenshot_png_base64 = created->preview_screenshot_png_base64;
     update_title_bar();
     TitleDataStore::instance().notify_change();
     TitleDataStore::instance().save();
@@ -2152,18 +2310,22 @@ void TitleEditor::export_title_template(bool save_in_library)
     Title temp = *title_;
     temp.preview_screenshot_png_base64 = title_manual_screenshot_png_base64(temp);
     TitleTemplateExportMetadata metadata;
-    metadata.title = temp.name;
     metadata.screenshot_png_base64 = temp.preview_screenshot_png_base64;
+    if (!prompt_editor_template_metadata(this, temp, metadata))
+        return;
 
-    QString safe_name = QString::fromStdString(temp.name).trimmed();
+    QString safe_name = QString::fromStdString(metadata.title).trimmed();
     if (safe_name.isEmpty()) safe_name = obsgs_tr("OBSTitles.TemplateFileDialogTitle");
-    safe_name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
+    safe_name.replace(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|]")), QStringLiteral("_"));
 
     QString path;
     if (save_in_library) {
+        QString category;
+        if (!prompt_editor_template_library_category(this, category))
+            return;
         QDir root(editor_template_library_root_path());
-        root.mkpath(QStringLiteral("Custom"));
-        path = root.filePath(QStringLiteral("Custom/%1.ogspt").arg(safe_name));
+        root.mkpath(category);
+        path = root.filePath(QStringLiteral("%1/%2.ogspt").arg(category, safe_name));
     } else {
         path = QFileDialog::getSaveFileName(this, obsgs_tr("OBSTitles.ExportTitleTemplate"),
                                             QDir(editor_template_library_root_path()).filePath(safe_name + QStringLiteral(".ogspt")),
@@ -2172,8 +2334,12 @@ void TitleEditor::export_title_template(bool save_in_library)
         if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".ogspt");
     }
 
-    auto stored = TitleDataStore::instance().create_title(temp.name);
+    auto stored = TitleDataStore::instance().create_title(metadata.title);
     copy_title_to_store(title_, stored);
+    stored->name = metadata.title;
+    stored->description = metadata.description;
+    stored->creator = metadata.creator;
+    stored->creation_date = metadata.creation_date;
     stored->preview_screenshot_png_base64 = metadata.screenshot_png_base64;
 
     std::string error;
@@ -2333,6 +2499,9 @@ void TitleEditor::restore_undo_snapshot(int index)
     restoring_undo_ = true;
     auto snapshot = undo_stack_[(size_t)index];
     title_->name = snapshot->name;
+    title_->description = snapshot->description;
+    title_->creator = snapshot->creator;
+    title_->creation_date = snapshot->creation_date;
     title_->duration = snapshot->duration;
     title_->loop_start = snapshot->loop_start;
     title_->loop_end = snapshot->loop_end;
