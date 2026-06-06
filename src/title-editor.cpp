@@ -189,7 +189,7 @@ static QImage editor_load_layer_image(const QString &path, const QSize &fallback
 
 static const QColor C_TEXT     { 0xcccccc };
 static const QColor C_RULER    { 0x1e1e1e };
-static const QColor C_KF_DOT   { 0xf0a020 };
+static const QColor C_KF_DOT   { 0xffd23f };
 static const QColor C_PLAYHEAD { 0xff4444 };
 
 static QIcon keyframe_diamond_icon(bool active, bool outlined = false)
@@ -1102,22 +1102,85 @@ static void style_color_button(QPushButton *button, uint32_t argb)
 }
 
 
-static QColor keyframe_color(EasingType easing)
+static QColor keyframe_color(EasingType)
 {
+    return C_KF_DOT;
+}
+
+static QPainterPath keyframe_shape_path(EasingType easing, const QPointF &center, qreal radius)
+{
+    const qreal x = center.x();
+    const qreal y = center.y();
+    QPainterPath path;
+
     switch (easing) {
     case EasingType::Linear:
-        return C_KF_DOT;
-    case EasingType::Hold:
-        return QColor(0xd8, 0x44, 0x44);
+        path.moveTo(x, y - radius);
+        path.lineTo(x + radius, y);
+        path.lineTo(x, y + radius);
+        path.lineTo(x - radius, y);
+        path.closeSubpath();
+        break;
     case EasingType::EaseIn:
+        path.moveTo(x - radius, y);
+        path.lineTo(x, y - radius);
+        path.lineTo(x + radius, y - radius);
+        path.lineTo(x + radius, y + radius);
+        path.lineTo(x, y + radius);
+        path.closeSubpath();
+        break;
     case EasingType::EaseOut:
+        path.moveTo(x + radius, y);
+        path.lineTo(x, y - radius);
+        path.lineTo(x - radius, y - radius);
+        path.lineTo(x - radius, y + radius);
+        path.lineTo(x, y + radius);
+        path.closeSubpath();
+        break;
     case EasingType::EaseInOut:
-        return QColor(0x43, 0xd1, 0x7a);
+        path.moveTo(x - radius, y - radius);
+        path.lineTo(x + radius, y - radius);
+        path.lineTo(x - radius, y + radius);
+        path.lineTo(x + radius, y + radius);
+        path.closeSubpath();
+        break;
     case EasingType::Bezier:
-        return QColor(0x55, 0xbc, 0xff);
+        path.addEllipse(center, radius, radius);
+        break;
+    case EasingType::Hold:
+        path.addRect(QRectF(x - radius, y - radius, radius * 2.0, radius * 2.0));
+        break;
     default:
-        return C_KF_DOT;
+        path.moveTo(x, y - radius);
+        path.lineTo(x + radius, y);
+        path.lineTo(x, y + radius);
+        path.lineTo(x - radius, y);
+        path.closeSubpath();
+        break;
     }
+
+    return path;
+}
+
+static void draw_keyframe_marker(QPainter &painter, const QPointF &center, EasingType easing,
+                                 qreal radius, const QColor &fill,
+                                 const QColor &stroke, qreal stroke_width)
+{
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(fill);
+    painter.setPen(QPen(stroke, stroke_width, Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+    painter.drawPath(keyframe_shape_path(easing, center, radius));
+
+    if (easing == EasingType::Bezier) {
+        painter.setPen(QPen(stroke, std::max<qreal>(1.0, stroke_width - 0.5)));
+        painter.drawLine(QPointF(center.x() - radius - 3.0, center.y()),
+                         QPointF(center.x() - radius, center.y()));
+        painter.drawLine(QPointF(center.x() + radius, center.y()),
+                         QPointF(center.x() + radius + 3.0, center.y()));
+    }
+
+    painter.restore();
 }
 
 static QString easing_label(EasingType easing)
@@ -5337,30 +5400,19 @@ void TimelineWidget::paintEvent(QPaintEvent *)
                 int kx = time_to_x(layer->in_time + kf.time);
                 if (kx < 0 || kx > W) continue;
                 int ky = y + rowh / 2;
-                QPolygon diamond;
-                diamond << QPoint(kx,     ky - 5)
-                        << QPoint(kx + 5, ky)
-                        << QPoint(kx,     ky + 5)
-                        << QPoint(kx - 5, ky);
-                QColor kf_fill = layer_color(*layer, row);
-                if (!layer->visible) {
-                    const int gray = qGray(kf_fill.rgb());
-                    kf_fill = QColor(gray, gray, gray).darker(135);
-                }
+                QColor kf_fill = keyframe_color(kf.easing);
+                if (!layer->visible)
+                    kf_fill = kf_fill.darker(160);
                 const bool selected = is_keyframe_selected(layer->id, prop.name, i);
                 if (selected) {
-                    QPolygon halo;
-                    halo << QPoint(kx,     ky - 8)
-                         << QPoint(kx + 8, ky)
-                         << QPoint(kx,     ky + 8)
-                         << QPoint(kx - 8, ky);
-                    p.setBrush(QColor(0xff, 0xff, 0xff, 45));
-                    p.setPen(QPen(QColor(0xff, 0xff, 0xff), 2));
-                    p.drawPolygon(halo);
+                    draw_keyframe_marker(p, QPointF(kx, ky), kf.easing, 8.0,
+                                         QColor(0xff, 0xff, 0xff, 45),
+                                         QColor(0xff, 0xff, 0xff), 2.0);
                 }
-                p.setBrush(selected ? kf_fill.lighter(135) : kf_fill);
-                p.setPen(QPen(selected ? QColor(0xff, 0xff, 0xff) : keyframe_color(kf.easing), selected ? 2 : 1));
-                p.drawPolygon(diamond);
+                draw_keyframe_marker(p, QPointF(kx, ky), kf.easing, 5.0,
+                                     selected ? kf_fill.lighter(125) : kf_fill,
+                                     selected ? QColor(0xff, 0xff, 0xff) : QColor(0x7a, 0x5a, 0x00),
+                                     selected ? 2.0 : 1.0);
             }
         };
 
@@ -5474,13 +5526,11 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     std::vector<EasingChoice> choices;
 
     auto swatch_icon = [](EasingType easing) {
-        QPixmap swatch(12, 12);
+        QPixmap swatch(16, 16);
         swatch.fill(Qt::transparent);
         QPainter painter(&swatch);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setBrush(keyframe_color(easing));
-        painter.setPen(Qt::NoPen);
-        painter.drawEllipse(1, 1, 10, 10);
+        draw_keyframe_marker(painter, QPointF(8, 8), easing, 5.0,
+                             keyframe_color(easing), QColor(0x7a, 0x5a, 0x00), 1.0);
         return QIcon(swatch);
     };
 
