@@ -2,8 +2,9 @@
  * title-source.h
  *
  * OBS source type "obs_graphics_studio_pro_source".
- * Renders a Title (from TitleDataStore) into an OBS texture every
- * frame using Cairo for 2-D compositing.
+ * Renders a Title (from TitleDataStore) into an OBS texture through
+ * the GPU transition layer, with Cairo retained as the compatibility
+ * 2-D raster path while shader/composite passes are introduced.
  */
 
 #pragma once

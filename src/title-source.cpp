@@ -10,6 +10,7 @@
  */
 
 #include "title-source.h"
+#include "title-renderer-gpu.h"
 #include "title-data.h"
 #include "plugin-main.h"
 #include "title-localization.h"
@@ -120,11 +121,10 @@ struct TitleSourceData {
     bool        first_tick   = true;
     bool        waiting_for_cue = true;
 
-    /* GPU texture */
+    /* GPU pipeline target */
     std::mutex    texture_mutex;
-    gs_texture_t *texture    = nullptr;
-    uint32_t      tex_w      = 0;
-    uint32_t      tex_h      = 0;
+    obsgs::GpuTextureFrame gpu_frame;
+    obsgs::GpuTitlePlan gpu_plan;
 
     /* CPU render buffer */
     std::vector<uint8_t> pixel_buf;   /* BGRA row-major */
@@ -1344,27 +1344,20 @@ static void render_title_frame(TitleSourceData *data,
     uint32_t h = clamped_source_dimension(title.height);
 
     /* (Re)allocate buffer & texture if size changed */
-    if (data->tex_w != w || data->tex_h != h) {
+    if (data->gpu_frame.width() != w || data->gpu_frame.height() != h) {
         bool texture_created = false;
         {
             std::lock_guard<std::mutex> lock(data->texture_mutex);
-            obs_enter_graphics();
-            if (data->texture) gs_texture_destroy(data->texture);
-            data->texture = gs_texture_create(w, h, GS_BGRA, 1, nullptr, GS_DYNAMIC);
-            texture_created = data->texture != nullptr;
-            obs_leave_graphics();
+            texture_created = data->gpu_frame.ensure_size(w, h);
         }
 
         if (!texture_created) {
-            data->tex_w = 0;
-            data->tex_h = 0;
             data->pixel_buf.clear();
             data->dirty = false;
             return;
         }
 
-        data->tex_w = w;
-        data->tex_h = h;
+        data->gpu_plan = obsgs::ObsGpuRenderPipeline().build_migration_plan(title);
         data->pixel_buf.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4, 0);
     }
 
@@ -1444,13 +1437,9 @@ static void render_title_frame(TitleSourceData *data,
     /* Upload to GPU */
     {
         std::lock_guard<std::mutex> lock(data->texture_mutex);
-        if (data->texture) {
-            obs_enter_graphics();
-            const uint8_t *ptr = data->pixel_buf.data();
-            uint32_t linesize  = w * 4;
-            gs_texture_set_image(data->texture, ptr, linesize, false);
-            obs_leave_graphics();
-        }
+        const uint8_t *ptr = data->pixel_buf.data();
+        uint32_t linesize  = w * 4;
+        data->gpu_frame.upload_bgra(ptr, linesize);
     }
 
     data->dirty = false;
@@ -1534,12 +1523,7 @@ static void source_destroy(void *priv)
     auto *data = static_cast<TitleSourceData *>(priv);
     {
         std::lock_guard<std::mutex> lock(data->texture_mutex);
-        obs_enter_graphics();
-        if (data->texture) gs_texture_destroy(data->texture);
-        obs_leave_graphics();
-        data->texture = nullptr;
-        data->tex_w = 0;
-        data->tex_h = 0;
+        data->gpu_frame.reset();
     }
     delete data;
 }
@@ -1767,18 +1751,7 @@ static void source_video_render(void *priv, gs_effect_t * /*effect*/)
 {
     auto *data = static_cast<TitleSourceData *>(priv);
     std::lock_guard<std::mutex> lock(data->texture_mutex);
-    if (!data->texture) return;
-
-    gs_effect_t *eff = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-    if (!eff) return;
-
-    gs_eparam_t *image = gs_effect_get_param_by_name(eff, "image");
-    if (!image) return;
-
-    gs_effect_set_texture(image, data->texture);
-
-    while (gs_effect_loop(eff, "Draw"))
-        gs_draw_sprite(data->texture, 0, 0, 0);
+    data->gpu_frame.render_default();
 }
 
 /* ── Properties panel ─────────────────────────────────────────────── */
