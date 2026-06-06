@@ -1973,6 +1973,27 @@ void TitleEditor::flip_selected_layers(bool horizontal)
     if (props_) props_->set_layer(last_layer, playhead_);
 }
 
+void TitleEditor::rotate_selected_layers(double degrees)
+{
+    if (!title_ || sel_layer_id_.empty()) return;
+    auto ids = layers_ ? layers_->selected_ids() : std::vector<std::string>{sel_layer_id_};
+    if (ids.empty()) return;
+
+    std::shared_ptr<Layer> last_layer;
+    for (const auto &id : ids) {
+        auto layer = title_->find_layer(id);
+        if (!layer || layer->locked) continue;
+        const double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                                     std::max(0.0, layer->out_time - layer->in_time));
+        set_animated_value(layer->rotation, lt, layer->rotation.evaluate(lt) + degrees);
+        last_layer = layer;
+    }
+
+    if (!last_layer) return;
+    on_title_modified();
+    if (props_) props_->set_layer(last_layer, playhead_);
+}
+
 void TitleEditor::align_selected_layers_horizontal()
 {
     align_selected_layers(1, -1);
@@ -2088,6 +2109,7 @@ void TitleEditor::build_toolbar()
 {
     toolbar_ = new QToolBar(this);
     toolbar_->setMovable(false);
+    toolbar_->setToolButtonStyle(Qt::ToolButtonIconOnly);
     toolbar_->setIconSize(QSize(16, 16));
     toolbar_->setStyleSheet(
         "QToolBar { background:#1a1a1a; border-bottom:1px solid #333; spacing:2px; }"
@@ -2116,10 +2138,11 @@ void TitleEditor::build_toolbar()
     toolbar_->addSeparator();
     auto *align_target = new QToolButton(toolbar_);
     align_target->setIcon(obs_icon("alignment-target.svg"));
-    align_target->setText(obsgs_tr("OBSTitles.AlignmentTargetShort"));
+    align_target->setToolButtonStyle(Qt::ToolButtonIconOnly);
     align_target->setToolTip(obsgs_tr("OBSTitles.AlignmentTarget"));
+    align_target->setAccessibleName(obsgs_tr("OBSTitles.AlignmentTarget"));
     align_target->setPopupMode(QToolButton::InstantPopup);
-    align_target->setStyleSheet("QToolButton{color:#ddd;background:#3a3a3a;border:1px solid #666;border-radius:2px;padding:3px 8px;} QToolButton::menu-indicator{image:none;}");
+    align_target->setStyleSheet("QToolButton{color:#ddd;background:#3a3a3a;border:1px solid #666;border-radius:2px;padding:3px 6px;} QToolButton::menu-indicator{image:none;}");
     auto *align_menu = new QMenu(align_target);
     QAction *target_selection = align_menu->addAction(obsgs_tr("OBSTitles.AlignToSelection"));
     QAction *target_title_safe = align_menu->addAction(obsgs_tr("OBSTitles.AlignToTitleSafeGuides"));
@@ -2169,16 +2192,40 @@ void TitleEditor::build_toolbar()
     add_align_action("align-center-artboard.svg", obsgs_tr("OBSTitles.AlignCenterToArtboard"), 1, 1);
 
     toolbar_->addSeparator();
-    auto add_flip_action = [this](const QString &text, bool horizontal) {
-        QAction *action = toolbar_->addAction(text);
+    auto add_flip_action = [this](const char *icon_name, const QString &text, bool horizontal) {
+        QAction *action = toolbar_->addAction(obs_icon(icon_name), text);
         action->setToolTip(text);
         connect(action, &QAction::triggered, this, [this, horizontal]() {
             flip_selected_layers(horizontal);
         });
         return action;
     };
-    add_flip_action(obsgs_tr("OBSTitles.FlipHorizontal"), true);
-    add_flip_action(obsgs_tr("OBSTitles.FlipVertical"), false);
+    add_flip_action("flip-horizontal.svg", obsgs_tr("OBSTitles.FlipHorizontal"), true);
+    add_flip_action("flip-vertical.svg", obsgs_tr("OBSTitles.FlipVertical"), false);
+
+    toolbar_->addSeparator();
+    auto *rotation_degrees = new QDoubleSpinBox(toolbar_);
+    rotation_degrees->setRange(-9999.0, 9999.0);
+    rotation_degrees->setDecimals(1);
+    rotation_degrees->setSingleStep(1.0);
+    rotation_degrees->setValue(90.0);
+    rotation_degrees->setSuffix(QStringLiteral("°"));
+    rotation_degrees->setToolTip(obsgs_tr("OBSTitles.RotateDegreesTooltip"));
+    rotation_degrees->setAccessibleName(obsgs_tr("OBSTitles.RotateDegrees"));
+    rotation_degrees->setFixedWidth(78);
+    rotation_degrees->setStyleSheet("QDoubleSpinBox{color:#ddd;background:#202020;border:1px solid #3f3f3f;border-radius:3px;padding:2px 4px;}"
+                                    "QDoubleSpinBox::up-button,QDoubleSpinBox::down-button{width:0;border:none;}");
+    toolbar_->addWidget(rotation_degrees);
+    auto add_rotate_action = [this, rotation_degrees](const char *icon_name, const QString &text, double direction) {
+        QAction *action = toolbar_->addAction(obs_icon(icon_name), text);
+        action->setToolTip(text);
+        connect(action, &QAction::triggered, this, [this, rotation_degrees, direction]() {
+            rotate_selected_layers(rotation_degrees->value() * direction);
+        });
+        return action;
+    };
+    add_rotate_action("rotate-left.svg", obsgs_tr("OBSTitles.RotateLeft"), -1.0);
+    add_rotate_action("rotate-right.svg", obsgs_tr("OBSTitles.RotateRight"), 1.0);
 
     act_safe_guides_ = new QAction(obs_icon("safe.svg"), obsgs_tr("OBSTitles.Safe"), this);
     act_safe_guides_->setCheckable(true);

@@ -121,6 +121,7 @@ private:
     void align_selected_layers_vertical();
     void align_selected_layers(int x_mode, int y_mode);
     void flip_selected_layers(bool horizontal);
+    void rotate_selected_layers(double degrees);
     std::shared_ptr<Title> clone_title(const Title &title) const;
     std::shared_ptr<Layer> clone_layer_for_insert(const Layer &layer, bool suffix_name) const;
     void insert_layer_above(const std::string &anchor_id, std::shared_ptr<Layer> layer);
