@@ -50,35 +50,6 @@ constexpr double kPi = 3.141592653589793238462643383279502884;
 constexpr double kLayerAssetSupersample = 2.0;
 constexpr int kMaxLayerAssetTextureSize = 8192;
 
-
-thread_local int g_graphics_lock_depth = 0;
-
-class ScopedObsGraphicsLock {
-public:
-    ScopedObsGraphicsLock()
-    {
-        if (!obs_get_video())
-            return;
-        active_ = true;
-        if (g_graphics_lock_depth++ == 0)
-            obs_enter_graphics();
-    }
-
-    ~ScopedObsGraphicsLock()
-    {
-        if (!active_)
-            return;
-        if (--g_graphics_lock_depth == 0)
-            obs_leave_graphics();
-    }
-
-    ScopedObsGraphicsLock(const ScopedObsGraphicsLock &) = delete;
-    ScopedObsGraphicsLock &operator=(const ScopedObsGraphicsLock &) = delete;
-
-private:
-    bool active_ = false;
-};
-
 thread_local int g_graphics_lock_depth = 0;
 
 class ScopedObsGraphicsLock {
@@ -205,84 +176,6 @@ static QImage load_layer_image(const Layer &layer, double t = 0.0, double device
     QImageReader reader(path);
     reader.setAutoTransform(true);
     return premultiplied_bgra_image(reader.read());
-}
-
-static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
-    const std::vector<std::shared_ptr<Layer>> &exposed,
-    const std::vector<std::string> &column_order)
-{
-    if (column_order.empty())
-        return exposed;
-
-    std::vector<std::shared_ptr<Layer>> ordered;
-    ordered.reserve(exposed.size());
-    for (const auto &layer_id : column_order) {
-        auto it = std::find_if(exposed.begin(), exposed.end(),
-                               [&](const std::shared_ptr<Layer> &layer) {
-                                   return layer && layer->id == layer_id;
-                               });
-        if (it != exposed.end())
-            ordered.push_back(*it);
-    }
-    for (const auto &layer : exposed) {
-        if (!layer) continue;
-        auto it = std::find_if(ordered.begin(), ordered.end(),
-                               [&](const std::shared_ptr<Layer> &ordered_layer) {
-                                   return ordered_layer && ordered_layer->id == layer->id;
-                               });
-        if (it == ordered.end())
-            ordered.push_back(layer);
-    }
-    return ordered;
-}
-
-static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &title)
-{
-    std::vector<std::shared_ptr<Layer>> exposed;
-    for (const auto &layer : title.layers) {
-        if (!layer) continue;
-        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
-            exposed.push_back(layer);
-    }
-    return order_exposed_text_layers(exposed, title.live_text_column_order);
-}
-
-static double cue_persistence_hold_time(const Title &title)
-{
-    if (title.playback_mode == 1)
-        return std::clamp(title.loop_end, title.loop_start, title.duration);
-    if (title.playback_mode == 2)
-        return std::clamp(title.pause_time, 0.0, title.duration);
-    return std::clamp(title.duration, 0.0, title.duration);
-}
-
-static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &exposed, const std::shared_ptr<Layer> &layer)
-{
-    if (!layer)
-        return -1;
-    for (int i = 0; i < (int)exposed.size(); ++i) {
-        if (exposed[i] && exposed[i]->id == layer->id)
-            return i;
-    }
-    return -1;
-}
-
-static double cue_persistent_layer_time(const Title &title, const std::shared_ptr<Layer> &layer,
-                                        double frame_time,
-                                        const std::vector<std::shared_ptr<Layer>> &exposed,
-                                        bool background_persistence)
-{
-    if (!background_persistence)
-        return frame_time;
-
-    const int exposed_index = exposed_text_layer_index(exposed, layer);
-    const bool persistent_text = exposed_index >= 0 && title.cue_text_persistence &&
-        exposed_index < (int)title.cue_persistent_text_columns.size() &&
-        title.cue_persistent_text_columns[exposed_index];
-    if (exposed_index < 0 || persistent_text)
-        return cue_persistence_hold_time(title);
-
-    return frame_time;
 }
 
 static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
