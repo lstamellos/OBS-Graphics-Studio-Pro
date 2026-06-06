@@ -2358,14 +2358,15 @@ bool TitleEditor::confirm_save_before_close()
     dialog.setIcon(QMessageBox::Warning);
     dialog.setWindowTitle(obsgs_tr("OBSTitles.UnsavedChangesTitle"));
     dialog.setText(obsgs_tr("OBSTitles.UnsavedChangesPrompt"));
-    QPushButton *save_button = dialog.addButton(obsgs_tr("OBSTitles.Save"), QMessageBox::AcceptRole);
-    QPushButton *cancel_button = dialog.addButton(obsgs_tr("OBSTitles.Cancel"), QMessageBox::RejectRole);
-    dialog.setDefaultButton(save_button);
-    dialog.setEscapeButton(cancel_button);
-    dialog.exec();
+    dialog.setStandardButtons(QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+    dialog.setDefaultButton(QMessageBox::Yes);
+    dialog.setEscapeButton(QMessageBox::Cancel);
 
-    if (dialog.clickedButton() == save_button)
+    const auto result = static_cast<QMessageBox::StandardButton>(dialog.exec());
+    if (result == QMessageBox::Yes)
         return save_title();
+    if (result == QMessageBox::No)
+        return true;
     return false;
 }
 
