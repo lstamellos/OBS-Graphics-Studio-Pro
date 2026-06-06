@@ -204,6 +204,7 @@ protected:
     void mousePressEvent(QMouseEvent *ev) override;
     void mouseMoveEvent(QMouseEvent *ev) override;
     void mouseReleaseEvent(QMouseEvent *ev) override;
+    void keyPressEvent(QKeyEvent *ev) override;
     void wheelEvent(QWheelEvent *ev) override;
     void resizeEvent(QResizeEvent *ev) override;
 
@@ -228,6 +229,7 @@ private:
     void begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
     void update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
     bool duplicate_selected_layers_for_drag();
+    bool nudge_selected_layers(double dx, double dy);
     void apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
 
     std::shared_ptr<Title> title_;

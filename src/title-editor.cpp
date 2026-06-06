@@ -2719,6 +2719,7 @@ CanvasPreview::CanvasPreview(QWidget *parent) : QWidget(parent)
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setStyleSheet("background:#111;");
     setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
 }
 
 void CanvasPreview::set_title(std::shared_ptr<Title> t)
@@ -3130,6 +3131,29 @@ bool CanvasPreview::duplicate_selected_layers_for_drag()
     emit layers_selected(selected_layer_ids_);
     dirty_ = true;
     update();
+    return true;
+}
+
+bool CanvasPreview::nudge_selected_layers(double dx, double dy)
+{
+    auto layers = selected_layers();
+    if (!title_ || layers.empty()) return false;
+
+    bool changed = false;
+    for (const auto &layer : layers) {
+        if (!layer || layer->locked) continue;
+        double lt = std::clamp(playhead_ - layer->in_time, 0.0,
+                               std::max(0.0, layer->out_time - layer->in_time));
+        set_animated_value(layer->pos_x, lt, layer->pos_x.evaluate(lt) + dx);
+        set_animated_value(layer->pos_y, lt, layer->pos_y.evaluate(lt) + dy);
+        changed = true;
+    }
+
+    if (!changed) return false;
+
+    dirty_ = true;
+    update();
+    emit layer_geometry_changed();
     return true;
 }
 
@@ -3563,6 +3587,7 @@ void CanvasPreview::paintEvent(QPaintEvent *)
 }
 void CanvasPreview::mousePressEvent(QMouseEvent *ev)
 {
+    setFocus(Qt::MouseFocusReason);
     if (!title_) return;
 
     if (ev->button() == Qt::MiddleButton) {
@@ -3680,6 +3705,36 @@ void CanvasPreview::mouseMoveEvent(QMouseEvent *ev)
     else if (mode == DragMode::ResizeNE || mode == DragMode::ResizeSW) setCursor(Qt::SizeBDiagCursor);
     else if (mode != DragMode::None) setCursor(Qt::SizeFDiagCursor);
     else unsetCursor();
+}
+
+void CanvasPreview::keyPressEvent(QKeyEvent *ev)
+{
+    double dx = 0.0;
+    double dy = 0.0;
+    const double amount = ev->modifiers().testFlag(Qt::ShiftModifier) ? 10.0 : 1.0;
+
+    switch (ev->key()) {
+    case Qt::Key_Left:
+        dx = -amount;
+        break;
+    case Qt::Key_Right:
+        dx = amount;
+        break;
+    case Qt::Key_Up:
+        dy = -amount;
+        break;
+    case Qt::Key_Down:
+        dy = amount;
+        break;
+    default:
+        QWidget::keyPressEvent(ev);
+        return;
+    }
+
+    if (nudge_selected_layers(dx, dy))
+        ev->accept();
+    else
+        QWidget::keyPressEvent(ev);
 }
 
 void CanvasPreview::mouseReleaseEvent(QMouseEvent *ev)
