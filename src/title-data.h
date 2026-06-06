@@ -169,6 +169,21 @@ struct Layer {
 
     /* ----- Solid / shape ----- */
     uint32_t    fill_color    = 0xFF222222;
+    int         fill_type     = 0;  /* 0=solid, 1=gradient */
+    int         gradient_type = 0;  /* 0=linear, 1=radial */
+    uint32_t    gradient_start_color = 0xFF4B6EA8;
+    uint32_t    gradient_end_color   = 0xFF1B1B1B;
+    float       gradient_start_pos = 0.0f;
+    float       gradient_end_pos   = 1.0f;
+    float       gradient_start_opacity = 1.0f;
+    float       gradient_end_opacity   = 1.0f;
+    float       gradient_opacity   = 1.0f;
+    float       gradient_angle     = 0.0f;
+    float       gradient_center_x  = 0.5f;
+    float       gradient_center_y  = 0.5f;
+    float       gradient_scale     = 1.0f;
+    float       gradient_focal_x   = 0.5f;
+    float       gradient_focal_y   = 0.5f;
 
     /* Optional box background for text/image layers. */
     bool        background_enabled = false;
