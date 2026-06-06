@@ -332,7 +332,7 @@ static QBrush gradient_fill_brush(const Layer &layer, const QRectF &box, double 
 static QFont font_for_layer(const Layer &layer)
 {
     QFont font(QString::fromStdString(layer.font_family));
-    font.setPointSizeF(std::max(1.0f, layer.font_size));
+    font.setPointSizeF(std::max(1.0, static_cast<double>(layer.font_size)));
     font.setBold(layer.font_bold);
     font.setItalic(layer.font_italic);
     font.setUnderline(layer.text_underline);
