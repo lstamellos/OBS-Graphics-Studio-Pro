@@ -643,6 +643,54 @@ static QIcon title_cached_screenshot_icon(const Title &title, const QSize &size)
     return QIcon(pixmap.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
+static QPixmap title_preview_pixmap(const Title &title, const QSize &size)
+{
+    QPixmap pixmap;
+
+    if (!title.preview_screenshot_png_base64.empty()) {
+        const QByteArray png = QByteArray::fromBase64(
+            QByteArray(title.preview_screenshot_png_base64.data(),
+                       (int)title.preview_screenshot_png_base64.size()));
+        pixmap.loadFromData(png, "PNG");
+    }
+
+    if (pixmap.isNull()) {
+        const QImage screenshot = title_screenshot_image(title);
+        if (!screenshot.isNull())
+            pixmap = QPixmap::fromImage(screenshot);
+    }
+
+    if (pixmap.isNull())
+        return QPixmap();
+
+    return pixmap.scaled(size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+}
+
+static QMessageBox::StandardButton confirm_delete_single_title(QWidget *parent, const Title &title)
+{
+    QMessageBox box(QMessageBox::Question,
+                    obsgs_tr("OBSTitles.DeleteTitle"),
+                    obsgs_tr("OBSTitles.DeleteTitleQuestionFormat").arg(QString::fromStdString(title.name)),
+                    QMessageBox::Yes | QMessageBox::No,
+                    parent);
+
+    const QPixmap preview = title_preview_pixmap(title, QSize(240, 135));
+    if (!preview.isNull())
+        box.setIconPixmap(preview);
+
+    box.setDefaultButton(QMessageBox::No);
+    return static_cast<QMessageBox::StandardButton>(box.exec());
+}
+
+static QMessageBox::StandardButton confirm_delete_multiple_titles(QWidget *parent, int count)
+{
+    return QMessageBox::question(
+        parent, obsgs_tr("OBSTitles.DeleteTitle"),
+        obsgs_tr("OBSTitles.DeleteSelectedTitlesQuestionFormat").arg(count),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+}
+
 static QString title_screenshot_png_base64(const QImage &screenshot)
 {
     if (screenshot.isNull())
@@ -1271,7 +1319,7 @@ void TitleDock::build_ui()
 
     list_ = new QListWidget(template_section);
     list_->setAlternatingRowColors(true);
-    list_->setSelectionMode(QAbstractItemView::SingleSelection);
+    list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     list_->setMinimumHeight(120);
     template_layout->addWidget(list_, 1);
 
@@ -1610,23 +1658,46 @@ std::string TitleDock::selected_id() const
     return item->data(Qt::UserRole).toString().toStdString();
 }
 
+std::vector<std::string> TitleDock::selected_title_ids() const
+{
+    std::vector<std::string> ids;
+    if (!list_) return ids;
+
+    const auto items = list_->selectedItems();
+    ids.reserve((size_t)items.size());
+    for (const auto *item : items) {
+        if (!item) continue;
+        const std::string id = item->data(Qt::UserRole).toString().toStdString();
+        if (!id.empty())
+            ids.push_back(id);
+    }
+
+    return ids;
+}
+
 void TitleDock::on_selection_changed()
 {
-    bool has = !selected_id().empty();
-    btn_dup_->setEnabled(has);
-    btn_rename_->setEnabled(has);
-    btn_del_->setEnabled(has);
-    btn_export_->setEnabled(has);
-    btn_edit_->setEnabled(has);
-    btn_scene_->setEnabled(has);
+    const auto ids = selected_title_ids();
+    const int selected_count = (int)ids.size();
+    const bool has = selected_count > 0;
+    const bool single = selected_count == 1;
 
-    if (has) {
-        auto t = TitleDataStore::instance().get_title(selected_id());
+    btn_dup_->setEnabled(single);
+    btn_rename_->setEnabled(single);
+    btn_del_->setEnabled(has);
+    btn_export_->setEnabled(single);
+    btn_edit_->setEnabled(single);
+    btn_scene_->setEnabled(single);
+
+    if (single) {
+        auto t = TitleDataStore::instance().get_title(ids.front());
         if (t)
             status_lbl_->setText(
                 obsgs_tr("OBSTitles.StatusLayerCountFormat")
                     .arg(t->layers.size())
                     .arg(t->duration, 0, 'f', 1));
+    } else if (has) {
+        status_lbl_->setText(obsgs_tr("OBSTitles.SelectedTitlesStatusFormat").arg(selected_count));
     } else {
         status_lbl_->setText(list_->count() == 0
             ? obsgs_tr("OBSTitles.UseAddHint")
@@ -1634,8 +1705,6 @@ void TitleDock::on_selection_changed()
     }
     populate_exposed_text();
 }
-
-
 
 void TitleDock::save_live_text_header_state()
 {
@@ -3083,19 +3152,21 @@ void TitleDock::on_import()
 
 void TitleDock::on_delete()
 {
-    std::string id = selected_id();
-    if (id.empty()) return;
+    const auto ids = selected_title_ids();
+    if (ids.empty()) return;
 
-    auto t = TitleDataStore::instance().get_title(id);
-    if (!t) return;
-
-    auto reply = QMessageBox::question(
-        this, obsgs_tr("OBSTitles.DeleteTitle"),
-        obsgs_tr("OBSTitles.DeleteTitleQuestionFormat").arg(QString::fromStdString(t->name)),
-        QMessageBox::Yes | QMessageBox::No);
+    QMessageBox::StandardButton reply = QMessageBox::No;
+    if (ids.size() == 1) {
+        auto title = TitleDataStore::instance().get_title(ids.front());
+        if (!title) return;
+        reply = confirm_delete_single_title(this, *title);
+    } else {
+        reply = confirm_delete_multiple_titles(this, (int)ids.size());
+    }
 
     if (reply == QMessageBox::Yes) {
-        TitleDataStore::instance().delete_title(id);
+        for (const auto &id : ids)
+            TitleDataStore::instance().delete_title(id);
         TitleDataStore::instance().save();
     }
 }

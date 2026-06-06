@@ -27,6 +27,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <map>
+#include <vector>
 
 class TitleEditor;
 
@@ -94,6 +95,7 @@ private:
     bool has_checked_live_text_rows() const;
     void apply_live_text_row_selection(const std::vector<int> &rows, bool checked);
     std::string selected_id() const;
+    std::vector<std::string> selected_title_ids() const;
     std::shared_ptr<Title> create_template_title(const std::string &name, int template_id);
     void select_title(const std::string &id);
     void create_title_from_template(const std::string &name, int template_id);
