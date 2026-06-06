@@ -7824,11 +7824,11 @@ PropertiesPanel::PropertiesPanel(QWidget *parent) : QScrollArea(parent)
                                                                  const char *title_key) {
         connect(button, &QPushButton::clicked, this, [this, can_edit, emit_change, button, member, title_key]() {
             if (!can_edit()) return;
-            QColor picked = QColorDialog::getColor(color_from_argb(layer_->*member), this, obsgs_tr(title_key),
+            QColor picked = QColorDialog::getColor(color_from_argb((*layer_).*member), this, obsgs_tr(title_key),
                                                     QColorDialog::ShowAlphaChannel);
             if (!picked.isValid()) return;
-            layer_->*member = argb_from_color(picked);
-            style_color_button(button, layer_->*member);
+            (*layer_).*member = argb_from_color(picked);
+            style_color_button(button, (*layer_).*member);
             emit_change();
         });
     };
