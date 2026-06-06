@@ -5346,26 +5346,25 @@ void TimelineWidget::wheelEvent(QWheelEvent *ev)
         return;
     }
 
-    if (ev->modifiers() & Qt::AltModifier) {
-        int delta = angle.y() != 0 ? -angle.y() : -angle.x();
-        if (delta != 0) {
-            emit vertical_scroll_delta_requested(delta);
-            ev->accept();
-            return;
-        }
+    if (ev->modifiers() & Qt::ControlModifier) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        int cursor_x = (int)std::round(ev->position().x());
+#else
+        int cursor_x = ev->pos().x();
+#endif
+        double anchor_time = (cursor_x + scroll_x_) / pixels_per_sec_;
+        int delta = angle.y() != 0 ? angle.y() : angle.x();
+        if (delta == 0) return;
+
+        double factor = std::pow(1.0015, delta);
+        set_pixels_per_sec(pixels_per_sec_ * factor, anchor_time, cursor_x);
+        ev->accept();
+        return;
     }
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    int cursor_x = (int)std::round(ev->position().x());
-#else
-    int cursor_x = ev->pos().x();
-#endif
-    double anchor_time = (cursor_x + scroll_x_) / pixels_per_sec_;
-    int delta = angle.y() != 0 ? angle.y() : angle.x();
+    int delta = angle.y() != 0 ? -angle.y() : -angle.x();
     if (delta == 0) return;
-
-    double factor = std::pow(1.0015, delta);
-    set_pixels_per_sec(pixels_per_sec_ * factor, anchor_time, cursor_x);
+    emit vertical_scroll_delta_requested(delta);
     ev->accept();
 }
 
