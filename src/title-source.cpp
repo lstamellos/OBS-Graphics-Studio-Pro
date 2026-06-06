@@ -484,6 +484,44 @@ static uint32_t eval_fill_color(const Layer &layer, double t)
            (uint32_t)eval_channel(layer.fill_color_b, layer.fill_color & 0xFF, t);
 }
 
+static QColor gradient_color_with_opacity(uint32_t argb, double opacity)
+{
+    QColor color((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, (argb >> 24) & 0xFF);
+    color.setAlphaF(std::clamp((double)color.alphaF() * opacity, 0.0, 1.0));
+    return color;
+}
+
+static cairo_pattern_t *create_fill_gradient_pattern(const Layer &layer, double w, double h, double layer_alpha)
+{
+    const double opacity = std::clamp((double)layer.gradient_opacity * layer_alpha, 0.0, 1.0);
+    const double cx = std::clamp((double)layer.gradient_center_x, 0.0, 1.0) * w;
+    const double cy = std::clamp((double)layer.gradient_center_y, 0.0, 1.0) * h;
+    const double scale = std::clamp((double)layer.gradient_scale, 0.01, 10.0);
+    const double start_pos = std::clamp((double)layer.gradient_start_pos, 0.0, 1.0);
+    const double end_pos = std::clamp((double)layer.gradient_end_pos, 0.0, 1.0);
+    cairo_pattern_t *pattern = nullptr;
+    if (layer.gradient_type == 1) {
+        const double radius = std::max(w, h) * 0.5 * scale;
+        const double fx = std::clamp((double)layer.gradient_focal_x, 0.0, 1.0) * w;
+        const double fy = std::clamp((double)layer.gradient_focal_y, 0.0, 1.0) * h;
+        pattern = cairo_pattern_create_radial(fx, fy, 0.0, cx, cy, std::max(1.0, radius));
+    } else {
+        const double length = std::hypot(w, h) * 0.5 * scale;
+        const double angle = layer.gradient_angle * kPi / 180.0;
+        const double dx = std::cos(angle) * length;
+        const double dy = std::sin(angle) * length;
+        pattern = cairo_pattern_create_linear(cx - dx, cy - dy, cx + dx, cy + dy);
+    }
+    auto add_stop = [&](double pos, uint32_t argb) {
+        QColor color = gradient_color_with_opacity(argb, opacity);
+        cairo_pattern_add_color_stop_rgba(pattern, pos, color.redF(), color.greenF(), color.blueF(), color.alphaF());
+    };
+    add_stop(start_pos, layer.gradient_start_color);
+    add_stop(end_pos, layer.gradient_end_color);
+    cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
+    return pattern;
+}
+
 static bool eval_outline_enabled(const Layer &layer, double)
 {
     return layer.outline_enabled;
@@ -1172,13 +1210,21 @@ static void render_layer_rect(cairo_t *cr, const Layer &layer, double t)
     };
     if (has_outline && !eval_outline_on_front(layer, t))
         stroke_outline();
-    cairo_set_source_rgba(cr, fr, fg, fb, fa * alpha);
+    cairo_pattern_t *gradient_pattern = nullptr;
+    if (layer.fill_type == 1) {
+        gradient_pattern = create_fill_gradient_pattern(layer, w, h, alpha);
+        cairo_set_source(cr, gradient_pattern);
+    } else {
+        cairo_set_source_rgba(cr, fr, fg, fb, fa * alpha);
+    }
     if (has_outline && eval_outline_on_front(layer, t)) {
         cairo_fill_preserve(cr);
+        if (gradient_pattern) cairo_pattern_destroy(gradient_pattern);
         stroke_outline();
         cairo_new_path(cr);
     } else {
         cairo_fill(cr);
+        if (gradient_pattern) cairo_pattern_destroy(gradient_pattern);
     }
     cairo_restore(cr);
 }
