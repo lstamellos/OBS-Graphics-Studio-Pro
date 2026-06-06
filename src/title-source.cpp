@@ -1657,10 +1657,10 @@ static void source_video_tick(void *priv, float seconds)
     }
 
 
-    if (!data->waiting_for_cue && has_ticker_layer)
+    if (has_ticker_layer)
         data->dirty = true;
 
-    if (!data->waiting_for_cue && (static_clock_title || (!data->playing && has_clock_layer))) {
+    if (static_clock_title || (!data->playing && has_clock_layer)) {
         auto now = std::chrono::steady_clock::now();
         if (now - data->last_clock_refresh >= std::chrono::seconds(1)) {
             data->last_clock_refresh = now;
