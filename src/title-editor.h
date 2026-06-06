@@ -22,6 +22,7 @@
 
 #include "title-data.h"
 #include <QDialog>
+#include <QWidget>
 #include <QSplitter>
 #include <QListWidget>
 #include <QToolBar>
@@ -176,7 +177,9 @@ private:
 };
 
 /* ══════════════════════════════════════════════════════════════════
- *  CanvasPreview  – renders the title at the current playhead
+ *  CanvasPreview  – renders the title at the current playhead.
+ *  Keep this as QWidget: QOpenGLWidget is an optional Qt module in OBS
+ *  plugin dependency bundles and can break Windows builds/plugin loading.
  * ══════════════════════════════════════════════════════════════════ */
 class CanvasPreview : public QWidget {
     Q_OBJECT
