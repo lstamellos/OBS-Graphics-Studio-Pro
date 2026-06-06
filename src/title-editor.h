@@ -196,6 +196,7 @@ signals:
     void layer_clicked(const std::string &layer_id);
     void layers_selected(const std::vector<std::string> &layer_ids);
     void layer_geometry_changed();
+    void layer_structure_changed();
     void zoom_percent_changed(int percent);
 
 protected:
@@ -226,6 +227,7 @@ private:
     QRectF selected_canvas_bounds() const;
     void begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
     void update_marquee(const QPointF &view_pt, Qt::KeyboardModifiers modifiers);
+    bool duplicate_selected_layers_for_drag();
     void apply_drag(const QPointF &view_pt, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
 
     std::shared_ptr<Title> title_;
@@ -246,6 +248,8 @@ private:
 
     DragMode drag_mode_ = DragMode::None;
     bool drag_changed_ = false;
+    bool alt_duplicate_pending_ = false;
+    bool alt_duplicate_done_ = false;
     bool marquee_active_ = false;
     QPointF drag_start_view_;
     QPointF drag_current_view_;
