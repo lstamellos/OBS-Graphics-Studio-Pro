@@ -181,7 +181,7 @@ private:
  *  Keep this as QWidget: QOpenGLWidget is an optional Qt module in OBS
  *  plugin dependency bundles and can break Windows builds/plugin loading.
  * ══════════════════════════════════════════════════════════════════ */
-class CanvasPreview : public QWidget {
+class CanvasPreview : public QOpenGLWidget {
     Q_OBJECT
 
 public:
