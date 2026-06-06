@@ -128,6 +128,8 @@ static const QColor C_BG_MID   { 0x252525 };
 static const QColor C_BG_LIGHT { 0x2e2e2e };
 static const QColor C_ACCENT   { 0x0078d4 };
 
+static bool editor_focus_accepts_text(QWidget *widget);
+
 /* OBS safe area margins: Rec. ITU-R BT.1848-1 / EBU R 95. */
 static constexpr double OBS_ACTION_SAFE_PERCENT = 0.035;
 static constexpr double OBS_GRAPHICS_SAFE_PERCENT = 0.05;
