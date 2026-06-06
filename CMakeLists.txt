@@ -163,9 +163,9 @@ if(NOT libobs_FOUND OR NOT obs-frontend-api_FOUND)
 endif()
 
 # ── Find Qt ─────────────────────────────────────────────────────────
-find_package(Qt6 COMPONENTS Core Widgets Svg QUIET)
+find_package(Qt6 COMPONENTS Core Widgets Svg OpenGLWidgets QUIET)
 if(NOT Qt6_FOUND)
-  find_package(Qt5 5.15 COMPONENTS Core Widgets Svg REQUIRED)
+  find_package(Qt5 5.15 COMPONENTS Core Widgets Svg OpenGL REQUIRED)
   set(QT_VERSION_MAJOR 5)
 else()
   set(QT_VERSION_MAJOR 6)

@@ -15,6 +15,7 @@
 #include <obs-module.h>
 
 #include <QApplication>
+#include <QOpenGLWidget>
 
 #include <QBuffer>
 #include <QIODevice>
@@ -3350,11 +3351,12 @@ void TitleEditor::on_title_modified(bool push_undo)
 /* ══════════════════════════════════════════════════════════════════
  *  CanvasPreview
  * ══════════════════════════════════════════════════════════════════ */
-CanvasPreview::CanvasPreview(QWidget *parent) : QWidget(parent)
+CanvasPreview::CanvasPreview(QWidget *parent) : QOpenGLWidget(parent)
 {
     setMinimumSize(400, 225);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setStyleSheet("background:#111;");
+    setUpdateBehavior(QOpenGLWidget::PartialUpdate);
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
 }

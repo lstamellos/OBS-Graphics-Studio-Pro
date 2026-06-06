@@ -179,7 +179,7 @@ private:
 /* ══════════════════════════════════════════════════════════════════
  *  CanvasPreview  – renders the title at the current playhead
  * ══════════════════════════════════════════════════════════════════ */
-class CanvasPreview : public QWidget {
+class CanvasPreview : public QOpenGLWidget {
     Q_OBJECT
 
 public:
