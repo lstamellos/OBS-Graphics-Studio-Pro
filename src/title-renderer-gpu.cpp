@@ -152,6 +152,84 @@ static QImage load_layer_image(const Layer &layer, double t = 0.0)
     return reader.read();
 }
 
+static std::vector<std::shared_ptr<Layer>> order_exposed_text_layers(
+    const std::vector<std::shared_ptr<Layer>> &exposed,
+    const std::vector<std::string> &column_order)
+{
+    if (column_order.empty())
+        return exposed;
+
+    std::vector<std::shared_ptr<Layer>> ordered;
+    ordered.reserve(exposed.size());
+    for (const auto &layer_id : column_order) {
+        auto it = std::find_if(exposed.begin(), exposed.end(),
+                               [&](const std::shared_ptr<Layer> &layer) {
+                                   return layer && layer->id == layer_id;
+                               });
+        if (it != exposed.end())
+            ordered.push_back(*it);
+    }
+    for (const auto &layer : exposed) {
+        if (!layer) continue;
+        auto it = std::find_if(ordered.begin(), ordered.end(),
+                               [&](const std::shared_ptr<Layer> &ordered_layer) {
+                                   return ordered_layer && ordered_layer->id == layer->id;
+                               });
+        if (it == ordered.end())
+            ordered.push_back(layer);
+    }
+    return ordered;
+}
+
+static std::vector<std::shared_ptr<Layer>> exposed_text_layers(const Title &title)
+{
+    std::vector<std::shared_ptr<Layer>> exposed;
+    for (const auto &layer : title.layers) {
+        if (!layer) continue;
+        if ((layer->type == LayerType::Text || layer->type == LayerType::Ticker) && layer->expose_text)
+            exposed.push_back(layer);
+    }
+    return order_exposed_text_layers(exposed, title.live_text_column_order);
+}
+
+static double cue_persistence_hold_time(const Title &title)
+{
+    if (title.playback_mode == 1)
+        return std::clamp(title.loop_end, title.loop_start, title.duration);
+    if (title.playback_mode == 2)
+        return std::clamp(title.pause_time, 0.0, title.duration);
+    return std::clamp(title.duration, 0.0, title.duration);
+}
+
+static int exposed_text_layer_index(const std::vector<std::shared_ptr<Layer>> &exposed, const std::shared_ptr<Layer> &layer)
+{
+    if (!layer)
+        return -1;
+    for (int i = 0; i < (int)exposed.size(); ++i) {
+        if (exposed[i] && exposed[i]->id == layer->id)
+            return i;
+    }
+    return -1;
+}
+
+static double cue_persistent_layer_time(const Title &title, const std::shared_ptr<Layer> &layer,
+                                        double frame_time,
+                                        const std::vector<std::shared_ptr<Layer>> &exposed,
+                                        bool background_persistence)
+{
+    if (!background_persistence)
+        return frame_time;
+
+    const int exposed_index = exposed_text_layer_index(exposed, layer);
+    const bool persistent_text = exposed_index >= 0 && title.cue_text_persistence &&
+        exposed_index < (int)title.cue_persistent_text_columns.size() &&
+        title.cue_persistent_text_columns[exposed_index];
+    if (exposed_index < 0 || persistent_text)
+        return cue_persistence_hold_time(title);
+
+    return frame_time;
+}
+
 static bool layer_has_animated_transform(const Layer &layer)
 {
     return layer.pos_x.is_animated() ||
@@ -1313,6 +1391,11 @@ GpuTextureFrame *ObsGpuRenderPipeline::texture_for_raster_layer(const Layer &lay
 bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
 {
     const double clamped_time = std::clamp(time_seconds, 0.0, std::max(0.0, title.duration));
+    const bool background_persistence = title.cue_background_persistence &&
+        title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
+    const auto exposed = background_persistence
+        ? exposed_text_layers(title)
+        : std::vector<std::shared_ptr<Layer>>();
 
     draw_solid_quad(0.0, 0.0, std::max(1, title.width), std::max(1, title.height),
                     0.0, 0.0, 1.0, 1.0, 0.0, title.bg_color, 1.0);
@@ -1320,10 +1403,11 @@ bool ObsGpuRenderPipeline::render_title(const Title &title, double time_seconds)
     for (const auto &layer : title.layers) {
         if (!layer || !layer->visible)
             continue;
-        if (clamped_time < layer->in_time || clamped_time > layer->out_time)
+        const double layer_time = cue_persistent_layer_time(title, layer, clamped_time, exposed, background_persistence);
+        if (layer_time < layer->in_time || layer_time > layer->out_time)
             continue;
 
-        const double lt = clamped_time - layer->in_time;
+        const double lt = layer_time - layer->in_time;
         const double px = layer->pos_x.evaluate(lt);
         const double py = layer->pos_y.evaluate(lt);
         const double sx = layer->scale_x.evaluate(lt);
@@ -1391,13 +1475,20 @@ static QImage render_title_to_qimage_cpu(const Title &title, double time_seconds
     painter.fillRect(frame.rect(), color_from_argb(title.bg_color));
 
     const double clamped_time = std::clamp(time_seconds, 0.0, std::max(0.0, title.duration));
+    const bool background_persistence = title.cue_background_persistence &&
+        title.cue_persistence_transition && title.current_cue_row >= 0 && !title.live_text_rows.empty();
+    const auto exposed = background_persistence
+        ? exposed_text_layers(title)
+        : std::vector<std::shared_ptr<Layer>>();
+
     for (const auto &layer : title.layers) {
         if (!layer || !layer->visible)
             continue;
-        if (clamped_time < layer->in_time || clamped_time > layer->out_time)
+        const double layer_time = cue_persistent_layer_time(title, layer, clamped_time, exposed, background_persistence);
+        if (layer_time < layer->in_time || layer_time > layer->out_time)
             continue;
 
-        const double lt = clamped_time - layer->in_time;
+        const double lt = layer_time - layer->in_time;
         const double px = layer->pos_x.evaluate(lt);
         const double py = layer->pos_y.evaluate(lt);
         const double sx = layer->scale_x.evaluate(lt);
