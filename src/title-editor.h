@@ -425,11 +425,21 @@ private:
         KeyframeRef ref;
         double start_time = 0.0;
     };
+    struct ClipboardKeyframe {
+        std::string layer_id;
+        std::string prop_name;
+        Keyframe keyframe;
+        double offset = 0.0;
+    };
     void   clear_keyframe_selection();
     void   prune_keyframe_selection();
     bool   is_keyframe_selected(const std::string &layer_id, const std::string &prop_name, int kf_idx) const;
     void   select_keyframe(const std::string &layer_id, const std::string &prop_name, int kf_idx, bool additive, bool toggle);
     void   select_keyframes_in_rect(const QRect &rect, bool additive);
+    bool   copy_selected_keyframes();
+    bool   delete_selected_keyframes();
+    bool   cut_selected_keyframes();
+    bool   paste_keyframes_at(double timeline_time);
     QRect  marquee_rect() const;
     void   begin_keyframe_drag(const std::string &layer_id, const std::string &prop_name, int kf_idx, double start_time);
     AnimatedProperty *find_timeline_property(Layer &layer, const std::string &prop_name) const;
@@ -451,6 +461,7 @@ private:
     double drag_start_out_ = 0.0;
     std::set<KeyframeRef> selected_keyframes_;
     std::vector<DraggedKeyframe> dragged_keyframes_;
+    std::vector<ClipboardKeyframe> keyframe_clipboard_;
     QPoint marquee_start_;
     QPoint marquee_current_;
     bool marquee_additive_ = false;

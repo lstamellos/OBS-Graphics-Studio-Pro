@@ -89,6 +89,7 @@
 #include <map>
 #include <limits>
 #include <tuple>
+#include <functional>
 
 namespace {
 
@@ -4958,6 +4959,137 @@ void TimelineWidget::select_keyframes_in_rect(const QRect &rect, bool additive)
     update();
 }
 
+bool TimelineWidget::copy_selected_keyframes()
+{
+    if (!title_) return false;
+    prune_keyframe_selection();
+    if (selected_keyframes_.empty()) return false;
+
+    struct PendingCopy {
+        std::string layer_id;
+        std::string prop_name;
+        Keyframe keyframe;
+        double timeline_time = 0.0;
+    };
+    std::vector<PendingCopy> pending;
+    double origin = std::numeric_limits<double>::max();
+
+    for (const auto &ref : selected_keyframes_) {
+        auto layer = title_->find_layer(ref.layer_id);
+        AnimatedProperty *prop = layer ? find_timeline_property(*layer, ref.prop_name) : nullptr;
+        if (!layer || !prop || ref.index < 0 || ref.index >= (int)prop->keyframes.size()) continue;
+        const Keyframe keyframe = prop->keyframes[ref.index];
+        const double timeline_time = layer->in_time + keyframe.time;
+        origin = std::min(origin, timeline_time);
+        pending.push_back({ref.layer_id, ref.prop_name, keyframe, timeline_time});
+    }
+
+    if (pending.empty()) return false;
+    std::sort(pending.begin(), pending.end(), [](const PendingCopy &a, const PendingCopy &b) {
+        return std::tie(a.timeline_time, a.layer_id, a.prop_name) <
+               std::tie(b.timeline_time, b.layer_id, b.prop_name);
+    });
+
+    keyframe_clipboard_.clear();
+    keyframe_clipboard_.reserve(pending.size());
+    for (const auto &entry : pending)
+        keyframe_clipboard_.push_back({entry.layer_id, entry.prop_name, entry.keyframe, entry.timeline_time - origin});
+    return true;
+}
+
+bool TimelineWidget::delete_selected_keyframes()
+{
+    if (!title_) return false;
+    prune_keyframe_selection();
+    if (selected_keyframes_.empty()) return false;
+
+    std::map<std::pair<std::string, std::string>, std::vector<int>> grouped;
+    for (const auto &ref : selected_keyframes_)
+        grouped[{ref.layer_id, ref.prop_name}].push_back(ref.index);
+
+    bool changed = false;
+    for (auto &[prop_ref, indices] : grouped) {
+        auto layer = title_->find_layer(prop_ref.first);
+        if (!layer || layer->locked) continue;
+        AnimatedProperty *prop = find_timeline_property(*layer, prop_ref.second);
+        if (!prop) continue;
+        std::sort(indices.begin(), indices.end(), std::greater<int>());
+        for (int index : indices) {
+            if (index < 0 || index >= (int)prop->keyframes.size()) continue;
+            prop->keyframes.erase(prop->keyframes.begin() + index);
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        selected_keyframes_.clear();
+        update();
+    }
+    return changed;
+}
+
+bool TimelineWidget::cut_selected_keyframes()
+{
+    if (!copy_selected_keyframes()) return false;
+    return delete_selected_keyframes();
+}
+
+bool TimelineWidget::paste_keyframes_at(double timeline_time)
+{
+    if (!title_ || keyframe_clipboard_.empty()) return false;
+
+    std::map<std::pair<std::string, std::string>, std::vector<double>> inserted_times;
+    bool changed = false;
+    const double paste_origin = std::clamp(snap_time(timeline_time), 0.0, title_->duration);
+
+    for (const auto &entry : keyframe_clipboard_) {
+        auto layer = title_->find_layer(entry.layer_id);
+        if (!layer || layer->locked) continue;
+        AnimatedProperty *prop = find_timeline_property(*layer, entry.prop_name);
+        if (!prop) continue;
+
+        Keyframe pasted = entry.keyframe;
+        const double target_time = paste_origin + entry.offset;
+        pasted.time = std::clamp(snap_time(target_time - layer->in_time),
+                                 0.0, std::max(0.0, layer->out_time - layer->in_time));
+        prop->keyframes.push_back(pasted);
+        inserted_times[{entry.layer_id, entry.prop_name}].push_back(pasted.time);
+        changed = true;
+    }
+
+    if (!changed) return false;
+
+    selected_keyframes_.clear();
+    for (auto &[prop_ref, times] : inserted_times) {
+        auto layer = title_->find_layer(prop_ref.first);
+        AnimatedProperty *prop = layer ? find_timeline_property(*layer, prop_ref.second) : nullptr;
+        if (!prop) continue;
+        std::sort(prop->keyframes.begin(), prop->keyframes.end(),
+                  [](const Keyframe &a, const Keyframe &b) { return a.time < b.time; });
+
+        std::set<int> used;
+        for (double inserted_time : times) {
+            int best = -1;
+            double best_distance = std::numeric_limits<double>::max();
+            for (int i = 0; i < (int)prop->keyframes.size(); ++i) {
+                if (used.count(i)) continue;
+                const double distance = std::abs(prop->keyframes[i].time - inserted_time);
+                if (distance < best_distance) {
+                    best = i;
+                    best_distance = distance;
+                }
+            }
+            if (best >= 0) {
+                used.insert(best);
+                selected_keyframes_.insert({prop_ref.first, prop_ref.second, best});
+            }
+        }
+    }
+
+    update();
+    return true;
+}
+
 void TimelineWidget::begin_keyframe_drag(const std::string &layer_id, const std::string &prop_name,
                                          int kf_idx, double start_time)
 {
@@ -5220,50 +5352,34 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     std::shared_ptr<Layer> layer;
     AnimatedProperty *hit_prop = nullptr;
     int hit_idx = -1;
-    if (!hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr)) return;
-    if (layer && layer->locked) return;
+    const bool has_hit = hit_keyframe(ev->pos(), &layer, &hit_prop, &hit_idx, nullptr);
+    if (has_hit && layer && layer->locked) return;
+    if (!has_hit && keyframe_clipboard_.empty()) return;
 
-    const bool has_previous_segment = hit_idx > 0;
-    const bool has_next_segment = hit_idx + 1 < (int)hit_prop->keyframes.size();
-    if (!has_previous_segment && !has_next_segment) {
-        QMenu menu(this);
-        menu.setTitle(obsgs_tr("OBSTitles.KeyframeEasing"));
-        QAction *message = menu.addAction(obsgs_tr("OBSTitles.AddKeyframeForEasing"));
-        message->setEnabled(false);
-        menu.exec(ev->globalPos());
-        return;
-    }
+    if (has_hit && layer && hit_prop && !is_keyframe_selected(layer->id, hit_prop->name, hit_idx))
+        select_keyframe(layer->id, hit_prop->name, hit_idx, false, false);
+    prune_keyframe_selection();
 
-    auto default_targets = [&]() {
-        std::vector<int> indices;
-        if (has_previous_segment && has_next_segment) {
-            indices = {hit_idx - 1, hit_idx};
-        } else if (has_next_segment) {
-            indices = {hit_idx};
-        } else {
-            indices = {hit_idx - 1};
-        }
-        return indices;
-    };
+    QMenu menu(this);
+    menu.setTitle(has_hit ? obsgs_tr("OBSTitles.KeyframeEasing") : obsgs_tr("OBSTitles.Paste"));
+
+    QAction *copy_action = menu.addAction(obsgs_tr("OBSTitles.Copy"));
+    QAction *cut_action = menu.addAction(obsgs_tr("OBSTitles.Cut"));
+    QAction *paste_action = menu.addAction(obsgs_tr("OBSTitles.Paste"));
+    QAction *delete_action = menu.addAction(obsgs_tr("OBSTitles.Delete"));
+    const bool has_selection = !selected_keyframes_.empty();
+    copy_action->setEnabled(has_selection);
+    cut_action->setEnabled(has_selection);
+    paste_action->setEnabled(!keyframe_clipboard_.empty());
+    delete_action->setEnabled(has_selection);
 
     struct EasingChoice {
         QAction *action = nullptr;
+        AnimatedProperty *prop = nullptr;
         std::vector<int> target_indices;
         EasingType easing = EasingType::Linear;
     };
     std::vector<EasingChoice> choices;
-
-    QMenu menu(this);
-    menu.setTitle(obsgs_tr("OBSTitles.KeyframeEasing"));
-    QAction *header = menu.addAction(QString("%1 · %2")
-        .arg(QString::fromStdString(layer ? layer->name : std::string()))
-        .arg(property_label(hit_prop->name)));
-    header->setEnabled(false);
-    QAction *scope = menu.addAction(has_previous_segment && has_next_segment
-        ? obsgs_tr("OBSTitles.EasingBothSegments")
-        : has_next_segment ? obsgs_tr("OBSTitles.EasingNextSegment") : obsgs_tr("OBSTitles.EasingPreviousSegment"));
-    scope->setEnabled(false);
-    menu.addSeparator();
 
     auto swatch_icon = [](EasingType easing) {
         QPixmap swatch(12, 12);
@@ -5277,21 +5393,22 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
     };
 
     auto add_easing_action = [&](QMenu *target_menu, const QString &label,
-                                 EasingType easing, const std::vector<int> &indices) {
+                                 AnimatedProperty *prop, EasingType easing,
+                                 const std::vector<int> &indices) {
         QAction *action = target_menu->addAction(swatch_icon(easing), label);
         action->setToolTip(easing == EasingType::Hold
             ? obsgs_tr("OBSTitles.HoldEasingTooltip")
             : obsgs_tr("OBSTitles.EasingTooltip"));
         action->setCheckable(true);
-        action->setChecked(std::all_of(indices.begin(), indices.end(), [&](int idx) {
-            return idx >= 0 && idx < (int)hit_prop->keyframes.size() &&
-                   hit_prop->keyframes[idx].easing == easing;
+        action->setChecked(prop && std::all_of(indices.begin(), indices.end(), [&](int idx) {
+            return idx >= 0 && idx < (int)prop->keyframes.size() &&
+                   prop->keyframes[idx].easing == easing;
         }));
-        choices.push_back({action, indices, easing});
+        choices.push_back({action, prop, indices, easing});
         return action;
     };
 
-    auto add_easing_group = [&](QMenu *target_menu, const std::vector<int> &indices) {
+    auto add_easing_group = [&](QMenu *target_menu, AnimatedProperty *prop, const std::vector<int> &indices) {
         auto *group = new QActionGroup(target_menu);
         group->setExclusive(true);
         for (auto [label, easing] : std::initializer_list<std::pair<QString, EasingType>>{
@@ -5302,31 +5419,82 @@ void TimelineWidget::contextMenuEvent(QContextMenuEvent *ev)
                  {obsgs_tr("OBSTitles.Hold"), EasingType::Hold},
                  {obsgs_tr("OBSTitles.CustomBezier"), EasingType::Bezier},
              }) {
-            add_easing_action(target_menu, label, easing, indices)->setActionGroup(group);
+            add_easing_action(target_menu, label, prop, easing, indices)->setActionGroup(group);
         }
     };
 
-    add_easing_group(&menu, default_targets());
-
-    if (has_previous_segment && has_next_segment) {
+    if (has_hit && layer && hit_prop) {
         menu.addSeparator();
-        QMenu *advanced = menu.addMenu(obsgs_tr("OBSTitles.ApplyOneSide"));
-        QMenu *previous = advanced->addMenu(obsgs_tr("OBSTitles.PreviousSegment"));
-        add_easing_group(previous, {hit_idx - 1});
-        QMenu *next = advanced->addMenu(obsgs_tr("OBSTitles.NextSegment"));
-        add_easing_group(next, {hit_idx});
+        QMenu *easing_menu = menu.addMenu(obsgs_tr("OBSTitles.Easing"));
+        QAction *header = easing_menu->addAction(QString("%1 · %2")
+            .arg(QString::fromStdString(layer->name))
+            .arg(property_label(hit_prop->name)));
+        header->setEnabled(false);
+
+        const bool has_previous_segment = hit_idx > 0;
+        const bool has_next_segment = hit_idx + 1 < (int)hit_prop->keyframes.size();
+        if (!has_previous_segment && !has_next_segment) {
+            QAction *message = easing_menu->addAction(obsgs_tr("OBSTitles.AddKeyframeForEasing"));
+            message->setEnabled(false);
+        } else {
+            QAction *scope = easing_menu->addAction(has_previous_segment && has_next_segment
+                ? obsgs_tr("OBSTitles.EasingBothSegments")
+                : has_next_segment ? obsgs_tr("OBSTitles.EasingNextSegment") : obsgs_tr("OBSTitles.EasingPreviousSegment"));
+            scope->setEnabled(false);
+            easing_menu->addSeparator();
+
+            auto default_targets = [&]() {
+                std::vector<int> indices;
+                if (has_previous_segment && has_next_segment) {
+                    indices = {hit_idx - 1, hit_idx};
+                } else if (has_next_segment) {
+                    indices = {hit_idx};
+                } else {
+                    indices = {hit_idx - 1};
+                }
+                return indices;
+            };
+            add_easing_group(easing_menu, hit_prop, default_targets());
+
+            if (has_previous_segment && has_next_segment) {
+                easing_menu->addSeparator();
+                QMenu *advanced = easing_menu->addMenu(obsgs_tr("OBSTitles.ApplyOneSide"));
+                QMenu *previous = advanced->addMenu(obsgs_tr("OBSTitles.PreviousSegment"));
+                add_easing_group(previous, hit_prop, {hit_idx - 1});
+                QMenu *next = advanced->addMenu(obsgs_tr("OBSTitles.NextSegment"));
+                add_easing_group(next, hit_prop, {hit_idx});
+            }
+        }
     }
 
     QAction *chosen = menu.exec(ev->globalPos());
     if (!chosen) return;
 
+    if (chosen == copy_action) {
+        copy_selected_keyframes();
+        return;
+    }
+    if (chosen == cut_action) {
+        if (cut_selected_keyframes()) emit keyframe_easing_changed();
+        return;
+    }
+    if (chosen == paste_action) {
+        if (paste_keyframes_at(std::clamp(x_to_time(ev->pos().x()), 0.0, title_->duration)))
+            emit keyframe_easing_changed();
+        return;
+    }
+    if (chosen == delete_action) {
+        if (delete_selected_keyframes()) emit keyframe_easing_changed();
+        return;
+    }
+
     auto choice = std::find_if(choices.begin(), choices.end(),
                                [&](const EasingChoice &candidate) { return candidate.action == chosen; });
-    if (choice == choices.end()) return;
+    if (choice == choices.end() || !choice->prop) return;
 
     for (int idx : choice->target_indices) {
-        if (idx >= 0 && idx < (int)hit_prop->keyframes.size())
-            apply_easing_preset(hit_prop->keyframes[idx], choice->easing);
+        if (idx >= 0 && idx < (int)choice->prop->keyframes.size())
+            apply_easing_preset(choice->prop->keyframes[idx], choice->easing);
     }
     update();
     emit keyframe_easing_changed();
