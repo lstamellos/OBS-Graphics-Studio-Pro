@@ -20,6 +20,8 @@
 #include <QIODevice>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPolygonF>
+#include <QLineF>
 #include <QImage>
 #include <QImageReader>
 #include <QSize>
@@ -257,6 +259,12 @@ static bool editor_focus_accepts_text(QWidget *widget);
 /* OBS safe area margins: Rec. ITU-R BT.1848-1 / EBU R 95. */
 static constexpr double OBS_ACTION_SAFE_PERCENT = 0.035;
 static constexpr double OBS_GRAPHICS_SAFE_PERCENT = 0.05;
+
+/* Canvas editing controls are measured in view pixels so object scale never
+ * changes their apparent size or proportions. */
+static constexpr double CANVAS_CONTROL_SIZE_PX = 8.0;
+static constexpr double CANVAS_CONTROL_HIT_RADIUS_PX = 8.0;
+static constexpr double CANVAS_ORIGIN_RADIUS_PX = 3.6;
 
 static bool editor_image_path_is_svg(const QString &path)
 {
@@ -3541,16 +3549,14 @@ CanvasPreview::DragMode CanvasPreview::hit_test_selected(const QPointF &view_pt)
     auto layers = selected_layers();
     if (layers.empty()) return DragMode::None;
 
-    double scale = view_scale();
-    double handle_canvas = 8.0 / std::max(0.1, scale);
-
     if (layers.size() > 1) {
         QRectF r = selected_canvas_bounds();
         if (!r.isValid() || r.isEmpty()) return DragMode::None;
-        QPointF canvas = view_to_canvas(view_pt);
+        auto canvas_handle_to_view = [&](const QPointF &p) { return canvas_to_view(p); };
         auto near_pt = [&](const QPointF &p) {
-            return std::abs(canvas.x() - p.x()) <= handle_canvas &&
-                   std::abs(canvas.y() - p.y()) <= handle_canvas;
+            QPointF view = canvas_handle_to_view(p);
+            return std::abs(view_pt.x() - view.x()) <= CANVAS_CONTROL_HIT_RADIUS_PX &&
+                   std::abs(view_pt.y() - view.y()) <= CANVAS_CONTROL_HIT_RADIUS_PX;
         };
         if (near_pt(r.topLeft())) return DragMode::ResizeNW;
         if (near_pt(QPointF(r.center().x(), r.top()))) return DragMode::ResizeN;
@@ -3560,10 +3566,11 @@ CanvasPreview::DragMode CanvasPreview::hit_test_selected(const QPointF &view_pt)
         if (near_pt(QPointF(r.center().x(), r.bottom()))) return DragMode::ResizeS;
         if (near_pt(r.bottomLeft())) return DragMode::ResizeSW;
         if (near_pt(QPointF(r.left(), r.center().y()))) return DragMode::ResizeW;
+        QPointF canvas = view_to_canvas(view_pt);
         for (const auto &layer : layers) {
             if (!layer || layer->locked) continue;
             QPointF local = canvas_to_layer(*layer, canvas);
-            if (layer_local_rect(*layer).adjusted(-handle_canvas, -handle_canvas, handle_canvas, handle_canvas).contains(local))
+            if (layer_local_rect(*layer).contains(local))
                 return DragMode::Move;
         }
         return DragMode::None;
@@ -3572,13 +3579,14 @@ CanvasPreview::DragMode CanvasPreview::hit_test_selected(const QPointF &view_pt)
     auto layer = layers.front();
     if (!layer || layer->locked) return DragMode::None;
 
-    double handle = handle_canvas;
-    QPointF local = canvas_to_layer(*layer, view_to_canvas(view_pt));
     QRectF r = layer_local_rect(*layer);
-
+    auto layer_point_to_view = [&](const QPointF &p) {
+        return canvas_to_view(layer_to_canvas(*layer, p));
+    };
     auto near_pt = [&](const QPointF &p) {
-        return std::abs(local.x() - p.x()) <= handle &&
-               std::abs(local.y() - p.y()) <= handle;
+        QPointF view = layer_point_to_view(p);
+        return std::abs(view_pt.x() - view.x()) <= CANVAS_CONTROL_HIT_RADIUS_PX &&
+               std::abs(view_pt.y() - view.y()) <= CANVAS_CONTROL_HIT_RADIUS_PX;
     };
 
     if (near_pt(r.topLeft())) return DragMode::ResizeNW;
@@ -3589,8 +3597,16 @@ CanvasPreview::DragMode CanvasPreview::hit_test_selected(const QPointF &view_pt)
     if (near_pt(QPointF(r.center().x(), r.bottom()))) return DragMode::ResizeS;
     if (near_pt(r.bottomLeft())) return DragMode::ResizeSW;
     if (near_pt(QPointF(r.left(), r.center().y()))) return DragMode::ResizeW;
-    if (std::hypot(local.x(), local.y()) <= handle * 1.25) return DragMode::Origin;
-    if (r.adjusted(-handle, -handle, handle, handle).contains(local)) return DragMode::Move;
+    if (QLineF(view_pt, layer_point_to_view(QPointF(0, 0))).length() <= CANVAS_CONTROL_HIT_RADIUS_PX * 1.25)
+        return DragMode::Origin;
+
+    QPainterPath layer_path;
+    layer_path.moveTo(layer_point_to_view(r.topLeft()));
+    layer_path.lineTo(layer_point_to_view(r.topRight()));
+    layer_path.lineTo(layer_point_to_view(r.bottomRight()));
+    layer_path.lineTo(layer_point_to_view(r.bottomLeft()));
+    layer_path.closeSubpath();
+    if (layer_path.contains(view_pt)) return DragMode::Move;
     return DragMode::None;
 }
 void CanvasPreview::begin_marquee(const QPointF &view_pt, Qt::KeyboardModifiers)
@@ -4297,35 +4313,48 @@ void CanvasPreview::paintEvent(QPaintEvent *)
     }
 
     auto layers = selected_layers();
-    double handle = 8.0 / std::max(0.1, scale);
 
     auto draw_layer_box = [&](const Layer &layer, bool handles) {
-        double lt = playhead_ - layer.in_time;
         QRectF box = layer_local_rect(layer);
+        auto layer_point_to_view = [&](const QPointF &pt) {
+            return canvas_to_view(layer_to_canvas(layer, pt));
+        };
+        const QPointF corners[] = {
+            layer_point_to_view(box.topLeft()),
+            layer_point_to_view(box.topRight()),
+            layer_point_to_view(box.bottomRight()),
+            layer_point_to_view(box.bottomLeft())
+        };
+
         p.save();
-        QPointF layer_origin = canvas_to_view(QPointF(layer.pos_x.evaluate(lt), layer.pos_y.evaluate(lt)));
-        p.translate(layer_origin);
-        p.rotate(layer.rotation.evaluate(lt));
-        p.scale(scale * layer.scale_x.evaluate(lt), scale * layer.scale_y.evaluate(lt));
         p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(QColor(0, 120, 255, handles ? 230 : 150), 1.5 / scale, Qt::DashLine));
-        p.drawRect(box);
+        p.setPen(QPen(QColor(0, 120, 255, handles ? 230 : 150), 1.5, Qt::DashLine));
+        QPolygonF outline;
+        for (const QPointF &corner : corners)
+            outline << corner;
+        p.drawPolygon(outline);
         if (handles) {
-            p.setPen(QPen(QColor(0, 120, 255, 255), 1.0 / scale));
+            p.setPen(QPen(QColor(0, 120, 255, 255), 1.0));
             p.setBrush(QColor(255, 255, 255));
             const QPointF handle_points[] = {
-                box.topLeft(), QPointF(box.center().x(), box.top()), box.topRight(),
-                QPointF(box.right(), box.center().y()), box.bottomRight(),
-                QPointF(box.center().x(), box.bottom()), box.bottomLeft(),
-                QPointF(box.left(), box.center().y())
+                corners[0], layer_point_to_view(QPointF(box.center().x(), box.top())), corners[1],
+                layer_point_to_view(QPointF(box.right(), box.center().y())), corners[2],
+                layer_point_to_view(QPointF(box.center().x(), box.bottom())), corners[3],
+                layer_point_to_view(QPointF(box.left(), box.center().y()))
             };
+            const double half_handle = CANVAS_CONTROL_SIZE_PX / 2.0;
             for (const QPointF &pt : handle_points)
-                p.drawRect(QRectF(pt.x() - handle / 2.0, pt.y() - handle / 2.0, handle, handle));
-            p.setPen(QPen(QColor(255, 160, 0), 1.5 / scale));
+                p.drawRect(QRectF(pt.x() - half_handle, pt.y() - half_handle,
+                                  CANVAS_CONTROL_SIZE_PX, CANVAS_CONTROL_SIZE_PX));
+
+            QPointF origin = layer_point_to_view(QPointF(0, 0));
+            p.setPen(QPen(QColor(255, 160, 0), 1.5));
             p.setBrush(QColor(255, 220, 80));
-            p.drawEllipse(QPointF(0, 0), handle * 0.45, handle * 0.45);
-            p.drawLine(QPointF(-handle, 0), QPointF(handle, 0));
-            p.drawLine(QPointF(0, -handle), QPointF(0, handle));
+            p.drawEllipse(origin, CANVAS_ORIGIN_RADIUS_PX, CANVAS_ORIGIN_RADIUS_PX);
+            p.drawLine(QPointF(origin.x() - CANVAS_CONTROL_SIZE_PX, origin.y()),
+                       QPointF(origin.x() + CANVAS_CONTROL_SIZE_PX, origin.y()));
+            p.drawLine(QPointF(origin.x(), origin.y() - CANVAS_CONTROL_SIZE_PX),
+                       QPointF(origin.x(), origin.y() + CANVAS_CONTROL_SIZE_PX));
         }
         p.restore();
     };
@@ -4352,7 +4381,9 @@ void CanvasPreview::paintEvent(QPaintEvent *)
                 QPointF(view_bounds.left(), view_bounds.center().y())
             };
             for (const QPointF &pt : points)
-                p.drawRect(QRectF(pt.x() - 4.0, pt.y() - 4.0, 8.0, 8.0));
+                p.drawRect(QRectF(pt.x() - CANVAS_CONTROL_SIZE_PX / 2.0,
+                                  pt.y() - CANVAS_CONTROL_SIZE_PX / 2.0,
+                                  CANVAS_CONTROL_SIZE_PX, CANVAS_CONTROL_SIZE_PX));
         }
     }
 
