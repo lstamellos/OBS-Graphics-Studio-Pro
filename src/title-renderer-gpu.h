@@ -97,6 +97,7 @@ public:
 
     GpuTitlePlan build_migration_plan(const Title &title) const;
     bool render_title(const Title &title, double time_seconds);
+    QImage render_title_to_qimage(const Title &title, double time_seconds);
     void reset();
 
 private:
