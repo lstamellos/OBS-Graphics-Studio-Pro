@@ -8,7 +8,7 @@ OBS Graphics Studio Pro registers a single OBS input source and keeps source com
 2. `ObsGpuRenderPipeline` converts each visible layer into a GPU pass plan.
 3. Backgrounds, solid/shape layers, image textures, transforms, alpha blending, and shadow placeholders are submitted through OBS `gs_*` effects.
 4. Bitmap image assets are cached as GPU textures and composited as textured quads.
-5. Text layers reserve a GPU text-atlas pass and deliberately do not fall back to CPU rasterization.
+5. Text, rounded shapes, shadows, outlines, and gradients are generated as layer-local GPU texture assets and composited/transformed by OBS GPU passes, with the roadmap retaining a future shader/glyph-atlas replacement for that asset generation step.
 
 This preserves OBS source compatibility while eliminating the previous CPU full-canvas composition/upload loop from live rendering.
 
@@ -18,9 +18,9 @@ This preserves OBS source compatibility while eliminating the previous CPU full-
 |---|---|---|---|
 | Full-frame composition | Animated layers repainted the entire CPU canvas | Layer-by-layer GPU submission with transform/opacity state | Add render-target graph for grouped effects |
 | Texture upload | One full-canvas upload per dirty frame | Persistent GPU textures for assets; no composed CPU canvas upload | Add invalidation by file revision and atlas page |
-| Solid/shape layers | CPU paths, fills, gradients, outlines, and shadow passes | OBS solid-effect geometry pass with GPU transforms and alpha | Add rounded-corner/gradient/outline shader techniques |
+| Solid/shape layers | Border radius, gradients, outlines, and shadows were missing from the GPU renderer | Layer-local rounded/gradient/outline/shadow textures with GPU compositing/transforms | Replace texture asset generation with direct shader techniques |
 | Image layers | Asset paint into CPU canvas before upload | Cached GPU texture + textured-quad composition | Add GPU-native SVG/vector tessellation |
-| Text, clock, ticker | CPU glyph/path rasterization | Reserved GPU text-atlas pass; CPU fallback disabled | Implement glyph/vector atlas shader |
+| Text, clock, ticker | Text previously disappeared from the GPU renderer | Layer-local text atlas textures with GPU compositing/transforms | Replace temporary Qt atlas generation with persistent GPU glyph/vector atlas shader |
 | Effects | CPU repeated draw passes for blur/shadow | EffectShader stage in migration plan; shadow offset placeholder on GPU | Add ping-pong render targets and separable blur |
 | 2D/3D transforms | CPU raster transform invalidated pixels | OBS matrix state per layer | Add perspective projection and 3D camera uniforms |
 
@@ -28,7 +28,7 @@ This preserves OBS source compatibility while eliminating the previous CPU full-
 
 The codebase now has an OBS-compatible GPU transition layer:
 
-- `ObsGpuRenderPipeline` owns live source drawing through OBS `gs_*` effects.
+- `ObsGpuRenderPipeline` owns live source drawing through OBS `gs_*` effects and manages layer-local GPU texture assets for complex visual styles.
 - `GpuTextureFrame` owns GPU-side asset textures for image layers.
 - `GpuTitlePlan` / `GpuLayerPlan` produce a per-title audit that classifies layers by GPU pass readiness and records next steps.
 - `TitleSource` no longer invokes a CPU full-frame renderer for live OBS output.
@@ -57,7 +57,7 @@ Image layers should move to a texture cache keyed by path, size, SVG raster targ
 
 ### Incremental text path: Text, Clock, Ticker
 
-Text is intentionally GPU-first in the live source path. Until the atlas shader lands, text layers are represented in the migration plan but are not routed through a CPU raster fallback. The safe staged approach is:
+Text now renders again through layer-local GPU texture assets, so it participates in the same GPU compositing and transform path as other layers. The safe staged approach for making text fully shader/atlas driven is:
 
 1. Add GPU glyph/vector atlas pages for repeated glyphs.
 2. Composite atlas quads on GPU with transform and opacity uniforms.
@@ -82,9 +82,13 @@ TitleSource (OBS source callbacks)
 
 The graph should continue to expose a final OBS texture and keep source registration unchanged. That preserves scene/source compatibility while allowing individual layer types to leave the CPU renderer one at a time.
 
+## Editor preview acceleration
+
+`CanvasPreview` now derives from `QOpenGLWidget`, so the editor preview surface is backed by Qt's OpenGL paint engine while preserving the existing editing overlays, snapping, handles, and timeline interactions. The editor still shares the same visual semantics as the OBS GPU renderer: complex text/shape styles are converted to layer-local texture assets, and the roadmap is to route the editor preview through the same persistent OBS render-target graph once an embeddable preview texture is available.
+
 ## Non-breaking integration rules
 
-1. Do not reintroduce CPU 2-D raster fallbacks in the live OBS source path.
+1. Keep live OBS compositing, transforms, and blending on libobs GPU passes; any temporary CPU-side asset generation must upload to layer-local GPU textures rather than recreating a full-frame CPU canvas.
 2. Preserve `obs_graphics_studio_pro_source` as the source ID.
 3. Preserve title JSON fields; add GPU-specific fields only as optional extensions.
 4. Do not require a graphics API outside OBS `gs_*` abstractions.
@@ -94,8 +98,8 @@ The graph should continue to expose a final OBS texture and keep source registra
 ## Suggested next implementation phases
 
 1. Add an offscreen render target abstraction and a small OBS effect for textured quads.
-2. Extend the SolidRect/Shape GPU pass with rounded corners, gradients, outlines, and blur parity.
-3. Expand image texture cache invalidation and route all bitmap Image layers through the textured-quad pass.
+2. Replace temporary rounded/gradient/outline texture asset generation with direct OBS effect shader techniques.
+3. Expand image and text/shape texture cache invalidation and route all bitmap assets through the textured-quad pass.
 4. Add per-layer dirty tracking to avoid full-frame uploads when only transforms change.
 5. Introduce post-process passes for blur/shadow/glow using ping-pong render targets.
 6. Add optional 3D transform uniforms and perspective projection for 2.5D/3D compositing.

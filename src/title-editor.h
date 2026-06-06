@@ -22,6 +22,7 @@
 
 #include "title-data.h"
 #include <QDialog>
+#include <QOpenGLWidget>
 #include <QSplitter>
 #include <QListWidget>
 #include <QToolBar>
@@ -178,7 +179,7 @@ private:
 /* ══════════════════════════════════════════════════════════════════
  *  CanvasPreview  – renders the title at the current playhead
  * ══════════════════════════════════════════════════════════════════ */
-class CanvasPreview : public QWidget {
+class CanvasPreview : public QOpenGLWidget {
     Q_OBJECT
 
 public:

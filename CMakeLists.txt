@@ -163,15 +163,20 @@ if(NOT libobs_FOUND OR NOT obs-frontend-api_FOUND)
 endif()
 
 # ── Find Qt ─────────────────────────────────────────────────────────
-find_package(Qt6 COMPONENTS Core Widgets Svg QUIET)
+find_package(Qt6 COMPONENTS Core Widgets Svg OpenGLWidgets QUIET)
 if(NOT Qt6_FOUND)
-  find_package(Qt5 5.15 COMPONENTS Core Widgets Svg REQUIRED)
+  find_package(Qt5 5.15 COMPONENTS Core Widgets Svg OpenGL REQUIRED)
   set(QT_VERSION_MAJOR 5)
 else()
   set(QT_VERSION_MAJOR 6)
 endif()
 
 set(QT_LIBS Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Svg)
+if(QT_VERSION_MAJOR EQUAL 6)
+  list(APPEND QT_LIBS Qt6::OpenGLWidgets)
+elseif(TARGET Qt5::OpenGL)
+  list(APPEND QT_LIBS Qt5::OpenGL)
+endif()
 
 # ── nlohmann/json ────────────────────────────────────────────────────
 # Either install via package manager:  apt install nlohmann-json3-dev

@@ -288,13 +288,9 @@ static void apply_live_text_row(const std::shared_ptr<Title> &title, int row)
         exposed[col]->text_content = title->live_text_rows[row][col];
 }
 
-QImage render_title_to_image(const Title &, double)
+QImage render_title_to_image(const Title &title, double t)
 {
-    /* Snapshot export is intentionally disabled until the GPU renderer grows an
-     * OBS render-target readback path.  Returning a null image prevents legacy
-     * CPU raster backends from being used for screenshots.
-     */
-    return QImage();
+    return obsgs::render_title_to_qimage(title, t);
 }
 
 /* ══════════════════════════════════════════════════════════════════

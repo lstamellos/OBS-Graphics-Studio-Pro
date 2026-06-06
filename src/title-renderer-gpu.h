@@ -13,6 +13,7 @@
 
 #include <obs-module.h>
 #include <graphics/graphics.h>
+#include <QImage>
 
 #include <cstdint>
 #include <memory>
@@ -60,6 +61,14 @@ struct GpuTitlePlan {
     std::vector<std::string> incremental_steps;
 };
 
+struct LayerAsset {
+    QImage image;
+    double origin_x = 0.5;
+    double origin_y = 0.5;
+    double width = 0.0;
+    double height = 0.0;
+};
+
 class GpuTextureFrame {
 public:
     GpuTextureFrame() = default;
@@ -90,9 +99,12 @@ public:
 
 private:
     GpuTextureFrame *texture_for_image_layer(const Layer &layer);
+    GpuTextureFrame *texture_for_raster_layer(const Layer &layer, const LayerAsset &asset);
     std::unordered_map<std::string, std::unique_ptr<GpuTextureFrame>> image_textures_;
+    std::unordered_map<std::string, std::unique_ptr<GpuTextureFrame>> raster_textures_;
 };
 
+QImage render_title_to_qimage(const Title &title, double time_seconds);
 std::string layer_type_name(LayerType type);
 
 } // namespace obsgs

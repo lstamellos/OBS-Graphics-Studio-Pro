@@ -26,7 +26,7 @@ OBS-Graphics-Studio-Pro/
 | Component | OBS Integration | Purpose |
 |---|---|---|
 | `TitleSource` | `obs_source_type INPUT` | Renders a title to the OBS video mix through an OBS-native GPU pipeline using libobs `gs_*` passes |
-| `GpuTextureFrame` / `ObsGpuRenderPipeline` | libobs `gs_*` graphics | Owns GPU asset textures, draw passes, effects, transforms, and per-layer GPU migration plans |
+| `GpuTextureFrame` / `ObsGpuRenderPipeline` | libobs `gs_*` graphics | Owns GPU asset textures, text/shape style atlases, draw passes, effects, transforms, and per-layer GPU migration plans |
 | `TitleDock` | `obs_frontend_add_dock()` | Floating/dockable title list with blank-title creation, Graphics Studio-style templates, and scene-add button |
 | `TitleEditor` | `QDialog` (non-modal) | Full AE-style editor with canvas, layer stack, timeline, properties |
 | `TitleDataStore` | Singleton | Owns all `Title` objects; serialises to `obs-graphics-studio-pro/titles.json` |
@@ -42,7 +42,7 @@ A structured rendering audit and migration roadmap is maintained in [`docs/rende
 | Library | Purpose |
 |---|---|
 | **OBS Studio** (libobs + obs-frontend-api) | Plugin API, graphics, frontend dock |
-| **Qt 5.15+ or Qt 6** | All UI widgets |
+| **Qt 5.15+ or Qt 6** | UI widgets, Qt OpenGL editor preview, image/SVG asset ingestion |
 | **nlohmann/json** | JSON serialisation (fetched automatically by CMake) |
 
 ---
@@ -245,7 +245,7 @@ emit property_changed();
 - [ ] Bezier curve editor overlay (velocity graph)
 - [ ] Template system: save/load title presets
 - [ ] Playlist mode: auto-advance through titles
-- [x] OBS-native GPU rendering path foundation (GS effects; no live CPU 2-D raster backend)
+- [x] OBS-native GPU rendering path foundation (GS effects, layer texture assets, GPU compositing/transforms)
 - [ ] Live preview in dock (thumbnail strip)
 - [ ] Undo/redo stack (Qt QUndoStack)
 - [ ] Multi-select layers
