@@ -177,7 +177,9 @@ private:
 };
 
 /* ══════════════════════════════════════════════════════════════════
- *  CanvasPreview  – renders the title at the current playhead
+ *  CanvasPreview  – renders the title at the current playhead.
+ *  Keep this as QWidget: QOpenGLWidget is an optional Qt module in OBS
+ *  plugin dependency bundles and can break Windows builds/plugin loading.
  * ══════════════════════════════════════════════════════════════════ */
 class CanvasPreview : public QOpenGLWidget {
     Q_OBJECT
